@@ -17,7 +17,14 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
       const tick = async () => {
         const run = await prisma.run.findUnique({
           where: { publicId: params.id },
-          select: { status: true, events: true, verdict: true, errorMessage: true },
+          select: {
+            status: true,
+            events: true,
+            verdict: true,
+            errorMessage: true,
+            currentAction: true,
+            liveScreenshotUrl: true,
+          },
         });
         if (!run) {
           controller.enqueue(encoder.encode(`event: error\ndata: not_found\n\n`));

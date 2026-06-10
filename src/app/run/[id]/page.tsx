@@ -3,11 +3,20 @@ import { prisma } from "@/lib/db";
 import { RunLive } from "@/components/run-live";
 import { isTerminal } from "@/lib/status";
 
+export const dynamic = "force-dynamic";
+
 // Screen 2 — In-progress · /run/{id}
 export default async function RunPage({ params }: { params: { id: string } }) {
   const run = await prisma.run.findUnique({
     where: { publicId: params.id },
-    select: { publicId: true, appSlug: true, status: true },
+    select: {
+      publicId: true,
+      appSlug: true,
+      status: true,
+      runNumber: true,
+      startedAt: true,
+      notifyEmail: true,
+    },
   });
   if (!run) notFound();
 
@@ -17,8 +26,14 @@ export default async function RunPage({ params }: { params: { id: string } }) {
   }
 
   return (
-    <main className="mx-auto max-w-2xl px-4 py-12">
-      <RunLive publicId={run.publicId} appSlug={run.appSlug} />
+    <main className="mx-auto max-w-5xl px-4 py-10">
+      <RunLive
+        publicId={run.publicId}
+        appSlug={run.appSlug}
+        runNumber={run.runNumber}
+        startedAt={run.startedAt.toISOString()}
+        notifyEmail={run.notifyEmail}
+      />
     </main>
   );
 }

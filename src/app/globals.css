@@ -3,14 +3,101 @@
 @tailwind utilities;
 
 :root {
-  color-scheme: light dark;
+  color-scheme: dark;
 }
 
 body {
-  @apply bg-neutral-50 text-neutral-900 antialiased;
+  @apply bg-ink-950 text-fg antialiased;
+  background-image:
+    radial-gradient(ellipse 80% 50% at 50% -10%, rgba(79, 140, 255, 0.07), transparent),
+    radial-gradient(ellipse 60% 40% at 90% 110%, rgba(176, 107, 255, 0.04), transparent);
+  background-attachment: fixed;
 }
 
-/* Monospace for URLs / tech pills / code excerpts — "developer-tool with taste". */
+/* Film grain — keeps large dark surfaces from feeling flat. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 50;
+  opacity: 0.5;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0.025 0'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* Monospace for URLs / tech pills / log lines — "developer-tool with taste". */
 .mono {
   @apply font-mono text-sm;
+}
+
+/* Deploy-log feed line. */
+.log-line {
+  @apply font-mono text-[13px] leading-6 text-fg-muted;
+}
+
+/* Section heading — small caps tracker, the report's typographic voice. */
+.section-label {
+  @apply font-mono text-[11px] font-medium uppercase tracking-[0.18em] text-fg-faint;
+}
+
+/* Card surface. */
+.card {
+  @apply rounded-xl border border-ink-700 bg-ink-850 shadow-card;
+}
+
+/* Terminal cursor block. */
+.cursor::after {
+  content: "▍";
+  @apply ml-0.5 animate-blink text-accent;
+}
+
+/* Shimmering progress fill for the active run. */
+.progress-active {
+  background: linear-gradient(
+    90deg,
+    theme("colors.accent.DEFAULT") 0%,
+    #7db0ff 25%,
+    theme("colors.accent.DEFAULT") 50%,
+    #7db0ff 75%,
+    theme("colors.accent.DEFAULT") 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 2.2s linear infinite;
+}
+
+/* Staggered entrance for stacked report sections. */
+.stagger > * {
+  animation: fade-up 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.stagger > *:nth-child(1) { animation-delay: 0ms; }
+.stagger > *:nth-child(2) { animation-delay: 70ms; }
+.stagger > *:nth-child(3) { animation-delay: 140ms; }
+.stagger > *:nth-child(4) { animation-delay: 210ms; }
+.stagger > *:nth-child(5) { animation-delay: 280ms; }
+.stagger > *:nth-child(6) { animation-delay: 350ms; }
+
+/* Hide native details marker; we draw our own chevron. */
+details > summary {
+  list-style: none;
+}
+details > summary::-webkit-details-marker {
+  display: none;
+}
+details > summary .chevron {
+  @apply inline-block transition-transform duration-200;
+}
+details[open] > summary .chevron {
+  transform: rotate(90deg);
+}
+
+/* Thin scrollbars for horizontal journey strips. */
+.strip-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: theme("colors.ink.600") transparent;
+}
+.strip-scroll::-webkit-scrollbar {
+  height: 6px;
+}
+.strip-scroll::-webkit-scrollbar-thumb {
+  @apply rounded-full bg-ink-600;
 }

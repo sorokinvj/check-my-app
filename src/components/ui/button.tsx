@@ -1,12 +1,15 @@
 import * as React from "react";
 import { cn } from "@/lib/utils";
 
-type Variant = "primary" | "ghost" | "outline";
+type Variant = "primary" | "ghost" | "outline" | "danger";
 
 const variants: Record<Variant, string> = {
-  primary: "bg-blue-600 text-white hover:bg-blue-700 disabled:bg-neutral-300",
-  ghost: "bg-transparent text-neutral-700 hover:bg-neutral-100",
-  outline: "border border-neutral-300 bg-white text-neutral-800 hover:bg-neutral-50",
+  primary:
+    "bg-accent text-ink-950 font-semibold hover:bg-accent-hover disabled:bg-ink-700 disabled:text-fg-faint",
+  ghost: "bg-transparent text-fg-muted hover:bg-ink-800 hover:text-fg",
+  outline: "border border-ink-600 bg-ink-850 text-fg hover:border-ink-700 hover:bg-ink-800",
+  danger:
+    "border border-status-broken/40 bg-status-broken/10 text-status-broken hover:bg-status-broken/20",
 };
 
 export const Button = React.forwardRef<
@@ -16,7 +19,7 @@ export const Button = React.forwardRef<
   <button
     ref={ref}
     className={cn(
-      "inline-flex items-center justify-center rounded-lg px-4 py-2.5 text-sm font-medium transition-colors disabled:cursor-not-allowed",
+      "inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm transition-colors disabled:cursor-not-allowed",
       variants[variant],
       className,
     )}

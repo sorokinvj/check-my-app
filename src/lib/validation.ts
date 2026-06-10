@@ -15,3 +15,39 @@ export const createCheckSchema = z.object({
 });
 
 export type CreateCheckInput = z.infer<typeof createCheckSchema>;
+
+// Loop C — edit the App Lens / react to it (Verdict §3.1).
+export const updateLensSchema = z.object({
+  lens: z
+    .object({
+      oneLiner: z.string().max(500),
+      whoFor: z.string().max(500),
+      coreValue: z.string().max(500),
+      businessModel: z.string().max(500),
+      techSurface: z.string().max(500),
+      criticalPaths: z.array(z.string().max(300)).max(10),
+      ifItBreaks: z.string().max(500),
+    })
+    .optional(),
+  // "confirmed" = [Looks right ✓]; anything else = the "something's off" note.
+  feedback: z.string().max(2000).optional(),
+});
+
+// Loop C — finding triage from the verdict page (feeds Daily Check noise filter).
+export const markFindingSchema = z.object({
+  mark: z.enum(["none", "known", "fixed", "false_positive"]),
+});
+
+// Enable Daily Watch from the verdict footer (Loop B).
+export const createWatchSchema = z.object({
+  runId: z.string().min(1), // run publicId the watch is created from
+  frequency: z.enum(["daily", "every_6h", "manual"]).default("daily"),
+  notifyOnChangeOnly: z.boolean().default(true),
+});
+
+// Watch settings (Screen 4).
+export const updateWatchSchema = z.object({
+  frequency: z.enum(["daily", "every_6h", "manual"]).optional(),
+  notifyOnChangeOnly: z.boolean().optional(),
+  active: z.boolean().optional(),
+});

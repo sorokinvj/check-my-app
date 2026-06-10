@@ -9,19 +9,43 @@ interface Snapshot {
   events: RunEvent[] | null;
   verdict: string | null;
   errorMessage: string | null;
+  currentAction: string | null;
+  liveScreenshotUrl: string | null;
 }
 
-const ICON: Record<RunEvent["icon"], string> = {
-  ok: "✓",
-  info: "•",
-  notable: "⚡",
-  working: "⏳",
-  warn: "⚠",
+const ICON: Record<RunEvent["icon"], { glyph: string; className: string }> = {
+  ok: { glyph: "✓", className: "text-status-ok" },
+  info: { glyph: "•", className: "text-fg-faint" },
+  notable: { glyph: "⚡", className: "text-status-risky" },
+  working: { glyph: "⏳", className: "text-accent" },
+  warn: { glyph: "⚠", className: "text-status-confusing" },
 };
 
-// Screen 2 — In-progress. Subscribes to the SSE feed and renders the phase banner
-// + live activity feed. Redirects to the verdict when the run completes.
-export function RunLive({ publicId, appSlug }: { publicId: string; appSlug: string }) {
+const PHASE_BLURB: Record<RunPhase, string> = {
+  connecting: "Booting the agent and checking we can reach your app…",
+  surface_scan: "Loading the homepage, detecting your stack…",
+  walking: "Walking each discovered journey end-to-end…",
+  discovery: "Mapping your app's user journeys…",
+  anatomy: "Assembling pages, actions, services and tech…",
+  writing: "Synthesizing the verdict…",
+};
+
+// Screen 2 — In-progress. Half product, half theatre: deploy-log feed on the
+// left, the agent's live browser screenshot on the right. Subscribes to SSE and
+// redirects to the verdict when the run completes.
+export function RunLive({
+  publicId,
+  appSlug,
+  runNumber,
+  startedAt,
+  notifyEmail,
+}: {
+  publicId: string;
+  appSlug: string;
+  runNumber: number;
+  startedAt: string;
+  notifyEmail: string | null;
+}) {
   const router = useRouter();
   const [snap, setSnap] = useState<Snapshot | null>(null);
 
@@ -33,6 +57,11 @@ export function RunLive({ publicId, appSlug }: { publicId: string; appSlug: stri
       const status = (e as MessageEvent).data;
       if (status === "completed" || status === "partial") {
         router.push(`/verdict/${publicId}`);
+      } else {
+        // failed — re-fetch once so the failure card renders with the error
+        fetch(`/api/runs/${publicId}`)
+          .then((r) => r.json())
+          .then((run) => setSnap((s) => ({ ...(s as Snapshot), ...run })));
       }
     });
     es.addEventListener("error", () => es.close());
@@ -41,54 +70,126 @@ export function RunLive({ publicId, appSlug }: { publicId: string; appSlug: stri
 
   const phase = (snap?.status ?? "connecting") as RunPhase;
   const phaseIndex = Math.max(0, PHASE_ORDER.indexOf(phase));
-  const pct = Math.round(((phaseIndex + 1) / PHASE_ORDER.length) * 100);
+  const pct = Math.round(((phaseIndex + 0.5) / PHASE_ORDER.length) * 100);
   const events = snap?.events ?? [];
+  const started = new Date(startedAt);
+  const estimated = new Date(started.getTime() + 2 * 60 * 60 * 1000);
+  const fmt = (d: Date) => d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
   if (snap?.status === "failed") {
     return (
-      <div className="rounded-xl border border-neutral-200 bg-white p-6">
-        <p className="font-medium">Something broke on our side. We&apos;re looking at it.</p>
+      <div className="card mx-auto max-w-xl space-y-3 p-8 text-center">
+        <p className="text-2xl">🪦</p>
+        <p className="text-lg font-medium">Something broke on our side.</p>
+        <p className="text-sm text-fg-muted">
+          We&apos;re looking at it. You&apos;ll get an email with a retry link.
+        </p>
         {snap.errorMessage && (
-          <p className="mono mt-2 text-neutral-500">{snap.errorMessage}</p>
+          <p className="mono rounded-lg bg-ink-900 p-3 text-left text-status-broken/80">
+            {snap.errorMessage}
+          </p>
         )}
       </div>
     );
   }
 
   return (
-    <div className="space-y-5">
-      <div className="flex items-center justify-between text-sm text-neutral-500">
-        <span className="mono">{appSlug}</span>
-        <span>{pct}%</span>
-      </div>
-      <div className="h-2 w-full overflow-hidden rounded-full bg-neutral-200">
-        <div className="h-full bg-blue-600 transition-all" style={{ width: `${pct}%` }} />
+    <div className="stagger space-y-5">
+      {/* Header row: target, run number, progress */}
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <p className="mono text-lg text-fg">{appSlug}</p>
+          <p className="font-mono text-xs text-fg-faint">
+            Started {fmt(started)} · Estimated {fmt(estimated)}
+          </p>
+        </div>
+        <div className="text-right">
+          <p className="font-mono text-xs text-fg-faint">Run #{runNumber}</p>
+          <p className="font-mono text-sm text-fg-muted">{pct}%</p>
+        </div>
       </div>
 
-      <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3">
-        <p className="font-medium">{PHASE_LABELS[phase] ?? "Starting up"}</p>
-        <p className="text-sm text-neutral-500">
-          Phase {phaseIndex + 1} of {PHASE_ORDER.length}
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-ink-800">
+        <div
+          className="progress-active h-full rounded-full transition-all duration-700"
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+
+      {/* Phase banner */}
+      <div className="rounded-xl border border-accent/30 bg-accent/10 px-5 py-4">
+        <p className="font-medium text-fg">
+          {PHASE_BLURB[phase] ?? "Starting up…"}
+        </p>
+        <p className="mt-0.5 font-mono text-xs text-fg-muted">
+          Phase {phaseIndex + 1} of {PHASE_ORDER.length} — {PHASE_LABELS[phase] ?? "Connecting"}
         </p>
       </div>
 
-      <div className="rounded-xl border border-neutral-200 bg-white p-4">
-        <p className="mb-2 text-sm font-medium text-neutral-700">What we&apos;re doing</p>
-        <ul className="space-y-1">
-          {events.length === 0 && <li className="text-sm text-neutral-400">Starting up…</li>}
-          {events.map((ev, i) => (
-            <li key={i} className="mono text-neutral-700">
-              <span className="text-neutral-400">
-                {new Date(ev.at).toLocaleTimeString()}
-              </span>{" "}
-              {ICON[ev.icon]} {ev.text}
-            </li>
-          ))}
-        </ul>
+      {/* Two columns: feed + agent's eyes */}
+      <div className="grid gap-4 lg:grid-cols-[1.2fr_1fr]">
+        <div className="card flex min-h-[320px] flex-col p-4">
+          <p className="section-label mb-3">What we&apos;re doing</p>
+          <ul className="flex-1 space-y-0.5 overflow-y-auto">
+            {events.length === 0 && (
+              <li className="log-line cursor text-fg-faint">Starting up</li>
+            )}
+            {events.map((ev, i) => {
+              const icon = ICON[ev.icon];
+              const last = i === events.length - 1;
+              return (
+                <li key={i} className={`log-line ${last ? "text-fg" : ""}`}>
+                  <span className="mr-2 text-fg-faint">
+                    {new Date(ev.at).toLocaleTimeString([], {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
+                  </span>
+                  <span className={`mr-1.5 ${icon.className}`}>{icon.glyph}</span>
+                  {ev.text}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+
+        <div className="card flex flex-col p-4">
+          <p className="section-label mb-3">What the agent sees</p>
+          <div className="relative aspect-[4/3] overflow-hidden rounded-lg border border-ink-700 bg-ink-900">
+            {snap?.liveScreenshotUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={snap.liveScreenshotUrl}
+                alt="Live screenshot of the agent's browser"
+                className="h-full w-full object-cover object-top"
+              />
+            ) : (
+              <div className="flex h-full items-center justify-center">
+                <span className="font-mono text-xs text-fg-faint">
+                  waiting for first frame…
+                </span>
+              </div>
+            )}
+            <span className="absolute right-2 top-2 flex items-center gap-1.5 rounded-full bg-ink-950/80 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-status-ok">
+              <span className="inline-block h-1.5 w-1.5 animate-pulse-dot rounded-full bg-status-ok" />
+              live
+            </span>
+          </div>
+          {snap?.currentAction && (
+            <div className="mt-3 rounded-lg bg-ink-900 p-3">
+              <p className="font-mono text-[11px] uppercase tracking-wider text-fg-faint">
+                Agent currently
+              </p>
+              <p className="mt-1 text-sm italic text-fg-muted">
+                &ldquo;{snap.currentAction}&rdquo;
+              </p>
+            </div>
+          )}
+        </div>
       </div>
 
-      <p className="text-center text-sm text-neutral-500">
-        Close this tab — we&apos;ll email you when it&apos;s done.
+      <p className="text-center font-mono text-[13px] text-fg-faint">
+        Close this tab — we&apos;ll email {notifyEmail ?? "you"} when done.
       </p>
     </div>
   );

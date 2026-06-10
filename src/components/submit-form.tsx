@@ -18,7 +18,7 @@ export function SubmitForm() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const valid = /^https?:\/\/.+/.test(url.trim());
+  const valid = /^https?:\/\/.+\..+/.test(url.trim());
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -43,70 +43,110 @@ export function SubmitForm() {
   }
 
   return (
-    <form onSubmit={onSubmit} className="w-full max-w-xl space-y-5">
-      <h1 className="text-center text-2xl font-semibold tracking-tight">
-        Paste a link. We&apos;ll show you your app.
-      </h1>
+    <form onSubmit={onSubmit} className="stagger w-full max-w-xl space-y-6">
+      <div className="space-y-3 text-center">
+        <p className="section-label">free first run · no signup</p>
+        <h1 className="text-balance text-4xl font-semibold tracking-tight sm:text-[2.75rem] sm:leading-[1.1]">
+          Paste a link.
+          <br />
+          We&apos;ll show you <span className="text-accent">your app</span>.
+        </h1>
+      </div>
 
-      <Input
-        type="url"
-        inputMode="url"
-        placeholder="https://"
-        value={url}
-        onChange={(e) => setUrl(e.target.value)}
-        aria-invalid={url.length > 0 && !valid}
-      />
+      <div className="card p-1.5">
+        <div className="flex items-center gap-2">
+          <span className="pl-3 font-mono text-sm text-fg-faint">→</span>
+          <input
+            type="url"
+            inputMode="url"
+            placeholder="https://"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            aria-invalid={url.length > 0 && !valid}
+            className="w-full bg-transparent py-3 font-mono text-[15px] text-fg outline-none placeholder:text-fg-faint"
+            autoFocus
+          />
+        </div>
+      </div>
       {url.length > 0 && !valid && (
-        <p className="text-sm text-status-broken">Doesn&apos;t look like a working URL</p>
+        <p className="-mt-3 text-sm text-status-broken">Doesn&apos;t look like a working URL</p>
       )}
 
-      <button
-        type="button"
-        onClick={() => setExpanded((v) => !v)}
-        className="text-sm text-neutral-600 hover:text-neutral-900"
-      >
-        {expanded ? "⌄" : "⌃"} Add login &amp; notes (optional)
-      </button>
+      <div className="text-center">
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className="font-mono text-[13px] text-fg-muted transition-colors hover:text-fg"
+        >
+          <span className={`chevron mr-1 inline-block transition-transform ${expanded ? "rotate-90" : ""}`}>
+            ›
+          </span>
+          Add login &amp; notes (optional)
+        </button>
+      </div>
 
       {expanded && (
-        <div className="space-y-3 rounded-xl border border-neutral-200 bg-white p-4">
-          <p className="text-sm font-medium text-neutral-700">
-            Test login (optional but recommended)
-          </p>
-          <Input
-            type="email"
-            placeholder="test@example.com"
-            value={testEmail}
-            onChange={(e) => setTestEmail(e.target.value)}
-          />
-          <Input
-            type="password"
-            placeholder="••••••••"
-            value={testPassword}
-            onChange={(e) => setTestPassword(e.target.value)}
-          />
-          <Input
-            placeholder="Anything we should know? e.g. don't delete the account"
-            value={userNotes}
-            onChange={(e) => setUserNotes(e.target.value)}
-          />
-          <Input
-            type="email"
-            placeholder="Where to email the result? you@email.com"
-            value={notifyEmail}
-            onChange={(e) => setNotifyEmail(e.target.value)}
-          />
+        <div className="card animate-fade-up space-y-4 p-5">
+          <div className="space-y-2">
+            <p className="text-sm font-medium text-fg">
+              Test login{" "}
+              <span className="font-normal text-fg-faint">(optional but recommended)</span>
+            </p>
+            <Input
+              type="email"
+              placeholder="test@example.com"
+              value={testEmail}
+              onChange={(e) => setTestEmail(e.target.value)}
+              autoComplete="off"
+            />
+            <Input
+              type="password"
+              placeholder="••••••••"
+              value={testPassword}
+              onChange={(e) => setTestPassword(e.target.value)}
+              autoComplete="new-password"
+            />
+            <p className="text-xs text-fg-faint">
+              Encrypted at rest, deleted after the run, never appears in evidence.
+            </p>
+          </div>
+          <div className="space-y-2">
+            <p className="text-sm font-medium text-fg">Anything we should know?</p>
+            <Input
+              placeholder="Don't delete the account, no admin access. OK to create test sessions."
+              value={userNotes}
+              onChange={(e) => setUserNotes(e.target.value)}
+            />
+          </div>
+          <div className="space-y-2">
+            <p className="text-sm font-medium text-fg">Where to email the result?</p>
+            <Input
+              type="email"
+              placeholder="you@email.com"
+              value={notifyEmail}
+              onChange={(e) => setNotifyEmail(e.target.value)}
+            />
+          </div>
         </div>
       )}
 
-      {error && <p className="text-sm text-status-broken">{error}</p>}
+      {error && <p className="text-center text-sm text-status-broken">{error}</p>}
 
-      <Button type="submit" disabled={!valid || submitting} className="w-full">
-        {submitting ? "Spinning up agents…" : "Show me my app"}
+      <Button type="submit" disabled={!valid || submitting} className="w-full py-3.5 text-[15px]">
+        {submitting ? (
+          <>
+            <span className="inline-block h-2 w-2 animate-pulse-dot rounded-full bg-ink-950" />
+            Spinning up agents…
+          </>
+        ) : (
+          "Show me my app"
+        )}
       </Button>
 
-      <p className="text-center text-sm text-neutral-500">
-        No signup. Free first run. Takes ~2 hours. We&apos;ll email you when ready.
+      <p className="text-center font-mono text-[13px] leading-6 text-fg-faint">
+        No signup. Free first run. Takes ~2 hours.
+        <br />
+        We&apos;ll email you when ready.
       </p>
     </form>
   );

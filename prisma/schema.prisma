@@ -42,6 +42,8 @@ model Run {
   id        String    @id @default(cuid())
   // Unguessable public id used in /run/{id} and /verdict/{id} URLs.
   publicId  String    @unique @default(cuid())
+  // Human-facing sequential number, e.g. "Run #4719".
+  runNumber Int       @unique @default(autoincrement())
   targetUrl String
   // App slug derived from the target host, e.g. "joblander.app". Stable across runs.
   appSlug   String
@@ -56,12 +58,21 @@ model Run {
 
   status   RunStatus @default(queued)
   verdict  Verdict?
+  // One-sentence bottom-line verdict shown under the header pill.
+  bottomLine String?
   // LLM-generated "App Lens": 5–7 bullets describing the product. User-editable.
   appLens  Json?
+  // User reaction to the Lens: null = none, "confirmed" = Looks right,
+  // free text = "Something's off" correction (agent re-reads it next run).
+  lensFeedback String?
   // App Anatomy: { pages[], actions[], services[], tech{} }.
   anatomy  Json?
   // Free-form progress events for the live feed (phase log lines).
   events   Json? // RunEvent[] — see src/lib/types.ts
+  // Live-screen theatre: what the agent is doing right now, in plain English,
+  // and the most recent screenshot of its browser. Updated by the worker.
+  currentAction      String?
+  liveScreenshotUrl  String?
 
   errorMessage String?
 
@@ -115,6 +126,8 @@ model Step {
   order      Int
   label      String // "Try mock interview on iPhone → 500"
   status     StepStatus
+  // Denormalized thumbnail for the journey strip card (full set lives in Evidence).
+  screenshotUrl String?
   attempted  String? // what the agent tried to do
   observed   String? // what happened
   consoleLog String?
