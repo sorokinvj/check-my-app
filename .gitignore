@@ -31,3 +31,6 @@ next-env.d.ts
 # playwright
 test-results/
 playwright-report/
+
+# claude harness internals
+.claude/scheduled_tasks.lock
