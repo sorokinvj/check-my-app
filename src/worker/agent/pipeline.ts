@@ -73,6 +73,16 @@ export async function runPipeline(runId: string): Promise<void> {
   }
 }
 
+// Update the /run/{id} live-theatre fields: what the agent is doing right now
+// (plain English) and the latest screenshot of its browser. Call freely from
+// discovery/execution — the SSE stream picks both up on the next tick.
+export async function setLiveState(
+  runId: string,
+  state: { currentAction?: string; liveScreenshotUrl?: string },
+) {
+  await prisma.run.update({ where: { id: runId }, data: state });
+}
+
 // Advance status and append one feed event in a single update.
 async function transition(runId: string, phase: RunPhase, event: Omit<RunEvent, "at" | "phase">) {
   const run = await prisma.run.findUnique({ where: { id: runId }, select: { events: true } });

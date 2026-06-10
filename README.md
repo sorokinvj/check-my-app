@@ -78,6 +78,7 @@ npm install
 npx playwright install chromium
 npm run infra:up            # Postgres + Redis via Docker
 npm run db:push             # apply schema
+npm run db:seed             # optional: demo joblander.app verdict at /verdict/demo-verdict
 npm run dev                 # web app on http://localhost:3000
 npm run worker              # in a second terminal: the agent worker
 ```
@@ -100,10 +101,28 @@ Test credentials are encrypted at rest (AES-256-GCM), never logged, never in
 evidence, and cleared after a run unless an active Watch retains them. Password
 fields should be blurred in screenshots (TODO in `evidence.ts`).
 
+## Frontend (implemented)
+
+All four PRD screens with Loop C interactions:
+
+- **/check** — submit form; login/notes behind one toggle
+- **/run/{id}** — live two-column theatre over SSE: activity feed + the agent's
+  latest browser screenshot + "Agent currently: …" (worker updates
+  `currentAction` / `liveScreenshotUrl` via `setLiveState()` in `pipeline.ts`)
+- **/verdict/{id}** — App Lens (inline edit ✏ + Looks right / Something's off),
+  journey strips with clickable step detail, App Anatomy blocks, findings with
+  evidence links and triage marks (known / fixed / dispute), Daily Watch footer,
+  Re-check now, newer-run banner
+- **/watch/{slug}** — run history, frequency (Daily / 6h / Manual), notify rule,
+  pause/resume, cancel
+
+API: `PATCH /api/runs/{id}/lens`, `POST /api/runs/{id}/recheck`,
+`PATCH /api/findings/{id}`, `POST /api/watch`, `PATCH|DELETE /api/watch/{slug}`.
+
 ## What's stubbed (next up)
 
 - `discovery.ts` — stack detection, automated login, nav crawl, journey clustering
 - `execution.ts` — the per-step agent loop + outcome classification
 - `synthesis.ts` — turning observations into Findings (App Lens prompt is wired)
 - `evidence.ts` — S3/R2 upload + password blurring
-- Daily Watch diffing, App Lens editing, finding triage actions, email provider
+- Daily Watch diffing, email provider
