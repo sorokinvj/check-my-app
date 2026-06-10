@@ -74,7 +74,10 @@ export function RunLive({
   const events = snap?.events ?? [];
   const started = new Date(startedAt);
   const estimated = new Date(started.getTime() + 2 * 60 * 60 * 1000);
-  const fmt = (d: Date) => d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  // Fixed locale: this renders on both server and client, and locale-dependent
+  // output would cause a hydration mismatch (e.g. "09:43 PM" vs "21:43").
+  const fmt = (d: Date) =>
+    d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
 
   if (snap?.status === "failed") {
     return (
@@ -140,7 +143,7 @@ export function RunLive({
               return (
                 <li key={i} className={`log-line ${last ? "text-fg" : ""}`}>
                   <span className="mr-2 text-fg-faint">
-                    {new Date(ev.at).toLocaleTimeString([], {
+                    {new Date(ev.at).toLocaleTimeString("en-GB", {
                       hour: "2-digit",
                       minute: "2-digit",
                     })}
