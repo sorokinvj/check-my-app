@@ -1,0 +1,29 @@
+# Local infra for development: Postgres + Redis.
+# Start with: npm run infra:up   ·   Stop with: npm run infra:down
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: checkmyapp
+      POSTGRES_PASSWORD: checkmyapp
+      POSTGRES_DB: checkmyapp
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U checkmyapp"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+
+volumes:
+  pgdata:
+  redisdata:

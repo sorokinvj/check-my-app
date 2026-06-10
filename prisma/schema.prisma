@@ -1,0 +1,226 @@
+// CheckMyApp data model.
+//
+// A Run is one end-to-end check of a target app: discovery → walking journeys →
+// anatomy → verdict. A Run owns Journeys (each with ordered Steps) and Findings.
+// A Watch turns a target into a recurring Daily Check that spawns new Runs and
+// diffs them against a baseline. Evidence is intentionally first-class: a Step or
+// Finding without attached evidence is not trustworthy (see Project Brief).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Run lifecycle ───────────────────────────────────────────────────────────
+
+enum RunStatus {
+  queued
+  connecting // phase 1
+  surface_scan // phase 2
+  discovery // phase 3
+  walking // phase 4 — walking journeys
+  anatomy // phase 5
+  writing // phase 6 — synthesizing verdict
+  completed
+  partial // stuck/timeout but produced a usable verdict
+  failed
+}
+
+// Bottom-line verdict shown in the header pill.
+enum Verdict {
+  all_good
+  mostly_ok
+  needs_attention
+  broken
+}
+
+model Run {
+  id        String    @id @default(cuid())
+  // Unguessable public id used in /run/{id} and /verdict/{id} URLs.
+  publicId  String    @unique @default(cuid())
+  targetUrl String
+  // App slug derived from the target host, e.g. "joblander.app". Stable across runs.
+  appSlug   String
+
+  // Submission inputs. Credentials are encrypted at rest and cleared after the run
+  // unless an active Watch keeps them. They must never be logged or appear in evidence.
+  testEmail            String?
+  testPasswordEnc      String? // encrypted blob, not plaintext
+  scopeHints           String? // "don't touch /admin"
+  userNotes            String? // "don't delete the test account"
+  notifyEmail          String?
+
+  status   RunStatus @default(queued)
+  verdict  Verdict?
+  // LLM-generated "App Lens": 5–7 bullets describing the product. User-editable.
+  appLens  Json?
+  // App Anatomy: { pages[], actions[], services[], tech{} }.
+  anatomy  Json?
+  // Free-form progress events for the live feed (phase log lines).
+  events   Json? // RunEvent[] — see src/lib/types.ts
+
+  errorMessage String?
+
+  watch    Watch?  @relation(fields: [watchId], references: [id])
+  watchId  String?
+  // The baseline run this one is diffed against (Daily Check).
+  baselineRunId String?
+
+  journeys Journey[]
+  findings Finding[]
+
+  startedAt   DateTime  @default(now())
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([appSlug])
+  @@index([watchId])
+}
+
+// ─── Journeys & steps ────────────────────────────────────────────────────────
+
+enum StepStatus {
+  ok // ✅ works
+  risky // ⚠ works but risky
+  confusing // 🟡 confusing
+  broken // 🔴 broken
+  exposed // ⚠ security exposure
+  skipped // — couldn't reach this step
+}
+
+model Journey {
+  id      String  @id @default(cuid())
+  run     Run     @relation(fields: [runId], references: [id], onDelete: Cascade)
+  runId   String
+  order   Int
+  title   String // "Sign up → first mock interview"
+  status  StepStatus // worst-case roll-up of its steps
+  summary String? // "What we found: signup fails on Safari mobile (~18% of traffic)"
+  videoUrl String? // recording of the agent walking this journey
+
+  steps   Step[]
+
+  @@index([runId])
+}
+
+model Step {
+  id         String     @id @default(cuid())
+  journey    Journey    @relation(fields: [journeyId], references: [id], onDelete: Cascade)
+  journeyId  String
+  order      Int
+  label      String // "Try mock interview on iPhone → 500"
+  status     StepStatus
+  attempted  String? // what the agent tried to do
+  observed   String? // what happened
+  consoleLog String?
+  networkLog String? // HAR excerpt
+
+  evidence   Evidence[]
+
+  @@index([journeyId])
+}
+
+// ─── Findings (the QA fallout) ───────────────────────────────────────────────
+
+enum Severity {
+  high
+  medium
+  low
+}
+
+enum FindingCategory {
+  broken
+  risky
+  confusing
+  polish
+  exposed
+}
+
+// User-applied triage from the verdict page; feeds Daily Check noise filtering.
+enum FindingMark {
+  none
+  known
+  fixed
+  false_positive
+}
+
+model Finding {
+  id        String          @id @default(cuid())
+  run       Run             @relation(fields: [runId], references: [id], onDelete: Cascade)
+  runId     String
+  // Human-facing sequential number within a run, e.g. #001.
+  number    Int
+  title     String
+  category  FindingCategory
+  severity  Severity
+  // Structured detail: where, browser, reproduced, whatWeTried[], whatHappened, whyItMatters.
+  detail    Json?
+  mark      FindingMark     @default(none)
+
+  evidence  Evidence[]
+
+  createdAt DateTime @default(now())
+
+  @@index([runId])
+}
+
+// ─── Evidence (first-class) ──────────────────────────────────────────────────
+
+enum EvidenceType {
+  screenshot
+  screencast
+  console_log
+  network_har
+  dom_snapshot
+}
+
+model Evidence {
+  id          String       @id @default(cuid())
+  type        EvidenceType
+  storageUrl  String // s3://... or file://./storage/...
+  sha256      String? // content hash for integrity (RFC3161 timestamping is post-MVP)
+  capturedAt  DateTime     @default(now())
+
+  step        Step?    @relation(fields: [stepId], references: [id], onDelete: Cascade)
+  stepId      String?
+  finding     Finding? @relation(fields: [findingId], references: [id], onDelete: Cascade)
+  findingId   String?
+
+  @@index([stepId])
+  @@index([findingId])
+}
+
+// ─── Daily Watch ─────────────────────────────────────────────────────────────
+
+enum WatchFrequency {
+  daily
+  every_6h
+  manual
+}
+
+model Watch {
+  id          String         @id @default(cuid())
+  appSlug     String         @unique
+  targetUrl   String
+  frequency   WatchFrequency @default(daily)
+  active      Boolean        @default(true)
+  // Notify only when something meaningful changed vs. notify after every run.
+  notifyOnChangeOnly Boolean @default(true)
+  notifyEmail String?
+
+  // Encrypted test credentials retained for recurring runs.
+  testEmail        String?
+  testPasswordEnc  String?
+
+  runs        Run[]
+  lastRunAt   DateTime?
+  nextRunAt   DateTime?
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
