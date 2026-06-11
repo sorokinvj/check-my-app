@@ -70,8 +70,11 @@ export async function runPipeline(runId: string): Promise<void> {
     const discovery = await discoverApp({ run, browser, onLiveScreenshot, onProgress });
     transcript.push(...discovery.transcript);
     await appendEvent(runId, "discovery", {
-      icon: "ok",
-      text: `Proposed ${discovery.journeys.length} user journeys`,
+      icon: discovery.journeys.length > 0 ? "ok" : "warn",
+      text:
+        discovery.journeys.length > 0
+          ? `Proposed ${discovery.journeys.length} user journeys`
+          : "No journeys mapped — discovery returned nothing usable",
     });
 
     // Phase 4 — Walking journeys: execute each one, capturing per-step evidence
@@ -258,9 +261,14 @@ async function maybeNotify(
 async function clearEphemeralCredentials(runId: string) {
   const run = await prisma.run.findUnique({
     where: { id: runId },
-    select: { watchId: true },
+    select: { watchId: true, status: true },
   });
-  if (run?.watchId) return; // Watch keeps credentials for recurring runs
+  if (!run) return;
+  if (run.watchId) return; // Watch keeps credentials for recurring runs
+  // Only clear after a terminal completion. A failed run may be retried, and a
+  // retry without the password would run auth journeys credential-less and
+  // report false "broken login" findings.
+  if (run.status !== "completed" && run.status !== "partial") return;
   await prisma.run.update({
     where: { id: runId },
     data: { testPasswordEnc: null },

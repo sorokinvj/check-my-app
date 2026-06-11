@@ -10,7 +10,7 @@ import type { Run } from "@prisma/client";
 import { decryptSecret } from "@/lib/crypto";
 import type { AppAnatomy } from "@/lib/types";
 import { hasApiKey } from "./llm";
-import { runAgentLoop, type TranscriptEntry } from "./core";
+import { runAgentLoop, finalizeJson, type TranscriptEntry } from "./core";
 import { prepareAgentPage, type ToolEnv } from "./tools";
 import { discoverySystem } from "./instructions";
 import { storeScreenshot } from "./evidence";
@@ -18,6 +18,14 @@ import { storeScreenshot } from "./evidence";
 export interface ProposedJourney {
   title: string;
   steps: string[];
+}
+
+export function originOf(url: string): string {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return url;
+  }
 }
 
 export interface DiscoveryResult {
@@ -46,6 +54,7 @@ export async function discoverApp(args: {
 
   const env: ToolEnv = {
     page,
+    targetOrigin: originOf(run.targetUrl),
     testEmail: run.testEmail ?? undefined,
     // Decrypted only here, in-memory; the LLM only ever sees {{TEST_PASSWORD}}.
     testPassword: run.testPasswordEnc ? decryptSecret(run.testPasswordEnc) : undefined,
@@ -68,7 +77,15 @@ export async function discoverApp(args: {
       onProgress,
     });
 
-    const parsed = parseDiscoveryJson(result.finalText);
+    let parsed = parseDiscoveryJson(result.finalText);
+    if (!parsed) {
+      // Final turn didn't parse (truncation/prose) — ask once for clean JSON.
+      const retry = await finalizeJson(
+        result.messages,
+        "Output ONLY the discovery JSON object now (journeys + anatomy), no prose, no markdown fences.",
+      );
+      parsed = parseDiscoveryJson(retry);
+    }
     return { ...(parsed ?? empty), transcript: result.transcript };
   } finally {
     await context.close();

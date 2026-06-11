@@ -59,8 +59,13 @@ async function main() {
     console.error("Could not read the Playwright JSON report:", err);
   }
 
-  // Update GeneratedTest rows (match by slugified title ↔ spec filename).
-  const tests = await prisma.generatedTest.findMany({ where: { appSlug } });
+  // Update only the latest version of each title (older versions are
+  // superseded and shouldn't look freshly run).
+  const tests = await prisma.generatedTest.findMany({
+    where: { appSlug },
+    orderBy: [{ title: "asc" }, { version: "desc" }],
+    distinct: ["title"],
+  });
   const now = new Date();
   for (const test of tests) {
     const fileSlug =

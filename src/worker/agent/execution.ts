@@ -17,7 +17,7 @@ import { runAgentLoop, type TranscriptEntry } from "./core";
 import { prepareAgentPage, type ToolEnv } from "./tools";
 import { walkingSystem } from "./instructions";
 import { storeScreenshot } from "./evidence";
-import type { ProposedJourney } from "./discovery";
+import { originOf, type ProposedJourney } from "./discovery";
 
 const SEVERITY_ORDER: StepStatus[] = [
   "ok",
@@ -61,6 +61,7 @@ export async function walkJourneys(args: {
 
     const env: ToolEnv = {
       page,
+      targetOrigin: originOf(run.targetUrl),
       testEmail: run.testEmail ?? undefined,
       testPassword: run.testPasswordEnc ? decryptSecret(run.testPasswordEnc) : undefined,
       networkLog: [],
@@ -115,8 +116,21 @@ export async function walkJourneys(args: {
       await prisma.journey.update({
         where: { id: journey.id },
         data: {
-          status: worstStatus(stepStatuses),
+          // A journey that recorded no steps (early crash / iteration cap) is
+          // unfinished, not passing — never let it roll up to "ok".
+          status: stepStatuses.length === 0 ? "skipped" : worstStatus(stepStatuses),
           summary: result.finalText.slice(0, 500) || null,
+        },
+      });
+    } catch (err) {
+      // Isolate per journey: one failed journey must not abort the rest of the
+      // run (the others' steps are already persisted and worth synthesizing).
+      console.error(`[walk] journey "${proposed.title}" failed:`, err);
+      await prisma.journey.update({
+        where: { id: journey.id },
+        data: {
+          status: stepStatuses.length === 0 ? "skipped" : worstStatus(stepStatuses),
+          summary: `Walk aborted: ${err instanceof Error ? err.message : String(err)}`.slice(0, 500),
         },
       });
     } finally {

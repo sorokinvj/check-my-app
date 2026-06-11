@@ -5,7 +5,7 @@
 // The core is a pure function of (instructions, tools, budget) → final text +
 // transcript. No BullMQ, no Prisma — portable to Cloudflare Workflows as-is.
 
-import type Anthropic from "@anthropic-ai/sdk";
+import Anthropic from "@anthropic-ai/sdk";
 import { anthropic, AGENT_MODEL } from "./llm";
 import { BROWSER_TOOLS, executeTool, type ToolEnv } from "./tools";
 
@@ -23,6 +23,8 @@ export interface AgentLoopResult {
   iterations: number;
   // Audit artifact: every tool call + (truncated) result, in order.
   transcript: TranscriptEntry[];
+  // Full conversation, for a follow-up finalize call if finalText didn't parse.
+  messages: Anthropic.MessageParam[];
 }
 
 export interface TranscriptEntry {
@@ -50,20 +52,30 @@ export async function runAgentLoop(args: AgentLoopArgs): Promise<AgentLoopResult
     // (stable for the whole loop); the top-level marker auto-caches the last
     // block of the growing conversation, so each iteration re-reads the prior
     // transcript at ~0.1x instead of reprocessing it.
-    const response = await anthropic.messages.create({
-      model: AGENT_MODEL,
-      max_tokens: 8_000,
-      thinking: { type: "adaptive" },
-      cache_control: { type: "ephemeral" },
-      system: [{ type: "text", text: system, cache_control: { type: "ephemeral" } }],
-      tools: BROWSER_TOOLS,
-      messages,
-    });
+    // Retried on transient API errors so a 20-min run isn't lost to one 529 —
+    // the messages array is intact, so resume is just re-issuing the call.
+    const response = await createWithRetry(() =>
+      anthropic.messages.create({
+        // 16k keeps non-streaming under the SDK timeout while leaving room for
+        // adaptive thinking + a long final JSON (discovery/synthesis emit the
+        // whole app map at once — 8k truncated it and silently lost journeys).
+        model: AGENT_MODEL,
+        max_tokens: 16_000,
+        thinking: { type: "adaptive" },
+        cache_control: { type: "ephemeral" },
+        system: [{ type: "text", text: system, cache_control: { type: "ephemeral" } }],
+        tools: BROWSER_TOOLS,
+        messages,
+      }),
+    );
 
     const u = response.usage;
     console.log(
-      `[agent] iter ${iterations}: in=${u.input_tokens} cache_write=${u.cache_creation_input_tokens ?? 0} cache_read=${u.cache_read_input_tokens ?? 0} out=${u.output_tokens}`,
+      `[agent] iter ${iterations}: stop=${response.stop_reason} in=${u.input_tokens} cache_write=${u.cache_creation_input_tokens ?? 0} cache_read=${u.cache_read_input_tokens ?? 0} out=${u.output_tokens}`,
     );
+    if (response.stop_reason === "max_tokens") {
+      console.warn(`[agent] iter ${iterations} hit max_tokens — output may be truncated`);
+    }
 
     const toolUses = response.content.filter(
       (b): b is Anthropic.ToolUseBlock => b.type === "tool_use",
@@ -111,7 +123,64 @@ export async function runAgentLoop(args: AgentLoopArgs): Promise<AgentLoopResult
     messages.push({ role: "user", content: results });
   }
 
-  return { finalText, iterations, transcript };
+  return { finalText, iterations, transcript, messages };
+}
+
+// One extra non-tool call to coax clean JSON out of a conversation whose final
+// turn didn't parse (truncation, trailing prose). Cheap recovery for the
+// discovery/synthesis hand-off — the messages already carry all the context.
+export async function finalizeJson(
+  messages: Anthropic.MessageParam[],
+  instruction: string,
+): Promise<string> {
+  const response = await createWithRetry(() =>
+    anthropic.messages.create({
+      model: AGENT_MODEL,
+      max_tokens: 16_000,
+      messages: [...messages, { role: "user", content: instruction }],
+    }),
+  );
+  const text = response.content.find((b) => b.type === "text");
+  return text && text.type === "text" ? text.text : "";
+}
+
+// Resilient create: the SDK already retries twice, but a sustained overload
+// mid-run would still throw and lose the whole journey. Retry transient errors
+// (429/500/529) up to 5 times with capped exponential backoff, honoring
+// retry-after when present. Non-transient errors (400/401) rethrow immediately.
+async function createWithRetry(
+  fn: () => Promise<Anthropic.Message>,
+  attempts = 5,
+): Promise<Anthropic.Message> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      const status = err instanceof Anthropic.APIError ? err.status : undefined;
+      const transient = status === 429 || status === 529 || (status ?? 0) >= 500;
+      if (!transient || attempt === attempts - 1) throw err;
+      const retryAfter = headerSeconds(err);
+      const backoff = retryAfter ?? Math.min(2 ** attempt * 2_000, 30_000);
+      console.warn(`[agent] transient API error (${status}); retrying in ${backoff}ms`);
+      await sleep(backoff);
+    }
+  }
+  throw lastErr;
+}
+
+function headerSeconds(err: unknown): number | null {
+  if (err instanceof Anthropic.APIError) {
+    const h = err.headers?.get?.("retry-after");
+    const n = h ? Number(h) : NaN;
+    if (Number.isFinite(n)) return n * 1_000;
+  }
+  return null;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
 }
 
 function now(): string {

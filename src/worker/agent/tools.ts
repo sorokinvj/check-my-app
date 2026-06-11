@@ -13,6 +13,9 @@ import type { Page } from "playwright";
 
 export interface ToolEnv {
   page: Page;
+  // Origin the agent is allowed to touch. Credential substitution and
+  // navigation are hard-refused off this origin (defence vs prompt injection).
+  targetOrigin: string;
   testEmail?: string;
   testPassword?: string;
   networkLog: string[]; // rolling window of "METHOD url → status"
@@ -20,6 +23,21 @@ export interface ToolEnv {
   onScreenshot?: (buffer: Buffer) => Promise<string>; // returns storage URL
   onReportStep?: (step: ReportedStep) => Promise<void>;
   onWriteTest?: (test: { title: string; content: string }) => Promise<void>;
+}
+
+// Strip any occurrence of the real test credentials from text leaving the tool
+// layer (network/console logs, tool results). The model only ever needs the
+// placeholders — actual secret values must never reach context, transcript, or
+// the persisted Step columns, even if the tested app echoes them.
+export function scrubSecrets(env: ToolEnv, text: string): string {
+  let out = text;
+  for (const secret of [env.testPassword, env.testEmail]) {
+    if (secret && secret.length >= 3) {
+      out = out.split(secret).join("[redacted]");
+      out = out.split(encodeURIComponent(secret)).join("[redacted]");
+    }
+  }
+  return out;
 }
 
 export interface ReportedStep {
@@ -142,7 +160,7 @@ export async function executeTool(
       case "screenshot":
         return await screenshot(env);
       case "get_network_log":
-        return drainLogs(env);
+        return scrubSecrets(env, drainLogs(env));
       case "report_step": {
         const step = input as unknown as ReportedStep;
         // The model occasionally invents enum values — coerce to the schema.
@@ -167,8 +185,16 @@ export async function executeTool(
 }
 
 async function navigate(env: ToolEnv, url: string): Promise<string> {
-  const target = new URL(url, env.page.url() || undefined).toString();
-  const res = await env.page.goto(target, { waitUntil: "domcontentloaded", timeout: 20_000 });
+  const target = new URL(url, env.page.url() || undefined);
+  // Hard origin guard: the system prompt says "stay on origin", but a malicious
+  // page could instruct the model to navigate off-site and exfiltrate creds.
+  if (target.origin !== env.targetOrigin) {
+    return `Refused: ${target.origin} is outside the target app (${env.targetOrigin}). Stay on the target.`;
+  }
+  const res = await env.page.goto(target.toString(), {
+    waitUntil: "domcontentloaded",
+    timeout: 20_000,
+  });
   return `Navigated to ${env.page.url()} (status ${res?.status() ?? "?"})`;
 }
 
@@ -182,6 +208,17 @@ async function click(env: ToolEnv, input: Record<string, unknown>): Promise<stri
 async function fill(env: ToolEnv, input: Record<string, unknown>): Promise<string> {
   let value = String(input.value);
   const usedSecret = /\{\{TEST_(EMAIL|PASSWORD)\}\}/.test(value);
+  // Never type real credentials into an off-origin form (prompt-injection
+  // exfiltration): the substituted value would be the decrypted password.
+  if (usedSecret) {
+    try {
+      if (new URL(env.page.url()).origin !== env.targetOrigin) {
+        return `Refused: will not enter test credentials on ${env.page.url()} (outside the target app).`;
+      }
+    } catch {
+      return "Refused: cannot determine the current origin for credential entry.";
+    }
+  }
   value = value
     .replaceAll("{{TEST_EMAIL}}", env.testEmail ?? "")
     .replaceAll("{{TEST_PASSWORD}}", env.testPassword ?? "");
@@ -213,9 +250,26 @@ function resolveLocator(page: Page, input: Record<string, unknown>) {
 }
 
 async function screenshot(env: ToolEnv): Promise<string> {
+  await blurPasswordFields(env.page);
   const buffer = await env.page.screenshot({ fullPage: false });
   const url = env.onScreenshot ? await env.onScreenshot(buffer) : null;
   return url ? `Screenshot saved: ${url}` : "Screenshot captured (not persisted).";
+}
+
+// Privacy §5: blur password fields before any screenshot. Covers native
+// type=password plus "show password" toggles that flip it to type=text.
+async function blurPasswordFields(page: Page): Promise<void> {
+  await page
+    .evaluate(() => {
+      document
+        .querySelectorAll<HTMLInputElement>(
+          'input[type="password"], input[autocomplete="current-password"], input[autocomplete="new-password"], input[name*="pass" i]',
+        )
+        .forEach((el) => {
+          el.style.filter = "blur(6px)";
+        });
+    })
+    .catch(() => {});
 }
 
 function drainLogs(env: ToolEnv): string {
