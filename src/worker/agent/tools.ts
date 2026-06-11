@@ -144,7 +144,11 @@ export async function executeTool(
       case "get_network_log":
         return drainLogs(env);
       case "report_step": {
-        await env.onReportStep?.(input as unknown as ReportedStep);
+        const step = input as unknown as ReportedStep;
+        // The model occasionally invents enum values — coerce to the schema.
+        const valid = ["ok", "risky", "confusing", "broken", "exposed", "skipped"];
+        if (!valid.includes(step.status)) step.status = "confusing";
+        await env.onReportStep?.(step);
         return "Step recorded.";
       }
       case "write_e2e_test": {
@@ -251,10 +255,15 @@ async function readPage(page: Page): Promise<string> {
       .map((i) => {
         const el = i as HTMLInputElement;
         const labelEl = el.id ? document.querySelector(`label[for="${el.id}"]`) : null;
-        return `${el.tagName.toLowerCase()}[type=${el.type ?? "text"}] label="${clip(
-          labelEl?.textContent ?? el.getAttribute("aria-label") ?? el.placeholder,
-          50,
-        )}"`;
+        const label = clip(labelEl?.textContent ?? el.getAttribute("aria-label"), 50);
+        const placeholder = clip(el.placeholder, 50);
+        // Distinguish label vs placeholder — generated specs must target
+        // placeholder-only fields with getByPlaceholder, not getByLabel.
+        return `${el.tagName.toLowerCase()}[type=${el.type ?? "text"}]${
+          label ? ` label="${label}"` : ""
+        }${placeholder ? ` placeholder="${placeholder}"` : ""}${
+          !label && !placeholder ? " (unlabeled)" : ""
+        }`;
       });
 
     return {

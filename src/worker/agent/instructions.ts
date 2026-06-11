@@ -66,6 +66,8 @@ actually works today — assert on what you observed, not on what should be.
 Make interactions hydration-robust: wrap interact-then-assert pairs in
 \`await expect(async () => { ...act...; await expect(...).toBeVisible({ timeout: 1_000 }); }).toPass({ timeout: 15_000 })\`
 — React controlled forms silently drop input that lands before hydration.
+Locator choice must match the page digest exactly: getByLabel only for fields
+with label="...", getByPlaceholder for placeholder="..." fields.
 
 Finish with a 1-2 sentence summary of what you found (plain text).${clientInstructionBlock(run)}`;
 }
