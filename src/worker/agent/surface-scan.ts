@@ -44,6 +44,8 @@ export async function surfaceScan(args: {
   const { browser, targetUrl } = args;
   const context = await browser.newContext();
   const page = await context.newPage();
+  // esbuild (tsx) __name shim — see prepareAgentPage in tools.ts.
+  await page.addInitScript("window.__name = (fn) => fn;");
 
   try {
     const response = await page.goto(targetUrl, {

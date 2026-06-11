@@ -11,7 +11,7 @@ import { decryptSecret } from "@/lib/crypto";
 import type { AppAnatomy } from "@/lib/types";
 import { hasApiKey } from "./llm";
 import { runAgentLoop, type TranscriptEntry } from "./core";
-import { attachLogCapture, type ToolEnv } from "./tools";
+import { prepareAgentPage, type ToolEnv } from "./tools";
 import { discoverySystem } from "./instructions";
 import { storeScreenshot } from "./evidence";
 
@@ -57,7 +57,7 @@ export async function discoverApp(args: {
       return storageUrl;
     },
   };
-  attachLogCapture(env);
+  await prepareAgentPage(env);
 
   try {
     const result = await runAgentLoop({

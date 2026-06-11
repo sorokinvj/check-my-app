@@ -277,6 +277,15 @@ async function readPage(page: Page): Promise<string> {
   ].join("\n\n");
 }
 
+// Prepare a fresh page for agent use: the __name shim works around esbuild
+// (tsx) injecting `__name(...)` helper calls into functions that Playwright
+// serializes for page.evaluate — without it every evaluate throws
+// "ReferenceError: __name is not defined" in the browser.
+export async function prepareAgentPage(env: ToolEnv): Promise<void> {
+  await env.page.addInitScript("window.__name = (fn) => fn;");
+  attachLogCapture(env);
+}
+
 // Wire rolling network/console capture into a page. Call once per context.
 export function attachLogCapture(env: ToolEnv): void {
   env.page.on("response", (res) => {

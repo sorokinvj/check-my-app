@@ -14,7 +14,7 @@ import { decryptSecret } from "@/lib/crypto";
 import { fsSafeSlug } from "@/lib/utils";
 import { hasApiKey } from "./llm";
 import { runAgentLoop, type TranscriptEntry } from "./core";
-import { attachLogCapture, type ToolEnv } from "./tools";
+import { prepareAgentPage, type ToolEnv } from "./tools";
 import { walkingSystem } from "./instructions";
 import { storeScreenshot } from "./evidence";
 import type { ProposedJourney } from "./discovery";
@@ -100,7 +100,7 @@ export async function walkJourneys(args: {
         });
       },
     };
-    attachLogCapture(env);
+    await prepareAgentPage(env);
 
     try {
       const result = await runAgentLoop({

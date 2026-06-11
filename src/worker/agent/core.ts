@@ -46,14 +46,24 @@ export async function runAgentLoop(args: AgentLoopArgs): Promise<AgentLoopResult
   while (iterations < maxIterations) {
     iterations += 1;
 
+    // Prompt caching: breakpoint on the system block caches tools+system
+    // (stable for the whole loop); the top-level marker auto-caches the last
+    // block of the growing conversation, so each iteration re-reads the prior
+    // transcript at ~0.1x instead of reprocessing it.
     const response = await anthropic.messages.create({
       model: AGENT_MODEL,
       max_tokens: 8_000,
       thinking: { type: "adaptive" },
-      system,
+      cache_control: { type: "ephemeral" },
+      system: [{ type: "text", text: system, cache_control: { type: "ephemeral" } }],
       tools: BROWSER_TOOLS,
       messages,
     });
+
+    const u = response.usage;
+    console.log(
+      `[agent] iter ${iterations}: in=${u.input_tokens} cache_write=${u.cache_creation_input_tokens ?? 0} cache_read=${u.cache_read_input_tokens ?? 0} out=${u.output_tokens}`,
+    );
 
     const toolUses = response.content.filter(
       (b): b is Anthropic.ToolUseBlock => b.type === "tool_use",
