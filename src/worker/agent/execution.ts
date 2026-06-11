@@ -11,6 +11,7 @@ import type { Browser } from "playwright";
 import { prisma } from "@/lib/db";
 import type { Run, StepStatus } from "@prisma/client";
 import { decryptSecret } from "@/lib/crypto";
+import { fsSafeSlug } from "@/lib/utils";
 import { hasApiKey } from "./llm";
 import { runAgentLoop, type TranscriptEntry } from "./core";
 import { attachLogCapture, type ToolEnv } from "./tools";
@@ -151,8 +152,8 @@ async function persistGeneratedTest(args: {
     },
   });
 
-  const slug = args.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-  const dir = path.join(process.cwd(), "generated-tests", args.appSlug);
+  const fileSlug = args.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  const dir = path.join(process.cwd(), "generated-tests", fsSafeSlug(args.appSlug));
   await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(path.join(dir, `${slug}.spec.ts`), args.content, "utf8");
+  await fs.writeFile(path.join(dir, `${fileSlug}.spec.ts`), args.content, "utf8");
 }

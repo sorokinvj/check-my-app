@@ -35,6 +35,11 @@ export default async function VerdictPage({ params }: { params: { id: string } }
   const verdictMeta = run.verdict ? VERDICT_META[run.verdict] : null;
   const duration = formatDuration(run.startedAt, run.completedAt);
   const hasWatch = Boolean(run.watch?.active);
+  const generatedTests = await prisma.generatedTest.findMany({
+    where: { appSlug: run.appSlug },
+    orderBy: [{ title: "asc" }, { version: "desc" }],
+    distinct: ["title"],
+  });
   const newerRun = await prisma.run.findFirst({
     where: { baselineRunId: run.id, status: { in: ["completed", "partial"] } },
     orderBy: { createdAt: "desc" },
@@ -112,6 +117,52 @@ export default async function VerdictPage({ params }: { params: { id: string } }
           </div>
           <EnableWatchButton runId={run.publicId} hasWatch={hasWatch} appSlug={run.appSlug} />
         </footer>
+
+        {(generatedTests.length > 0 || run.transcriptUrl) && (
+          <section className="card p-6">
+            <h2 className="section-label">Run artifacts</h2>
+            <p className="mt-1 text-sm text-fg-muted">
+              The agent formalized this check as executable tests — take them into your own CI.
+            </p>
+            <ul className="mt-3 space-y-2">
+              {generatedTests.map((t) => (
+                <li key={t.id} className="flex flex-wrap items-center gap-3 text-sm">
+                  <span
+                    className={`font-mono text-xs ${
+                      t.lastRunStatus === "passed"
+                        ? "text-status-ok"
+                        : t.lastRunStatus === "failed"
+                          ? "text-status-broken"
+                          : "text-fg-faint"
+                    }`}
+                  >
+                    {t.lastRunStatus === "passed" ? "✓" : t.lastRunStatus === "failed" ? "✕" : "—"}{" "}
+                    {t.lastRunStatus.replace("_", " ")}
+                  </span>
+                  <a
+                    href={`/api/tests/${t.id}`}
+                    className="font-mono text-xs text-accent underline-offset-2 hover:underline"
+                  >
+                    {t.title} · v{t.version} (.spec.ts)
+                  </a>
+                  <span className="font-mono text-[10px] text-fg-faint">
+                    sha256 {t.sha256.slice(0, 12)}…
+                  </span>
+                </li>
+              ))}
+              {run.transcriptUrl && (
+                <li className="text-sm">
+                  <a
+                    href={run.transcriptUrl}
+                    className="font-mono text-xs text-fg-muted underline-offset-2 hover:text-fg hover:underline"
+                  >
+                    📋 agent transcript (audit log, .json)
+                  </a>
+                </li>
+              )}
+            </ul>
+          </section>
+        )}
 
         <p className="text-center font-mono text-[11px] uppercase tracking-[0.18em] text-fg-faint">
           run #{run.runNumber} · permalink · privacy: private

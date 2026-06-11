@@ -14,3 +14,9 @@ export function appSlugFromUrl(url: string): string {
     return url;
   }
 }
+
+// Filesystem-safe variant of an app slug ("localhost:3000" → "localhost-3000").
+// Used for generated-tests/ directories and similar artifact paths.
+export function fsSafeSlug(slug: string): string {
+  return slug.toLowerCase().replace(/[^a-z0-9.-]+/g, "-").replace(/^-|-$/g, "");
+}
