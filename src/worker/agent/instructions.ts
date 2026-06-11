@@ -63,6 +63,9 @@ After the journey, call write_e2e_test ONCE with a Playwright spec (TypeScript,
 @playwright/test) that replays this journey's happy path using role-based
 locators and \`process.env.TARGET_URL\` as base URL. The spec must reflect what
 actually works today — assert on what you observed, not on what should be.
+Make interactions hydration-robust: wrap interact-then-assert pairs in
+\`await expect(async () => { ...act...; await expect(...).toBeVisible({ timeout: 1_000 }); }).toPass({ timeout: 15_000 })\`
+— React controlled forms silently drop input that lands before hydration.
 
 Finish with a 1-2 sentence summary of what you found (plain text).${clientInstructionBlock(run)}`;
 }
