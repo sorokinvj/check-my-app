@@ -75,6 +75,8 @@ model Run {
   liveScreenshotUrl  String?
 
   errorMessage String?
+  // Audit artifact: file URL of the agent-loop transcript (tool calls + results).
+  transcriptUrl String?
 
   watch    Watch?  @relation(fields: [watchId], references: [id])
   watchId  String?
@@ -206,6 +208,29 @@ model Evidence {
 
   @@index([stepId])
   @@index([findingId])
+}
+
+// ─── Generated e2e tests (CHE-8) ─────────────────────────────────────────────
+// The agent formalizes each walked journey as an executable Playwright spec.
+// Daily Watch replays these deterministically; the LLM only investigates diffs.
+
+model GeneratedTest {
+  id        String   @id @default(cuid())
+  appSlug   String
+  journeyId String?
+  title     String // "Submit a check"
+  // Playwright spec source (TypeScript). Executed from generated-tests/{appSlug}/.
+  content   String
+  sha256    String
+  version   Int      @default(1)
+  // Result of the most recent replay: passed / failed / never_run.
+  lastRunStatus String @default("never_run")
+  lastRunAt     DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([appSlug])
 }
 
 // ─── Daily Watch ─────────────────────────────────────────────────────────────

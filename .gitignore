@@ -21,8 +21,10 @@ npm-debug.log*
 # prisma
 prisma/*.db
 
-# evidence artifacts
+# evidence artifacts (screenshots, transcripts, generated specs)
 evidence/
+storage/
+generated-tests/
 
 # typescript
 *.tsbuildinfo

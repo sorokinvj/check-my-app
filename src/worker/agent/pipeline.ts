@@ -1,9 +1,9 @@
 // The 6-phase orchestrator. Each phase advances the Run's status (which the
 // /run/{id} page renders as the phase banner) and appends events to the live feed.
 //
-// This is the skeleton: phase ordering, status transitions, evidence wiring, and
-// error/partial handling are real; the heavy lifting inside discovery / execution
-// / synthesis is stubbed with clearly-marked TODOs.
+// Phases 2-4 are real: surface scan is deterministic; discovery and walking run
+// on the CHE-7 LLM agent core (claude-opus-4-8 + browser tools). The combined
+// agent transcript is persisted as an audit artifact (Run.transcriptUrl).
 
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
@@ -13,51 +13,120 @@ import { discoverApp } from "./discovery";
 import { walkJourneys } from "./execution";
 import { synthesizeVerdict } from "./synthesis";
 import { launchBrowser } from "./browser";
+import { surfaceScan } from "./surface-scan";
+import { storeText } from "./evidence";
+import { hasApiKey } from "./llm";
+import type { TranscriptEntry } from "./core";
 
 export async function runPipeline(runId: string): Promise<void> {
   const run = await prisma.run.findUnique({ where: { id: runId } });
   if (!run) throw new Error(`run ${runId} not found`);
 
   const browser = await launchBrowser();
+  const transcript: TranscriptEntry[] = [];
+
+  const onLiveScreenshot = async (url: string) =>
+    setLiveState(runId, { liveScreenshotUrl: url });
+  const onProgress = async (note: string) => {
+    await setLiveState(runId, { currentAction: note });
+  };
 
   try {
     // Phase 1 — Connecting (ownership check skipped for MVP first run).
     await transition(runId, "connecting", { icon: "info", text: "Spinning up agent" });
 
-    // Phase 2 — Surface scan: load homepage, detect stack.
+    // Phase 2 — Surface scan: load homepage, detect stack, first screenshot.
     await transition(runId, "surface_scan", {
-      icon: "ok",
+      icon: "info",
       text: `Loading ${run.targetUrl}`,
     });
+    const scan = await surfaceScan({ browser, targetUrl: run.targetUrl });
+    if (scan.screenshotUrl) {
+      await setLiveState(runId, { liveScreenshotUrl: scan.screenshotUrl });
+    }
+    await appendEvent(runId, "surface_scan", {
+      icon: "ok",
+      text: `Loaded homepage (HTTP ${scan.status ?? "?"})`,
+    });
+    if (scan.techSignals.length > 0) {
+      await appendEvent(runId, "surface_scan", {
+        icon: "ok",
+        text: `Detected ${scan.techSignals.join(" + ")}`,
+      });
+    }
+    await appendEvent(runId, "surface_scan", {
+      icon: "ok",
+      text: `Found ${scan.internalLinkCount} internal links`,
+    });
+    if (!hasApiKey()) {
+      await appendEvent(runId, "surface_scan", {
+        icon: "warn",
+        text: "ANTHROPIC_API_KEY not set — agent phases will be skipped",
+      });
+    }
 
-    // Phase 3 — Discovery: log in, map nav, find up-to-5 journeys.
+    // Phase 3 — Discovery: the LLM maps the app and proposes journeys.
     await transition(runId, "discovery", { icon: "info", text: "Mapping your app" });
-    const discovery = await discoverApp({ run, browser });
+    const discovery = await discoverApp({ run, browser, onLiveScreenshot, onProgress });
+    transcript.push(...discovery.transcript);
+    await appendEvent(runId, "discovery", {
+      icon: "ok",
+      text: `Proposed ${discovery.journeys.length} user journeys`,
+    });
 
-    // Phase 4 — Walking journeys: execute each one, capturing per-step evidence.
+    // Phase 4 — Walking journeys: execute each one, capturing per-step evidence
+    // and formalizing each journey as a generated Playwright spec (CHE-8).
     await transition(runId, "walking", {
       icon: "info",
       text: `Walking ${discovery.journeys.length} discovered journeys`,
     });
-    await walkJourneys({ runId, browser, journeys: discovery.journeys });
+    const walkTranscript = await walkJourneys({
+      run,
+      browser,
+      journeys: discovery.journeys,
+      onLiveScreenshot,
+      onProgress,
+    });
+    transcript.push(...walkTranscript);
 
-    // Phase 5 — Anatomy: assemble pages/actions/services/tech.
+    // Phase 5 — Anatomy: merge deterministic scan signals into the LLM's map.
     await transition(runId, "anatomy", { icon: "info", text: "Assembling app anatomy" });
+    const tech = { ...discovery.anatomy.tech };
+    if (scan.techSignals.length > 0 && !tech.frontend) {
+      tech.frontend = scan.techSignals.join(" · ");
+    }
+    const anatomy = { ...discovery.anatomy, tech };
     await prisma.run.update({
       where: { id: runId },
-      data: { anatomy: discovery.anatomy as unknown as Prisma.InputJsonValue },
+      data: { anatomy: anatomy as unknown as Prisma.InputJsonValue },
     });
 
     // Phase 6 — Writing verdict: LLM synthesizes App Lens + bottom-line verdict.
     await transition(runId, "writing", { icon: "info", text: "Writing your verdict" });
-    const { appLens, verdict } = await synthesizeVerdict({ runId, discovery });
+    const { appLens, verdict, bottomLine } = await synthesizeVerdict({
+      runId,
+      discovery: { journeys: discovery.journeys, anatomy },
+    });
+
+    // Audit artifact: the full agent transcript (secret-free by construction).
+    let transcriptUrl: string | null = null;
+    if (transcript.length > 0) {
+      transcriptUrl = await storeText(
+        "transcripts",
+        `${run.publicId}.json`,
+        JSON.stringify(transcript, null, 2),
+      );
+    }
 
     const completed = await prisma.run.update({
       where: { id: runId },
       data: {
         status: "completed",
         verdict,
+        bottomLine,
         appLens: appLens as unknown as Prisma.InputJsonValue,
+        transcriptUrl,
+        currentAction: null,
         completedAt: new Date(),
       },
     });
@@ -91,6 +160,21 @@ async function transition(runId: string, phase: RunPhase, event: Omit<RunEvent, 
   await prisma.run.update({
     where: { id: runId },
     data: { status: phase, events: events as unknown as Prisma.InputJsonValue },
+  });
+}
+
+// Append a feed event without changing the phase.
+async function appendEvent(
+  runId: string,
+  phase: RunPhase,
+  event: Omit<RunEvent, "at" | "phase">,
+) {
+  const run = await prisma.run.findUnique({ where: { id: runId }, select: { events: true } });
+  const events = (run?.events as RunEvent[] | null) ?? [];
+  events.push({ at: new Date().toISOString(), phase, ...event });
+  await prisma.run.update({
+    where: { id: runId },
+    data: { events: events as unknown as Prisma.InputJsonValue },
   });
 }
 

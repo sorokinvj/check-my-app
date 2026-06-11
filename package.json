@@ -9,6 +9,7 @@
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
+    "selfcheck": "tsx scripts/selfcheck.ts",
     "worker": "tsx watch src/worker/index.ts",
     "worker:start": "tsx src/worker/index.ts",
     "db:generate": "prisma generate",
@@ -20,7 +21,7 @@
     "infra:down": "docker compose down"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.39.0",
+    "@anthropic-ai/sdk": "^0.104.1",
     "@prisma/client": "^5.22.0",
     "bullmq": "^5.34.0",
     "clsx": "^2.1.1",

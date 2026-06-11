@@ -1,62 +1,61 @@
 // Phase 6 — Synthesis.
 //
 // Turns the observed run (pages, actions, services, journey outcomes) into the
-// App Lens (PM-voice product description) and a bottom-line verdict. Uses the
+// App Lens (PM-voice product description) + a one-sentence bottom line. Uses the
 // Anthropic Messages API. The model is configurable via ANTHROPIC_MODEL.
 
-import Anthropic from "@anthropic-ai/sdk";
 import { prisma } from "@/lib/db";
-import type { AppLens } from "@/lib/types";
+import type { AppLens, AppAnatomy } from "@/lib/types";
 import type { Verdict, StepStatus } from "@prisma/client";
-import type { DiscoveryResult } from "./discovery";
-
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-const MODEL = process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-6";
+import type Anthropic from "@anthropic-ai/sdk";
+import { anthropic, AGENT_MODEL, hasApiKey } from "./llm";
+import type { ProposedJourney } from "./discovery";
 
 // Prompt straight from the Mockups spec (Section 3.1).
-const APP_LENS_SYSTEM = `You just observed a web app for ~2 hours. Generate a 6-bullet "App Lens" describing:
+const APP_LENS_SYSTEM = `You just observed a web app for a while. Generate an "App Lens" describing:
 (1) what this app does in one sentence, (2) who it's for, (3) core value,
-(4) business model, (5) tech surface, (6) critical paths.
+(4) business model, (5) tech surface, (6) critical paths to protect, plus
+(7) a one-sentence bottom-line verdict on its current state.
 Write it like a product manager describing the product, not like a QA report.
-Use language the founder would use themselves. Respond as JSON matching the AppLens shape.`;
+Use language the founder would use themselves.
+Respond with ONLY JSON:
+{"oneLiner":"...","whoFor":"...","coreValue":"...","businessModel":"...",
+ "techSurface":"...","criticalPaths":["..."],"ifItBreaks":"...","bottomLine":"..."}`;
 
 export async function synthesizeVerdict(args: {
   runId: string;
-  discovery: DiscoveryResult;
-}): Promise<{ appLens: AppLens; verdict: Verdict }> {
+  discovery: { journeys: ProposedJourney[]; anatomy: AppAnatomy };
+}): Promise<{ appLens: AppLens; verdict: Verdict; bottomLine: string | null }> {
   const { runId, discovery } = args;
 
   // Roll the worst journey status into a bottom-line verdict.
   const journeys = await prisma.journey.findMany({
     where: { runId },
-    select: { status: true },
+    select: { status: true, title: true, summary: true },
   });
   const verdict = rollUpVerdict(journeys.map((j) => j.status));
 
-  let appLens: AppLens;
-  if (process.env.ANTHROPIC_API_KEY) {
-    const observation = JSON.stringify({
-      pages: discovery.anatomy.pages,
-      actions: discovery.anatomy.actions,
-      services: discovery.anatomy.services,
-      tech: discovery.anatomy.tech,
-      journeys: discovery.journeys.map((j) => j.title),
-    });
-
-    const message = await anthropic.messages.create({
-      model: MODEL,
-      max_tokens: 1024,
-      system: APP_LENS_SYSTEM,
-      messages: [{ role: "user", content: observation }],
-    });
-
-    appLens = parseAppLens(message);
-  } else {
-    // Offline/dev fallback so the pipeline completes without an API key.
-    appLens = placeholderLens();
+  if (!hasApiKey()) {
+    return { appLens: placeholderLens(), verdict, bottomLine: null };
   }
 
-  return { appLens, verdict };
+  const observation = JSON.stringify({
+    pages: discovery.anatomy.pages,
+    actions: discovery.anatomy.actions,
+    services: discovery.anatomy.services,
+    tech: discovery.anatomy.tech,
+    journeys: journeys.map((j) => ({ title: j.title, status: j.status, summary: j.summary })),
+  });
+
+  const message = await anthropic.messages.create({
+    model: AGENT_MODEL,
+    max_tokens: 2_000,
+    thinking: { type: "adaptive" },
+    system: APP_LENS_SYSTEM,
+    messages: [{ role: "user", content: observation }],
+  });
+
+  return { ...parseAppLens(message), verdict };
 }
 
 function rollUpVerdict(statuses: StepStatus[]): Verdict {
@@ -66,21 +65,29 @@ function rollUpVerdict(statuses: StepStatus[]): Verdict {
   return "all_good";
 }
 
-function parseAppLens(message: Anthropic.Message): AppLens {
+function parseAppLens(message: Anthropic.Message): {
+  appLens: AppLens;
+  bottomLine: string | null;
+} {
   const text = message.content.find((b) => b.type === "text");
   if (text && text.type === "text") {
-    try {
-      return JSON.parse(text.text) as AppLens;
-    } catch {
-      // fall through to placeholder if the model didn't return clean JSON
+    const match = text.text.match(/\{[\s\S]*\}/);
+    if (match) {
+      try {
+        const raw = JSON.parse(match[0]) as AppLens & { bottomLine?: string };
+        const { bottomLine, ...lens } = raw;
+        return { appLens: { ...placeholderLens(), ...lens }, bottomLine: bottomLine ?? null };
+      } catch {
+        // fall through
+      }
     }
   }
-  return placeholderLens();
+  return { appLens: placeholderLens(), bottomLine: null };
 }
 
 function placeholderLens(): AppLens {
   return {
-    oneLiner: "TODO: synthesized product description",
+    oneLiner: "Synthesis pending — run with ANTHROPIC_API_KEY for the App Lens.",
     whoFor: "",
     coreValue: "",
     businessModel: "",
