@@ -103,10 +103,17 @@ export async function runPipeline(runId: string): Promise<void> {
 
     // Phase 6 — Writing verdict: LLM synthesizes App Lens + bottom-line verdict.
     await transition(runId, "writing", { icon: "info", text: "Writing your verdict" });
-    const { appLens, verdict, bottomLine } = await synthesizeVerdict({
+    const { appLens, verdict, bottomLine, findings } = await synthesizeVerdict({
       runId,
       discovery: { journeys: discovery.journeys, anatomy },
     });
+    await persistFindings(runId, findings);
+    if (findings.length > 0) {
+      await appendEvent(runId, "writing", {
+        icon: "ok",
+        text: `Recorded ${findings.length} findings`,
+      });
+    }
 
     // Audit artifact: the full agent transcript (secret-free by construction).
     let transcriptUrl: string | null = null;
@@ -176,6 +183,54 @@ async function appendEvent(
     where: { id: runId },
     data: { events: events as unknown as Prisma.InputJsonValue },
   });
+}
+
+// Persist synthesized findings (CHE-5). Each finding that references a walked
+// step inherits that step's screenshot as evidence — findings without evidence
+// aren't trusted (Project Brief).
+async function persistFindings(
+  runId: string,
+  findings: import("./synthesis").SynthesizedFinding[],
+) {
+  if (findings.length === 0) return;
+
+  const journeys = await prisma.journey.findMany({
+    where: { runId },
+    include: {
+      steps: { orderBy: { order: "asc" }, include: { evidence: true } },
+    },
+    orderBy: { order: "asc" },
+  });
+
+  let number = 1;
+  for (const f of findings) {
+    const step = f.stepRef
+      ? journeys[f.stepRef.journeyIndex]?.steps[f.stepRef.stepIndex]
+      : undefined;
+    const screenshot = step?.evidence.find((e) => e.type === "screenshot");
+
+    await prisma.finding.create({
+      data: {
+        runId,
+        number: number++,
+        title: f.title.slice(0, 300),
+        category: f.category,
+        severity: f.severity,
+        detail: f.detail as unknown as Prisma.InputJsonValue,
+        evidence: screenshot
+          ? {
+              create: [
+                {
+                  type: "screenshot",
+                  storageUrl: screenshot.storageUrl,
+                  sha256: screenshot.sha256,
+                },
+              ],
+            }
+          : undefined,
+      },
+    });
+  }
 }
 
 async function fail(runId: string, err: unknown) {
