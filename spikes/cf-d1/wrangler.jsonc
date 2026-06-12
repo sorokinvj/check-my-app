@@ -1,0 +1,13 @@
+{
+  "name": "cf-d1-spike",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-09-15",
+  "compatibility_flags": ["nodejs_compat"],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "cf-d1-spike",
+      "database_id": "local-spike"
+    }
+  ]
+}

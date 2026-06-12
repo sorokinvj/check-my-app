@@ -1,0 +1,100 @@
+// CHE-21 spike — does our relational schema live on Cloudflare D1 (SQLite)?
+// Key conversions vs the Postgres schema:
+//  - provider postgresql → sqlite
+//  - ALL enums → String (Prisma's SQLite provider does NOT support enums;
+//    we already validate/coerce values in app code, e.g. report_step)
+//  - Json columns → String (store JSON.stringify; SQLite has no json type —
+//    Prisma maps Json→TEXT but we make it explicit here to be safe)
+//  - autoincrement() kept (works on SQLite)
+// Representative subset: the nested-create chain Run→Journey→Step→Evidence + Finding.
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["driverAdapters"]
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Run {
+  id        String   @id @default(cuid())
+  publicId  String   @unique @default(cuid())
+  // FINDING: SQLite allows autoincrement() only on the @id field. On D1 the
+  // human run number must be assigned app-side (counter table or max+1).
+  runNumber Int      @unique
+  targetUrl String
+  appSlug   String
+  status    String   @default("queued") // was RunStatus enum
+  verdict   String? // was Verdict enum
+  appLens   String? // was Json
+  anatomy   String? // was Json
+  events    String? // was Json
+  costUsd   Float?
+
+  journeys Journey[]
+  findings Finding[]
+
+  createdAt DateTime @default(now())
+
+  @@index([appSlug])
+}
+
+model Journey {
+  id      String  @id @default(cuid())
+  run     Run     @relation(fields: [runId], references: [id], onDelete: Cascade)
+  runId   String
+  order   Int
+  title   String
+  status  String // was StepStatus enum
+  summary String?
+
+  steps Step[]
+
+  @@index([runId])
+}
+
+model Step {
+  id        String @id @default(cuid())
+  journey   Journey @relation(fields: [journeyId], references: [id], onDelete: Cascade)
+  journeyId String
+  order     Int
+  label     String
+  status    String // was StepStatus enum
+  observed  String?
+
+  evidence Evidence[]
+
+  @@index([journeyId])
+}
+
+model Finding {
+  id       String  @id @default(cuid())
+  run      Run     @relation(fields: [runId], references: [id], onDelete: Cascade)
+  runId    String
+  number   Int
+  title    String
+  category String // was FindingCategory enum
+  severity String // was Severity enum
+  detail   String? // was Json
+  mark     String  @default("none") // was FindingMark enum
+
+  evidence Evidence[]
+
+  @@index([runId])
+}
+
+model Evidence {
+  id         String  @id @default(cuid())
+  type       String // was EvidenceType enum
+  storageUrl String
+  sha256     String?
+  step       Step?   @relation(fields: [stepId], references: [id], onDelete: Cascade)
+  stepId     String?
+  finding    Finding? @relation(fields: [findingId], references: [id], onDelete: Cascade)
+  findingId  String?
+
+  @@index([stepId])
+  @@index([findingId])
+}

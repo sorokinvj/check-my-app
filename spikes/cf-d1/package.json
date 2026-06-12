@@ -1,0 +1,20 @@
+{
+  "name": "cf-d1",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "prisma": "^6.19.3",
+    "wrangler": "^4.100.0"
+  },
+  "dependencies": {
+    "@prisma/adapter-d1": "^6.19.3",
+    "@prisma/client": "^6.19.3"
+  }
+}
