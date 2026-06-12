@@ -1,0 +1,12 @@
+{
+  "name": "cf-browser-spike",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-09-15",
+  "compatibility_flags": ["nodejs_compat"],
+  "browser": {
+    "binding": "MYBROWSER"
+  },
+  "observability": {
+    "enabled": true
+  }
+}

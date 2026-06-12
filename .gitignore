@@ -36,3 +36,6 @@ playwright-report/
 
 # claude harness internals
 .claude/scheduled_tasks.lock
+spikes/*/node_modules/
+spikes/*/.dev.vars
+spikes/*/.wrangler/
