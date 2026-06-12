@@ -39,3 +39,5 @@ playwright-report/
 spikes/*/node_modules/
 spikes/*/.dev.vars
 spikes/*/.wrangler/
+spikes/*/.open-next/
+spikes/*/.next/
