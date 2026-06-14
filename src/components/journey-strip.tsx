@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import type { Journey, Step } from "@prisma/client";
+import type { Journey, Step } from "@/generated/prisma/client";
 import { STEP_STATUS_META } from "@/lib/status";
 
 type JourneyWithSteps = Journey & { steps: Step[] };

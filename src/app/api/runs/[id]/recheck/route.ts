@@ -1,13 +1,14 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/db";
-import { enqueueRun } from "@/lib/queue";
+import { getDbFromContext, nextRunNumber } from "@/lib/db";
+import { triggerRun } from "@/lib/trigger";
 
 // POST /api/runs/{publicId}/recheck — Journey 7: re-run with the same params.
 // The new run carries the same target/credentials and points at the old run as
 // its baseline so the verdict can diff.
-export async function POST(_req: Request, { params }: { params: { id: string } }) {
+export async function POST(_req: Request, { params }: { params: Promise<{ id: string }> }) {
+  const prisma = await getDbFromContext();
   const prev = await prisma.run.findUnique({
-    where: { publicId: params.id },
+    where: { publicId: (await params).id },
     select: {
       id: true,
       targetUrl: true,
@@ -24,6 +25,7 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
 
   const run = await prisma.run.create({
     data: {
+      runNumber: await nextRunNumber(prisma),
       targetUrl: prev.targetUrl,
       appSlug: prev.appSlug,
       testEmail: prev.testEmail,
@@ -38,7 +40,7 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
     select: { id: true, publicId: true },
   });
 
-  await enqueueRun(run.id);
+  await triggerRun(run.id);
 
   return NextResponse.json({ id: run.publicId }, { status: 201 });
 }

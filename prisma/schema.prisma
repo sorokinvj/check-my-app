@@ -5,45 +5,41 @@
 // A Watch turns a target into a recurring Daily Check that spawns new Runs and
 // diffs them against a baseline. Evidence is intentionally first-class: a Step or
 // Finding without attached evidence is not trustworthy (see Project Brief).
+//
+// Storage: Cloudflare D1 (SQLite) via @prisma/adapter-d1. Two SQLite-imposed
+// shapes vs the old Postgres schema (proven in spike CHE-21):
+//   - no enums → former enum columns are String; type-safety lives in
+//     src/lib/enums.ts and is enforced at the app boundary.
+//   - autoincrement() is PK-only → runNumber is assigned app-side (see lib/db).
+// Keep this layer swappable: nothing here uses D1-only SQL, so a future move
+// back to Postgres for enterprise ACID is a provider swap, not a rewrite.
 
 generator client {
-  provider = "prisma-client-js"
+  // New ESM generator (not prisma-client-js): emits a workerd-native client
+  // with the WASM query compiler inlined and NO Rust engine binary — the only
+  // form that survives the OpenNext/esbuild bundle on Cloudflare Workers.
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+  runtime  = "workerd"
+  moduleFormat = "esm"
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "sqlite"
   url      = env("DATABASE_URL")
 }
 
 // ─── Run lifecycle ───────────────────────────────────────────────────────────
-
-enum RunStatus {
-  queued
-  connecting // phase 1
-  surface_scan // phase 2
-  discovery // phase 3
-  walking // phase 4 — walking journeys
-  anatomy // phase 5
-  writing // phase 6 — synthesizing verdict
-  completed
-  partial // stuck/timeout but produced a usable verdict
-  failed
-}
-
-// Bottom-line verdict shown in the header pill.
-enum Verdict {
-  all_good
-  mostly_ok
-  needs_attention
-  broken
-}
+// status: RunStatus · verdict: Verdict — see src/lib/enums.ts
 
 model Run {
   id        String    @id @default(cuid())
   // Unguessable public id used in /run/{id} and /verdict/{id} URLs.
   publicId  String    @unique @default(cuid())
-  // Human-facing sequential number, e.g. "Run #4719".
-  runNumber Int       @unique @default(autoincrement())
+  // Human-facing sequential number, e.g. "Run #4719". Assigned app-side
+  // (SQLite autoincrement is PK-only) via a Counter row in a D1 transaction-free
+  // safe path — see nextRunNumber() in src/lib/db.ts.
+  runNumber Int       @unique
   targetUrl String
   // App slug derived from the target host, e.g. "joblander.app". Stable across runs.
   appSlug   String
@@ -56,19 +52,19 @@ model Run {
   userNotes            String? // "don't delete the test account"
   notifyEmail          String?
 
-  status   RunStatus @default(queued)
-  verdict  Verdict?
+  status   String @default("queued") // RunStatus
+  verdict  String? // Verdict
   // One-sentence bottom-line verdict shown under the header pill.
   bottomLine String?
   // LLM-generated "App Lens": 5–7 bullets describing the product. User-editable.
-  appLens  Json?
+  appLens  String? // JSON (AppLens)
   // User reaction to the Lens: null = none, "confirmed" = Looks right,
   // free text = "Something's off" correction (agent re-reads it next run).
   lensFeedback String?
   // App Anatomy: { pages[], actions[], services[], tech{} }.
-  anatomy  Json?
+  anatomy  String? // JSON (AppAnatomy)
   // Free-form progress events for the live feed (phase log lines).
-  events   Json? // RunEvent[] — see src/lib/types.ts
+  events   String? // JSON RunEvent[] — see src/lib/types.ts
   // Live-screen theatre: what the agent is doing right now, in plain English,
   // and the most recent screenshot of its browser. Updated by the worker.
   currentAction      String?
@@ -77,6 +73,8 @@ model Run {
   errorMessage String?
   // Audit artifact: file URL of the agent-loop transcript (tool calls + results).
   transcriptUrl String?
+  // Rolled-up Anthropic API cost of this run (CHE-16). USD.
+  costUsd Float?
 
   watch    Watch?  @relation(fields: [watchId], references: [id])
   watchId  String?
@@ -96,15 +94,7 @@ model Run {
 }
 
 // ─── Journeys & steps ────────────────────────────────────────────────────────
-
-enum StepStatus {
-  ok // ✅ works
-  risky // ⚠ works but risky
-  confusing // 🟡 confusing
-  broken // 🔴 broken
-  exposed // ⚠ security exposure
-  skipped // — couldn't reach this step
-}
+// status: StepStatus — see src/lib/enums.ts
 
 model Journey {
   id      String  @id @default(cuid())
@@ -112,7 +102,7 @@ model Journey {
   runId   String
   order   Int
   title   String // "Sign up → first mock interview"
-  status  StepStatus // worst-case roll-up of its steps
+  status  String // StepStatus — worst-case roll-up of its steps
   summary String? // "What we found: signup fails on Safari mobile (~18% of traffic)"
   videoUrl String? // recording of the agent walking this journey
 
@@ -127,7 +117,7 @@ model Step {
   journeyId  String
   order      Int
   label      String // "Try mock interview on iPhone → 500"
-  status     StepStatus
+  status     String // StepStatus
   // Denormalized thumbnail for the journey strip card (full set lives in Evidence).
   screenshotUrl String?
   attempted  String? // what the agent tried to do
@@ -141,28 +131,7 @@ model Step {
 }
 
 // ─── Findings (the QA fallout) ───────────────────────────────────────────────
-
-enum Severity {
-  high
-  medium
-  low
-}
-
-enum FindingCategory {
-  broken
-  risky
-  confusing
-  polish
-  exposed
-}
-
-// User-applied triage from the verdict page; feeds Daily Check noise filtering.
-enum FindingMark {
-  none
-  known
-  fixed
-  false_positive
-}
+// category: FindingCategory · severity: Severity · mark: FindingMark
 
 model Finding {
   id        String          @id @default(cuid())
@@ -171,11 +140,11 @@ model Finding {
   // Human-facing sequential number within a run, e.g. #001.
   number    Int
   title     String
-  category  FindingCategory
-  severity  Severity
+  category  String // FindingCategory
+  severity  String // Severity
   // Structured detail: where, browser, reproduced, whatWeTried[], whatHappened, whyItMatters.
-  detail    Json?
-  mark      FindingMark     @default(none)
+  detail    String? // JSON (FindingDetail)
+  mark      String          @default("none") // FindingMark
 
   evidence  Evidence[]
 
@@ -185,19 +154,12 @@ model Finding {
 }
 
 // ─── Evidence (first-class) ──────────────────────────────────────────────────
-
-enum EvidenceType {
-  screenshot
-  screencast
-  console_log
-  network_har
-  dom_snapshot
-}
+// type: EvidenceType — see src/lib/enums.ts
 
 model Evidence {
   id          String       @id @default(cuid())
-  type        EvidenceType
-  storageUrl  String // s3://... or file://./storage/...
+  type        String // EvidenceType
+  storageUrl  String // /api/evidence/... (R2-backed)
   sha256      String? // content hash for integrity (RFC3161 timestamping is post-MVP)
   capturedAt  DateTime     @default(now())
 
@@ -234,18 +196,13 @@ model GeneratedTest {
 }
 
 // ─── Daily Watch ─────────────────────────────────────────────────────────────
-
-enum WatchFrequency {
-  daily
-  every_6h
-  manual
-}
+// frequency: WatchFrequency — see src/lib/enums.ts
 
 model Watch {
   id          String         @id @default(cuid())
   appSlug     String         @unique
   targetUrl   String
-  frequency   WatchFrequency @default(daily)
+  frequency   String         @default("daily") // WatchFrequency
   active      Boolean        @default(true)
   // Notify only when something meaningful changed vs. notify after every run.
   notifyOnChangeOnly Boolean @default(true)
@@ -261,4 +218,13 @@ model Watch {
 
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+}
+
+// ─── App-side counters (CHE-11) ──────────────────────────────────────────────
+// SQLite autoincrement() is PK-only, so the human-facing Run.runNumber is
+// assigned from this single-row counter instead of a DB sequence.
+
+model Counter {
+  name  String @id // e.g. "runNumber"
+  value Int    @default(0)
 }

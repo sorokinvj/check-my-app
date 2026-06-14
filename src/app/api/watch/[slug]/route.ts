@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/db";
+import { getDbFromContext } from "@/lib/db";
 import { updateWatchSchema } from "@/lib/validation";
 
 // PATCH /api/watch/{slug} — Screen 4 settings: frequency, notify rule, pause/resume.
-export async function PATCH(req: Request, { params }: { params: { slug: string } }) {
+export async function PATCH(req: Request, { params }: { params: Promise<{ slug: string }> }) {
+  const prisma = await getDbFromContext();
   const json = await req.json().catch(() => null);
   const parsed = updateWatchSchema.safeParse(json);
   if (!parsed.success) {
@@ -13,7 +14,7 @@ export async function PATCH(req: Request, { params }: { params: { slug: string }
   const data: Record<string, unknown> = { ...parsed.data };
   // Recompute the next run when frequency changes or the watch is resumed.
   if (parsed.data.frequency || parsed.data.active === true) {
-    const watch = await prisma.watch.findUnique({ where: { appSlug: params.slug } });
+    const watch = await prisma.watch.findUnique({ where: { appSlug: (await params).slug } });
     if (!watch) return NextResponse.json({ error: "Watch not found" }, { status: 404 });
     const frequency = parsed.data.frequency ?? watch.frequency;
     data.nextRunAt =
@@ -23,7 +24,7 @@ export async function PATCH(req: Request, { params }: { params: { slug: string }
   }
 
   const watch = await prisma.watch
-    .update({ where: { appSlug: params.slug }, data })
+    .update({ where: { appSlug: (await params).slug }, data })
     .catch(() => null);
   if (!watch) return NextResponse.json({ error: "Watch not found" }, { status: 404 });
 
@@ -38,8 +39,9 @@ export async function PATCH(req: Request, { params }: { params: { slug: string }
 
 // DELETE /api/watch/{slug} — cancel the watch entirely. Runs keep their history;
 // retained credentials are dropped with the watch (privacy: §5).
-export async function DELETE(_req: Request, { params }: { params: { slug: string } }) {
-  const watch = await prisma.watch.findUnique({ where: { appSlug: params.slug } });
+export async function DELETE(_req: Request, { params }: { params: Promise<{ slug: string }> }) {
+  const prisma = await getDbFromContext();
+  const watch = await prisma.watch.findUnique({ where: { appSlug: (await params).slug } });
   if (!watch) return NextResponse.json({ error: "Watch not found" }, { status: 404 });
 
   await prisma.run.updateMany({ where: { watchId: watch.id }, data: { watchId: null } });

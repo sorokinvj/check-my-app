@@ -9,7 +9,7 @@
 //   model-driven, the harness owns evidence and artifacts.
 
 import type Anthropic from "@anthropic-ai/sdk";
-import type { Page } from "playwright";
+import type { Page } from "@cloudflare/playwright";
 
 export interface ToolEnv {
   page: Page;

@@ -60,7 +60,7 @@ export function RunLive({
       } else {
         // failed — re-fetch once so the failure card renders with the error
         fetch(`/api/runs/${publicId}`)
-          .then((r) => r.json())
+          .then((r) => r.json() as Promise<Partial<Snapshot>>)
           .then((run) => setSnap((s) => ({ ...(s as Snapshot), ...run })));
       }
     });

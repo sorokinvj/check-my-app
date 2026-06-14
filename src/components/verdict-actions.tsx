@@ -41,7 +41,7 @@ export function EnableWatchButton({
           body: JSON.stringify({ runId }),
         }).catch(() => null);
         if (res?.ok) {
-          const { slug } = await res.json();
+          const { slug } = (await res.json()) as { slug: string };
           router.push(`/watch/${slug}`);
         } else {
           setBusy(false);
@@ -67,7 +67,7 @@ export function RecheckButton({ runId }: { runId: string }) {
           () => null,
         );
         if (res?.ok) {
-          const { id } = await res.json();
+          const { id } = (await res.json()) as { id: string };
           router.push(`/run/${id}`);
         } else {
           setBusy(false);

@@ -1,0 +1,38 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "checkmyapp-web",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2025-09-15",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "checkmyapp",
+      "database_id": "74d287d0-f9af-41d9-8f21-cc56be934489",
+      "migrations_dir": "prisma/migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "EVIDENCE",
+      "bucket_name": "checkmyapp-evidence"
+    }
+  ],
+  // Cross-worker binding to the durable CheckRunWorkflow defined in the agent
+  // worker — the web app starts a run by creating an instance (src/lib/trigger.ts).
+  "workflows": [
+    {
+      "name": "checkmyapp-check-run",
+      "binding": "CHECK_RUN",
+      "class_name": "CheckRunWorkflow",
+      "script_name": "checkmyapp-agent"
+    }
+  ],
+  "observability": {
+    "enabled": true
+  }
+}

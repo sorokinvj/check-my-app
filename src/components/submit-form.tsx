@@ -1,9 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+
+const TURNSTILE_SITE_KEY = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
 
 // Screen 1 — Submit. One field, one button; credentials/notes hidden behind a
 // single toggle so casual visitors aren't scared off.
@@ -17,6 +19,28 @@ export function SubmitForm() {
   const [notifyEmail, setNotifyEmail] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
+  const turnstileRef = useRef<HTMLDivElement>(null);
+
+  // Render the Turnstile widget only when a site key is configured (prod).
+  useEffect(() => {
+    if (!TURNSTILE_SITE_KEY || !turnstileRef.current) return;
+    const script = document.createElement("script");
+    script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js";
+    script.async = true;
+    script.onload = () => {
+      const ts = (window as unknown as { turnstile?: { render: (el: HTMLElement, o: object) => void } })
+        .turnstile;
+      ts?.render(turnstileRef.current as HTMLElement, {
+        sitekey: TURNSTILE_SITE_KEY,
+        callback: (token: string) => setTurnstileToken(token),
+      });
+    };
+    document.head.appendChild(script);
+    return () => {
+      script.remove();
+    };
+  }, []);
 
   const valid = /^https?:\/\/.+\..+/.test(url.trim());
 
@@ -28,13 +52,13 @@ export function SubmitForm() {
       const res = await fetch("/api/checks", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url, testEmail, testPassword, userNotes, notifyEmail }),
+        body: JSON.stringify({ url, testEmail, testPassword, userNotes, notifyEmail, turnstileToken }),
       });
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
         throw new Error(body.error ?? "Something went wrong");
       }
-      const { id } = await res.json();
+      const { id } = (await res.json()) as { id: string };
       router.push(`/run/${id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
@@ -131,6 +155,8 @@ export function SubmitForm() {
       )}
 
       {error && <p className="text-center text-sm text-status-broken">{error}</p>}
+
+      {TURNSTILE_SITE_KEY && <div ref={turnstileRef} className="flex justify-center" />}
 
       <Button type="submit" disabled={!valid || submitting} className="w-full py-3.5 text-[15px]">
         {submitting ? (

@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/db";
+import { getDbFromContext } from "@/lib/db";
 
 // GET /api/runs/{publicId} — run status + live feed for the in-progress page.
-export async function GET(_req: Request, { params }: { params: { id: string } }) {
+export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
+  const prisma = await getDbFromContext();
   const run = await prisma.run.findUnique({
-    where: { publicId: params.id },
+    where: { publicId: (await params).id },
     select: {
       publicId: true,
       appSlug: true,

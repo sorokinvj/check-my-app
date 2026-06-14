@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { prisma } from "@/lib/db";
+import { getDbFromContext } from "@/lib/db";
 import { VERDICT_META } from "@/lib/status";
 import { WatchSettings } from "@/components/watch-settings";
 
@@ -15,9 +15,10 @@ const DATE_FMT: Intl.DateTimeFormatOptions = {
 
 // Screen 4 — Watch settings · /watch/{slug}. Set-and-forget: status, recent runs,
 // minimal settings. Only meaningful once a Watch exists for the app.
-export default async function WatchPage({ params }: { params: { slug: string } }) {
+export default async function WatchPage({ params }: { params: Promise<{ slug: string }> }) {
+  const prisma = await getDbFromContext();
   const watch = await prisma.watch.findUnique({
-    where: { appSlug: params.slug },
+    where: { appSlug: (await params).slug },
     include: {
       runs: { orderBy: { startedAt: "desc" }, take: 10 },
     },
@@ -83,7 +84,7 @@ export default async function WatchPage({ params }: { params: { slug: string } }
         <WatchSettings
           slug={watch.appSlug}
           initial={{
-            frequency: watch.frequency,
+            frequency: watch.frequency as "daily" | "every_6h" | "manual",
             notifyOnChangeOnly: watch.notifyOnChangeOnly,
             active: watch.active,
           }}

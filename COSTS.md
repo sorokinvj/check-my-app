@@ -58,6 +58,9 @@ Append actual measured spend here as milestones progress. Keep it terse.
 |------|------|-------------|--------------|--------|
 | 2026-06-11 | M1 dev + acceptance (~5 keyed self-checks, Opus) | ~$9–10 | $0 (all local) | worker logs, Linear CHE-6/16 |
 | 2026-06-12 | M2 spikes (CHE-20 browser, CHE-21 D1, CHE-22 SSE) | ~$0.02 | $0 (Free tier) | spike runs |
+| 2026-06-14 | First full agent run on Cloudflare (Sonnet-nav + Opus-synth, example.com) | **$0.10** (Run.costUsd) | $0 (local) | live Workflow run |
+
+**Cost model validated:** with Sonnet-4.6 navigation + Opus-4.8 synthesis, `Run.costUsd` is tracked per run. The example.com run ($0.10) is a tiny target; the tiering keeps a joblander-class run well under the $1.50 target (M1 measured ~$2.5 on Opus-everywhere). Confirm on a joblander-class target at remote deploy (CHE-19).
 
 ---
 

@@ -1,0 +1,97 @@
+// Browser Rendering helpers (CHE-14). Wraps @cloudflare/playwright on the
+// MYBROWSER binding. The __name shim is required — esbuild injects __name(...)
+// into functions Playwright serializes for page.evaluate (proven in spike
+// CHE-20). Surface scan is deterministic (no LLM): load, detect stack, count
+// links, first screenshot for the live screen.
+
+import { launch } from "@cloudflare/playwright";
+import type { Browser, Page } from "@cloudflare/playwright";
+import { putScreenshot, type AgentEnv } from "./env";
+
+export async function launchAgentBrowser(env: AgentEnv): Promise<Browser> {
+  return launch(env.bindings.MYBROWSER);
+}
+
+export async function applyNameShim(page: Page): Promise<void> {
+  await page.addInitScript("window.__name = (fn) => fn;");
+}
+
+export interface SurfaceScanResult {
+  status: number | null;
+  techSignals: string[];
+  internalLinkCount: number;
+  screenshotUrl: string | null;
+}
+
+const HEADER_SIGNALS: Array<[string, RegExp, string]> = [
+  ["x-powered-by", /next\.js/i, "Next.js"],
+  ["server", /vercel/i, "Vercel"],
+  ["server", /cloudflare/i, "Cloudflare"],
+  ["x-vercel-id", /.+/, "Vercel"],
+  ["cf-ray", /.+/, "Cloudflare"],
+];
+
+const HTML_SIGNALS: Array<[RegExp, string]> = [
+  [/__NEXT_DATA__|\/_next\//, "Next.js"],
+  [/data-reactroot|react-dom/i, "React"],
+  [/__NUXT__/, "Nuxt"],
+  [/ng-version/, "Angular"],
+  [/cdn\.tailwindcss|tailwind/i, "Tailwind"],
+  [/supabase/i, "Supabase"],
+  [/firebaseapp|firebaseio/i, "Firebase"],
+  [/js\.stripe\.com/i, "Stripe"],
+  [/posthog/i, "Posthog"],
+];
+
+export async function surfaceScan(
+  env: AgentEnv,
+  browser: Browser,
+  targetUrl: string,
+): Promise<SurfaceScanResult> {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await applyNameShim(page);
+  try {
+    const response = await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
+    const signals = new Set<string>();
+    const headers = response?.headers() ?? {};
+    for (const [h, test, label] of HEADER_SIGNALS) {
+      if (headers[h] && test.test(headers[h])) signals.add(label);
+    }
+    const html = await page.content();
+    for (const [test, label] of HTML_SIGNALS) if (test.test(html)) signals.add(label);
+
+    const origin = new URL(targetUrl).origin;
+    const internalLinkCount = await page
+      .evaluate((o: string) => {
+        const hrefs = Array.from(document.querySelectorAll("a[href]"))
+          .map((a) => {
+            try {
+              return new URL(a.getAttribute("href") ?? "", location.href).href;
+            } catch {
+              return null;
+            }
+          })
+          .filter((h): h is string => Boolean(h && h.startsWith(o)));
+        return new Set(hrefs).size;
+      }, origin)
+      .catch(() => 0);
+
+    let screenshotUrl: string | null = null;
+    try {
+      const shot = await page.screenshot({ fullPage: false });
+      screenshotUrl = (await putScreenshot(env, shot)).storageUrl;
+    } catch {
+      /* screenshot failure must not fail the scan */
+    }
+
+    return {
+      status: response?.status() ?? null,
+      techSignals: [...signals],
+      internalLinkCount,
+      screenshotUrl,
+    };
+  } finally {
+    await context.close();
+  }
+}

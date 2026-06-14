@@ -1,17 +1,14 @@
-// Phase 6 — Synthesis.
-//
-// Turns the observed run (pages, actions, services, journey outcomes) into the
-// App Lens (PM-voice product description) + a one-sentence bottom line. Uses the
-// Anthropic Messages API. The model is configurable via ANTHROPIC_MODEL.
+// Phase 6 — Synthesis (CF agent). Turns the observed run into the App Lens
+// (PM-voice) + categorized findings + a one-sentence bottom line. Runs on the
+// synthesis model (Opus 4.8) — one shot, quality over cost (CHE-16).
 
-import { prisma } from "@/lib/db";
 import type { AppLens, AppAnatomy } from "@/lib/types";
-import type { Verdict, StepStatus } from "@prisma/client";
+import type { Verdict, StepStatus } from "@/lib/enums";
 import type Anthropic from "@anthropic-ai/sdk";
-import { anthropic, AGENT_MODEL, hasApiKey } from "./llm";
+import { costOf, type LlmConfig } from "./llm";
+import type { AgentEnv } from "./env";
 import type { ProposedJourney } from "./discovery";
 
-// Prompt straight from the Mockups spec (Section 3.1) + Findings (Section 3.4).
 const APP_LENS_SYSTEM = `You just observed a web app for a while. Produce two things.
 
 1. An "App Lens": (1) what this app does in one sentence, (2) who it's for,
@@ -39,28 +36,25 @@ export interface SynthesizedFinding {
   title: string;
   category: "broken" | "risky" | "confusing" | "polish" | "exposed";
   severity: "high" | "medium" | "low";
-  detail: {
-    where?: string;
-    whatWeTried?: string[];
-    whatHappened?: string;
-    whyItMatters?: string;
-  };
+  detail: { where?: string; whatWeTried?: string[]; whatHappened?: string; whyItMatters?: string };
   stepRef?: { journeyIndex: number; stepIndex: number };
 }
 
 export async function synthesizeVerdict(args: {
+  env: AgentEnv;
+  llm: LlmConfig;
   runId: string;
-  discovery: { journeys: ProposedJourney[]; anatomy: AppAnatomy };
+  anatomy: AppAnatomy;
 }): Promise<{
   appLens: AppLens;
   verdict: Verdict;
   bottomLine: string | null;
   findings: SynthesizedFinding[];
+  costUsd: number;
 }> {
-  const { runId, discovery } = args;
+  const { env, llm, runId, anatomy } = args;
 
-  // Roll the worst journey status into a bottom-line verdict.
-  const journeys = await prisma.journey.findMany({
+  const journeys = await env.db.journey.findMany({
     where: { runId },
     include: {
       steps: {
@@ -77,17 +71,13 @@ export async function synthesizeVerdict(args: {
     },
     orderBy: { order: "asc" },
   });
-  const verdict = rollUpVerdict(journeys.map((j) => j.status));
-
-  if (!hasApiKey()) {
-    return { appLens: placeholderLens(), verdict, bottomLine: null, findings: [] };
-  }
+  const verdict = rollUpVerdict(journeys.map((j) => j.status as StepStatus));
 
   const observation = JSON.stringify({
-    pages: discovery.anatomy.pages,
-    actions: discovery.anatomy.actions,
-    services: discovery.anatomy.services,
-    tech: discovery.anatomy.tech,
+    pages: anatomy.pages,
+    actions: anatomy.actions,
+    services: anatomy.services,
+    tech: anatomy.tech,
     journeys: journeys.map((j) => ({
       title: j.title,
       status: j.status,
@@ -96,15 +86,16 @@ export async function synthesizeVerdict(args: {
     })),
   });
 
-  const message = await anthropic.messages.create({
-    model: AGENT_MODEL,
+  const message = await llm.client.messages.create({
+    model: llm.synthModel,
     max_tokens: 8_000,
     thinking: { type: "adaptive" },
     system: APP_LENS_SYSTEM,
     messages: [{ role: "user", content: observation }],
   });
 
-  return { ...parseAppLens(message), verdict };
+  const costUsd = costOf(llm.synthModel, message.usage);
+  return { ...parseAppLens(message), verdict, costUsd };
 }
 
 function rollUpVerdict(statuses: StepStatus[]): Verdict {
@@ -155,7 +146,7 @@ function parseAppLens(message: Anthropic.Message): {
 
 function placeholderLens(): AppLens {
   return {
-    oneLiner: "Synthesis pending — run with ANTHROPIC_API_KEY for the App Lens.",
+    oneLiner: "Synthesis produced no lens.",
     whoFor: "",
     coreValue: "",
     businessModel: "",

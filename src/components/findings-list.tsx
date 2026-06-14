@@ -1,8 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import type { Evidence, Finding, FindingMark } from "@prisma/client";
+import type { Evidence, Finding } from "@/generated/prisma/client";
+import type { FindingMark } from "@/lib/enums";
 import type { FindingDetail } from "@/lib/types";
+import { parseJson } from "@/lib/json";
 import { CATEGORY_META, CATEGORY_ORDER, SEVERITY_META } from "@/lib/status";
 
 type FindingWithEvidence = Finding & { evidence: Evidence[] };
@@ -76,9 +78,9 @@ export function FindingsList({ findings }: { findings: FindingWithEvidence[] }) 
 }
 
 function FindingRow({ finding }: { finding: FindingWithEvidence }) {
-  const [mark, setMark] = useState<FindingMark>(finding.mark);
+  const [mark, setMark] = useState<FindingMark>(finding.mark as FindingMark);
   const [busy, setBusy] = useState(false);
-  const detail = (finding.detail as FindingDetail | null) ?? {};
+  const detail = parseJson<FindingDetail>(finding.detail) ?? {};
   const sev = SEVERITY_META[finding.severity];
   const markLabel = MARK_LABEL[mark];
 

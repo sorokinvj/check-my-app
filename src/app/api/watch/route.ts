@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/db";
+import { getDbFromContext } from "@/lib/db";
 import { createWatchSchema } from "@/lib/validation";
 
 function nextRunFrom(frequency: "daily" | "every_6h" | "manual"): Date | null {
@@ -12,6 +12,7 @@ function nextRunFrom(frequency: "daily" | "every_6h" | "manual"): Date | null {
 // Watch for the app, carrying credentials over from the source run so the
 // scheduler can keep re-running.
 export async function POST(req: Request) {
+  const prisma = await getDbFromContext();
   const json = await req.json().catch(() => null);
   const parsed = createWatchSchema.safeParse(json);
   if (!parsed.success) {

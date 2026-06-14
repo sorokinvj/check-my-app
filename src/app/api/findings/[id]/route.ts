@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/db";
+import { getDbFromContext } from "@/lib/db";
 import { markFindingSchema } from "@/lib/validation";
 
 // PATCH /api/findings/{id} — Loop C: triage a finding from the verdict page
 // (known / fixed / false_positive). Daily Check uses marks to filter noise.
-export async function PATCH(req: Request, { params }: { params: { id: string } }) {
+export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
+  const prisma = await getDbFromContext();
   const json = await req.json().catch(() => null);
   const parsed = markFindingSchema.safeParse(json);
   if (!parsed.success) {
@@ -13,7 +14,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
 
   const finding = await prisma.finding
     .update({
-      where: { id: params.id },
+      where: { id: (await params).id },
       data: { mark: parsed.data.mark },
       select: { id: true, mark: true },
     })

@@ -2,7 +2,8 @@
 // mission + the client's own instructions (scope hints, notes) compose into the
 // prompt — nothing about "what to check" is hardcoded in TypeScript.
 
-import type { Run } from "@prisma/client";
+// Run shape needed here is just the instruction fields.
+type Run = { scopeHints: string | null; userNotes: string | null; targetUrl: string };
 
 const MISSION = `You are the CheckMyApp agent — a product mirror with QA fallout.
 You explore a web app the way a curious, competent first-time user would, then

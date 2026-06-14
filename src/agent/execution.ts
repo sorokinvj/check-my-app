@@ -1,32 +1,24 @@
-// Phase 4 — Walking journeys (CHE-4 on the CHE-7 core).
-//
-// One agent-loop per journey. The model acts through browser tools and reports
-// outcomes via report_step (we persist Step + screenshot evidence per report)
-// and formalizes the journey via write_e2e_test (CHE-8: GeneratedTest + file).
+// Phase 4 — Walking journeys (CF agent). One agent-loop per journey: the model
+// acts through browser tools, reports outcomes via report_step (Step + R2
+// screenshot evidence), and formalizes the journey via write_e2e_test
+// (GeneratedTest in D1 + spec copy in R2 — no Workers filesystem).
 
-import crypto from "node:crypto";
-import fs from "node:fs/promises";
-import path from "node:path";
-import type { Browser } from "playwright";
-import { prisma } from "@/lib/db";
-import type { Run, StepStatus } from "@prisma/client";
+import type { Browser } from "@cloudflare/playwright";
 import { decryptSecret } from "@/lib/crypto";
-import { fsSafeSlug } from "@/lib/utils";
-import { hasApiKey } from "./llm";
+import type { StepStatus } from "@/lib/enums";
 import { runAgentLoop, type TranscriptEntry } from "./core";
 import { prepareAgentPage, type ToolEnv } from "./tools";
 import { walkingSystem } from "./instructions";
-import { storeScreenshot } from "./evidence";
-import { originOf, type ProposedJourney } from "./discovery";
+import { putScreenshot, putText, type AgentEnv } from "./env";
+import { originOf, type ProposedJourney, type RunInput } from "./discovery";
+import type { LlmConfig } from "./llm";
 
-const SEVERITY_ORDER: StepStatus[] = [
-  "ok",
-  "skipped",
-  "confusing",
-  "risky",
-  "exposed",
-  "broken",
-];
+export interface WalkRun extends RunInput {
+  id: string;
+  appSlug: string;
+}
+
+const SEVERITY_ORDER: StepStatus[] = ["ok", "skipped", "confusing", "risky", "exposed", "broken"];
 
 function worstStatus(statuses: StepStatus[]): StepStatus {
   return statuses.reduce<StepStatus>(
@@ -35,23 +27,30 @@ function worstStatus(statuses: StepStatus[]): StepStatus {
   );
 }
 
+async function sha256hex(input: string): Promise<string> {
+  const data = new TextEncoder().encode(input);
+  const hash = await crypto.subtle.digest("SHA-256", data);
+  return [...new Uint8Array(hash)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 export async function walkJourneys(args: {
-  run: Run;
+  env: AgentEnv;
+  llm: LlmConfig;
   browser: Browser;
+  run: WalkRun;
   journeys: ProposedJourney[];
   onLiveScreenshot?: (url: string) => Promise<void>;
   onProgress?: (note: string) => Promise<void>;
-}): Promise<TranscriptEntry[]> {
-  const { run, browser, journeys, onLiveScreenshot, onProgress } = args;
-  if (!hasApiKey()) return [];
-
+}): Promise<{ transcript: TranscriptEntry[]; costUsd: number }> {
+  const { env, llm, browser, run, journeys, onLiveScreenshot, onProgress } = args;
   const transcripts: TranscriptEntry[] = [];
+  let costUsd = 0;
 
   for (const [index, proposed] of journeys.entries()) {
     const context = await browser.newContext();
     const page = await context.newPage();
 
-    const journey = await prisma.journey.create({
+    const journey = await env.db.journey.create({
       data: { runId: run.id, order: index, title: proposed.title, status: "ok" },
     });
 
@@ -59,7 +58,7 @@ export async function walkJourneys(args: {
     let stepOrder = 0;
     let lastScreenshot: { storageUrl: string; sha256: string } | null = null;
 
-    const env: ToolEnv = {
+    const toolEnv: ToolEnv = {
       page,
       targetOrigin: originOf(run.targetUrl),
       testEmail: run.testEmail ?? undefined,
@@ -67,14 +66,14 @@ export async function walkJourneys(args: {
       networkLog: [],
       consoleLog: [],
       onScreenshot: async (buffer) => {
-        const stored = await storeScreenshot(buffer);
+        const stored = await putScreenshot(env, buffer);
         lastScreenshot = stored;
         await onLiveScreenshot?.(stored.storageUrl);
         return stored.storageUrl;
       },
       onReportStep: async (step) => {
-        stepStatuses.push(step.status);
-        await prisma.step.create({
+        stepStatuses.push(step.status as StepStatus);
+        await env.db.step.create({
           data: {
             journeyId: journey.id,
             order: stepOrder++,
@@ -90,10 +89,10 @@ export async function walkJourneys(args: {
               : undefined,
           },
         });
-        lastScreenshot = null; // each screenshot backs at most one step
+        lastScreenshot = null;
       },
       onWriteTest: async (test) => {
-        await persistGeneratedTest({
+        await persistGeneratedTest(env, {
           appSlug: run.appSlug,
           journeyId: journey.id,
           title: test.title,
@@ -101,32 +100,31 @@ export async function walkJourneys(args: {
         });
       },
     };
-    await prepareAgentPage(env);
+    await prepareAgentPage(toolEnv);
 
     try {
       const result = await runAgentLoop({
         system: walkingSystem(run, proposed.title, proposed.steps),
         task: `Target app: ${run.targetUrl}\nWalk the journey now. Navigate to the target first.`,
-        env,
+        env: toolEnv,
+        llm,
         maxIterations: 50,
         onProgress,
       });
       transcripts.push(...result.transcript);
+      costUsd += result.costUsd;
 
-      await prisma.journey.update({
+      await env.db.journey.update({
         where: { id: journey.id },
         data: {
-          // A journey that recorded no steps (early crash / iteration cap) is
-          // unfinished, not passing — never let it roll up to "ok".
           status: stepStatuses.length === 0 ? "skipped" : worstStatus(stepStatuses),
           summary: result.finalText.slice(0, 500) || null,
         },
       });
     } catch (err) {
-      // Isolate per journey: one failed journey must not abort the rest of the
-      // run (the others' steps are already persisted and worth synthesizing).
+      // Per-journey isolation: one failure must not abort the rest of the run.
       console.error(`[walk] journey "${proposed.title}" failed:`, err);
-      await prisma.journey.update({
+      await env.db.journey.update({
         where: { id: journey.id },
         data: {
           status: stepStatuses.length === 0 ? "skipped" : worstStatus(stepStatuses),
@@ -138,36 +136,33 @@ export async function walkJourneys(args: {
     }
   }
 
-  return transcripts;
+  return { transcript: transcripts, costUsd };
 }
 
-// CHE-8: generated specs live both in the DB (versioned, sha256) and on disk so
-// `npx playwright test generated-tests/{appSlug}` just works.
-async function persistGeneratedTest(args: {
-  appSlug: string;
-  journeyId: string;
-  title: string;
-  content: string;
-}): Promise<void> {
-  const sha256 = crypto.createHash("sha256").update(args.content).digest("hex");
-  const existing = await prisma.generatedTest.findFirst({
+// Generated specs: versioned in D1 (served by /api/tests/{id}) + a copy in R2
+// for direct download. No Workers filesystem, so nothing is written to disk.
+async function persistGeneratedTest(
+  env: AgentEnv,
+  args: { appSlug: string; journeyId: string; title: string; content: string },
+): Promise<void> {
+  const sha256 = await sha256hex(args.content);
+  const existing = await env.db.generatedTest.findFirst({
     where: { appSlug: args.appSlug, title: args.title },
     orderBy: { version: "desc" },
   });
+  const version = (existing?.version ?? 0) + 1;
 
-  await prisma.generatedTest.create({
+  await env.db.generatedTest.create({
     data: {
       appSlug: args.appSlug,
       journeyId: args.journeyId,
       title: args.title,
       content: args.content,
       sha256,
-      version: (existing?.version ?? 0) + 1,
+      version,
     },
   });
 
   const fileSlug = args.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-  const dir = path.join(process.cwd(), "generated-tests", fsSafeSlug(args.appSlug));
-  await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(path.join(dir, `${fileSlug}.spec.ts`), args.content, "utf8");
+  await putText(env, `specs/${args.appSlug}/${fileSlug}.v${version}.spec.ts`, args.content);
 }

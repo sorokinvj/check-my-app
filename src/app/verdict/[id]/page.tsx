@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { prisma } from "@/lib/db";
+import { getDbFromContext } from "@/lib/db";
+import { parseJson } from "@/lib/json";
 import { VERDICT_META } from "@/lib/status";
 import { AppLensSection } from "@/components/app-lens";
 import { JourneyStrips } from "@/components/journey-strip";
@@ -21,9 +22,10 @@ function formatDuration(start: Date, end: Date | null): string | null {
 // Screen 3 — Verdict · /verdict/{id} — the main artifact. Private permalink.
 // Order is deliberate: Lens (mirror) → Journeys (centerpiece) → Anatomy →
 // Findings (QA fallout) → Daily Watch footer.
-export default async function VerdictPage({ params }: { params: { id: string } }) {
+export default async function VerdictPage({ params }: { params: Promise<{ id: string }> }) {
+  const prisma = await getDbFromContext();
   const run = await prisma.run.findUnique({
-    where: { publicId: params.id },
+    where: { publicId: (await params).id },
     include: {
       journeys: { include: { steps: { orderBy: { order: "asc" } } }, orderBy: { order: "asc" } },
       findings: { include: { evidence: true }, orderBy: { number: "asc" } },
@@ -99,11 +101,11 @@ export default async function VerdictPage({ params }: { params: { id: string } }
         <AppLensSection
           runId={run.publicId}
           appSlug={run.appSlug}
-          lens={run.appLens as AppLens | null}
+          lens={parseJson<AppLens>(run.appLens)}
           feedback={run.lensFeedback}
         />
         <JourneyStrips journeys={run.journeys} />
-        <AppAnatomySection anatomy={run.anatomy as AppAnatomy | null} />
+        <AppAnatomySection anatomy={parseJson<AppAnatomy>(run.anatomy)} />
         <FindingsList findings={run.findings} />
 
         <footer className="card flex flex-wrap items-center justify-between gap-4 p-6">

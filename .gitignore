@@ -41,3 +41,11 @@ spikes/*/.dev.vars
 spikes/*/.wrangler/
 spikes/*/.open-next/
 spikes/*/.next/
+
+# generated prisma client (workerd)
+src/generated/prisma/
+.dev.vars
+
+# OpenNext build output (contains baked env — never commit)
+.open-next/
+.wrangler/

@@ -1,4 +1,4 @@
-import { prisma } from "@/lib/db";
+import { getDbFromContext } from "@/lib/db";
 import { isTerminal } from "@/lib/status";
 
 export const dynamic = "force-dynamic";
@@ -7,7 +7,8 @@ export const dynamic = "force-dynamic";
 // Polls the run row and emits a `snapshot` event whenever status/events change,
 // then closes once the run reaches a terminal state. (MVP simplicity over a
 // pub/sub fan-out — swap for Redis pub/sub when scaling.)
-export async function GET(_req: Request, { params }: { params: { id: string } }) {
+export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
+  const prisma = await getDbFromContext();
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream({
@@ -16,7 +17,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
 
       const tick = async () => {
         const run = await prisma.run.findUnique({
-          where: { publicId: params.id },
+          where: { publicId: (await params).id },
           select: {
             status: true,
             events: true,

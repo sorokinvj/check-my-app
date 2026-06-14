@@ -6,13 +6,14 @@
 // transcript. No BullMQ, no Prisma — portable to Cloudflare Workflows as-is.
 
 import Anthropic from "@anthropic-ai/sdk";
-import { anthropic, AGENT_MODEL } from "./llm";
+import { costOf, type LlmConfig } from "./llm";
 import { BROWSER_TOOLS, executeTool, type ToolEnv } from "./tools";
 
 export interface AgentLoopArgs {
   system: string;
   task: string;
   env: ToolEnv;
+  llm: LlmConfig;
   maxIterations?: number;
   // Called after each iteration with a short progress note (for the live feed).
   onProgress?: (note: string) => Promise<void>;
@@ -25,6 +26,8 @@ export interface AgentLoopResult {
   transcript: TranscriptEntry[];
   // Full conversation, for a follow-up finalize call if finalText didn't parse.
   messages: Anthropic.MessageParam[];
+  // Rolled-up Anthropic cost of this loop (USD) — feeds Run.costUsd (CHE-16).
+  costUsd: number;
 }
 
 export interface TranscriptEntry {
@@ -39,11 +42,12 @@ export interface TranscriptEntry {
 const MAX_TOOL_RESULT_CHARS = 6_000;
 
 export async function runAgentLoop(args: AgentLoopArgs): Promise<AgentLoopResult> {
-  const { system, task, env, maxIterations = 40, onProgress } = args;
+  const { system, task, env, llm, maxIterations = 40, onProgress } = args;
   const messages: Anthropic.MessageParam[] = [{ role: "user", content: task }];
   const transcript: TranscriptEntry[] = [];
   let iterations = 0;
   let finalText = "";
+  let costUsd = 0;
 
   while (iterations < maxIterations) {
     iterations += 1;
@@ -55,11 +59,11 @@ export async function runAgentLoop(args: AgentLoopArgs): Promise<AgentLoopResult
     // Retried on transient API errors so a 20-min run isn't lost to one 529 —
     // the messages array is intact, so resume is just re-issuing the call.
     const response = await createWithRetry(() =>
-      anthropic.messages.create({
+      llm.client.messages.create({
         // 16k keeps non-streaming under the SDK timeout while leaving room for
         // adaptive thinking + a long final JSON (discovery/synthesis emit the
         // whole app map at once — 8k truncated it and silently lost journeys).
-        model: AGENT_MODEL,
+        model: llm.navModel,
         max_tokens: 16_000,
         thinking: { type: "adaptive" },
         cache_control: { type: "ephemeral" },
@@ -70,6 +74,7 @@ export async function runAgentLoop(args: AgentLoopArgs): Promise<AgentLoopResult
     );
 
     const u = response.usage;
+    costUsd += costOf(llm.navModel, u);
     console.log(
       `[agent] iter ${iterations}: stop=${response.stop_reason} in=${u.input_tokens} cache_write=${u.cache_creation_input_tokens ?? 0} cache_read=${u.cache_read_input_tokens ?? 0} out=${u.output_tokens}`,
     );
@@ -123,19 +128,20 @@ export async function runAgentLoop(args: AgentLoopArgs): Promise<AgentLoopResult
     messages.push({ role: "user", content: results });
   }
 
-  return { finalText, iterations, transcript, messages };
+  return { finalText, iterations, transcript, messages, costUsd };
 }
 
 // One extra non-tool call to coax clean JSON out of a conversation whose final
 // turn didn't parse (truncation, trailing prose). Cheap recovery for the
 // discovery/synthesis hand-off — the messages already carry all the context.
 export async function finalizeJson(
+  llm: LlmConfig,
   messages: Anthropic.MessageParam[],
   instruction: string,
 ): Promise<string> {
   const response = await createWithRetry(() =>
-    anthropic.messages.create({
-      model: AGENT_MODEL,
+    llm.client.messages.create({
+      model: llm.navModel,
       max_tokens: 16_000,
       messages: [...messages, { role: "user", content: instruction }],
     }),

@@ -1,23 +1,34 @@
-// Phase 3 — Discovery (CHE-2, on top of the CHE-7 agent core).
-//
-// The LLM explores the target through browser tools, then returns the proposed
-// journeys + app anatomy as JSON. Client scope hints/notes are authoritative
-// text in the system prompt — this is what keeps a self-check from recursively
-// submitting our own /check form.
+// Phase 3 — Discovery (CF agent). The LLM explores the target through browser
+// tools and returns proposed journeys + app anatomy as JSON. Client scope
+// hints/notes are authoritative text in the system prompt (recursion guard).
 
-import type { Browser } from "playwright";
-import type { Run } from "@prisma/client";
+import type { Browser } from "@cloudflare/playwright";
 import { decryptSecret } from "@/lib/crypto";
 import type { AppAnatomy } from "@/lib/types";
-import { hasApiKey } from "./llm";
 import { runAgentLoop, finalizeJson, type TranscriptEntry } from "./core";
 import { prepareAgentPage, type ToolEnv } from "./tools";
 import { discoverySystem } from "./instructions";
-import { storeScreenshot } from "./evidence";
+import { putScreenshot, type AgentEnv } from "./env";
+import type { LlmConfig } from "./llm";
+
+export interface RunInput {
+  targetUrl: string;
+  testEmail: string | null;
+  testPasswordEnc: string | null;
+  scopeHints: string | null;
+  userNotes: string | null;
+}
 
 export interface ProposedJourney {
   title: string;
   steps: string[];
+}
+
+export interface DiscoveryResult {
+  journeys: ProposedJourney[];
+  anatomy: AppAnatomy;
+  transcript: TranscriptEntry[];
+  costUsd: number;
 }
 
 export function originOf(url: string): string {
@@ -28,31 +39,26 @@ export function originOf(url: string): string {
   }
 }
 
-export interface DiscoveryResult {
-  journeys: ProposedJourney[];
-  anatomy: AppAnatomy;
-  transcript: TranscriptEntry[];
-}
-
 export async function discoverApp(args: {
-  run: Run;
+  env: AgentEnv;
+  llm: LlmConfig;
   browser: Browser;
+  run: RunInput;
   onLiveScreenshot?: (url: string) => Promise<void>;
   onProgress?: (note: string) => Promise<void>;
 }): Promise<DiscoveryResult> {
-  const { run, browser, onLiveScreenshot, onProgress } = args;
-
+  const { env, llm, browser, run, onLiveScreenshot, onProgress } = args;
   const empty: DiscoveryResult = {
     journeys: [],
     anatomy: { pages: [], actions: [], services: [], tech: {} },
     transcript: [],
+    costUsd: 0,
   };
-  if (!hasApiKey()) return empty; // offline dev: pipeline still completes
 
   const context = await browser.newContext();
   const page = await context.newPage();
 
-  const env: ToolEnv = {
+  const toolEnv: ToolEnv = {
     page,
     targetOrigin: originOf(run.targetUrl),
     testEmail: run.testEmail ?? undefined,
@@ -61,38 +67,41 @@ export async function discoverApp(args: {
     networkLog: [],
     consoleLog: [],
     onScreenshot: async (buffer) => {
-      const { storageUrl } = await storeScreenshot(buffer);
+      const { storageUrl } = await putScreenshot(env, buffer);
       await onLiveScreenshot?.(storageUrl);
       return storageUrl;
     },
   };
-  await prepareAgentPage(env);
+  await prepareAgentPage(toolEnv);
 
   try {
     const result = await runAgentLoop({
       system: discoverySystem(run),
       task: `Target app: ${run.targetUrl}\nStart by navigating there, read the page, then explore.`,
-      env,
+      env: toolEnv,
+      llm,
       maxIterations: 30,
       onProgress,
     });
 
     let parsed = parseDiscoveryJson(result.finalText);
     if (!parsed) {
-      // Final turn didn't parse (truncation/prose) — ask once for clean JSON.
       const retry = await finalizeJson(
+        llm,
         result.messages,
         "Output ONLY the discovery JSON object now (journeys + anatomy), no prose, no markdown fences.",
       );
       parsed = parseDiscoveryJson(retry);
     }
-    return { ...(parsed ?? empty), transcript: result.transcript };
+    return { ...(parsed ?? empty), transcript: result.transcript, costUsd: result.costUsd };
   } finally {
     await context.close();
   }
 }
 
-function parseDiscoveryJson(text: string): Omit<DiscoveryResult, "transcript"> | null {
+function parseDiscoveryJson(
+  text: string,
+): Omit<DiscoveryResult, "transcript" | "costUsd"> | null {
   const match = text.match(/\{[\s\S]*\}/);
   if (!match) return null;
   try {

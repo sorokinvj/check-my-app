@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/db";
+import { getDbFromContext } from "@/lib/db";
 
 // GET /api/tests/{id} — download a generated Playwright spec (CHE-8 artifact).
 // Content lives in the DB (versioned, sha256); this serves it as a .spec.ts.
-export async function GET(_req: Request, { params }: { params: { id: string } }) {
-  const test = await prisma.generatedTest.findUnique({ where: { id: params.id } });
+export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
+  const prisma = await getDbFromContext();
+  const test = await prisma.generatedTest.findUnique({ where: { id: (await params).id } });
   if (!test) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   const fileSlug =

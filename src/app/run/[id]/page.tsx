@@ -1,14 +1,15 @@
 import { notFound, redirect } from "next/navigation";
-import { prisma } from "@/lib/db";
+import { getDbFromContext } from "@/lib/db";
 import { RunLive } from "@/components/run-live";
 import { isTerminal } from "@/lib/status";
 
 export const dynamic = "force-dynamic";
 
 // Screen 2 — In-progress · /run/{id}
-export default async function RunPage({ params }: { params: { id: string } }) {
+export default async function RunPage({ params }: { params: Promise<{ id: string }> }) {
+  const prisma = await getDbFromContext();
   const run = await prisma.run.findUnique({
-    where: { publicId: params.id },
+    where: { publicId: (await params).id },
     select: {
       publicId: true,
       appSlug: true,

@@ -1,10 +1,12 @@
 // Canonical status → label/color/emoji mappings. Keep these in one place so the
 // live feed, journey strips, and findings list never drift from the brand palette.
 
-import type { RunStatus, StepStatus, Verdict, Severity, FindingCategory } from "@prisma/client";
+import type { StepStatus, Verdict, Severity, FindingCategory } from "@/lib/enums";
 
+// Keyed by string (not the union) so the DB's String columns index these
+// directly without casts — values are still authored against the unions below.
 export const STEP_STATUS_META: Record<
-  StepStatus,
+  string,
   { emoji: string; label: string; className: string; dotClassName: string }
 > = {
   ok: { emoji: "✓", label: "Works", className: "text-status-ok", dotClassName: "bg-status-ok" },
@@ -36,7 +38,7 @@ export const STEP_STATUS_META: Record<
 };
 
 export const VERDICT_META: Record<
-  Verdict,
+  string,
   { emoji: string; label: string; pillClassName: string }
 > = {
   all_good: {
@@ -61,14 +63,14 @@ export const VERDICT_META: Record<
   },
 };
 
-export const SEVERITY_META: Record<Severity, { label: string; className: string }> = {
+export const SEVERITY_META: Record<string, { label: string; className: string }> = {
   high: { label: "HIGH", className: "text-status-broken" },
   medium: { label: "MED", className: "text-status-risky" },
   low: { label: "LOW", className: "text-fg-faint" },
 };
 
 export const CATEGORY_META: Record<
-  FindingCategory,
+  string,
   { emoji: string; label: string; className: string }
 > = {
   broken: { emoji: "🔴", label: "Broken", className: "text-status-broken" },
@@ -87,7 +89,7 @@ export const CATEGORY_ORDER: FindingCategory[] = [
 ];
 
 // Maps the persisted run status to the in-progress phase banner index (1–6).
-export const RUN_STATUS_PHASE: Partial<Record<RunStatus, number>> = {
+export const RUN_STATUS_PHASE: Partial<Record<string, number>> = {
   connecting: 1,
   surface_scan: 2,
   discovery: 3,
@@ -96,6 +98,6 @@ export const RUN_STATUS_PHASE: Partial<Record<RunStatus, number>> = {
   writing: 6,
 };
 
-export function isTerminal(status: RunStatus): boolean {
+export function isTerminal(status: string): boolean {
   return status === "completed" || status === "partial" || status === "failed";
 }
