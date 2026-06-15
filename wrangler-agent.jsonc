@@ -11,7 +11,7 @@
     {
       "binding": "DB",
       "database_name": "checkmyapp",
-      "database_id": "74d287d0-f9af-41d9-8f21-cc56be934489",
+      "database_id": "c5c35a91-2589-45f1-8e54-978eca7972dd",
       "migrations_dir": "prisma/migrations"
     }
   ],
