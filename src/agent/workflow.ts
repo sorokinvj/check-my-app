@@ -8,6 +8,7 @@
 
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import type { AppAnatomy } from "@/lib/types";
+import { normalizeAnatomy } from "@/lib/anatomy";
 import type { RunEvent, RunPhase } from "@/lib/types";
 import { makeAgentEnv, putText, type AgentBindings, type AgentEnv } from "./env";
 import { makeLlm } from "./llm";
@@ -152,9 +153,15 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
       // Phase 5 — Anatomy (merge deterministic scan signals into the LLM map).
       const anatomy: AppAnatomy = await step.do("anatomy", async () => {
         await transition(env, runId, "anatomy", { icon: "info", text: "Assembling app anatomy" });
-        const tech = { ...discovery.anatomy.tech };
+        const safe = normalizeAnatomy(discovery.anatomy) ?? {
+          pages: [],
+          actions: [],
+          services: [],
+          tech: {},
+        };
+        const tech = { ...safe.tech };
         if (scan.techSignals.length && !tech.frontend) tech.frontend = scan.techSignals.join(" · ");
-        const merged: AppAnatomy = { ...discovery.anatomy, tech };
+        const merged: AppAnatomy = { ...safe, tech };
         await env.db.run.update({ where: { id: runId }, data: { anatomy: JSON.stringify(merged) } });
         return merged;
       });

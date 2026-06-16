@@ -2,13 +2,14 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { getDbFromContext } from "@/lib/db";
 import { parseJson } from "@/lib/json";
+import { normalizeAnatomy } from "@/lib/anatomy";
 import { VERDICT_META } from "@/lib/status";
 import { AppLensSection } from "@/components/app-lens";
 import { JourneyStrips } from "@/components/journey-strip";
 import { AppAnatomySection } from "@/components/app-anatomy";
 import { FindingsList } from "@/components/findings-list";
 import { EnableWatchButton, RecheckButton } from "@/components/verdict-actions";
-import type { AppAnatomy, AppLens } from "@/lib/types";
+import type { AppLens } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -105,7 +106,7 @@ export default async function VerdictPage({ params }: { params: Promise<{ id: st
           feedback={run.lensFeedback}
         />
         <JourneyStrips journeys={run.journeys} />
-        <AppAnatomySection anatomy={parseJson<AppAnatomy>(run.anatomy)} />
+        <AppAnatomySection anatomy={normalizeAnatomy(parseJson<unknown>(run.anatomy))} />
         <FindingsList findings={run.findings} />
 
         <footer className="card flex flex-wrap items-center justify-between gap-4 p-6">

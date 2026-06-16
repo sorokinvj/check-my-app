@@ -71,8 +71,6 @@ export async function synthesizeVerdict(args: {
     },
     orderBy: { order: "asc" },
   });
-  const verdict = rollUpVerdict(journeys.map((j) => j.status as StepStatus));
-
   const observation = JSON.stringify({
     pages: anatomy.pages,
     actions: anatomy.actions,
@@ -95,14 +93,41 @@ export async function synthesizeVerdict(args: {
   });
 
   const costUsd = costOf(llm.synthModel, message.usage);
-  return { ...parseAppLens(message), verdict, costUsd };
+  const parsed = parseAppLens(message);
+  // Verdict rolls up BOTH observed journey-step outcomes AND synthesized
+  // findings. Earlier it ignored findings, so a run with 0 journeys but several
+  // high-severity findings reported "all_good" — a contradiction.
+  const verdict = rollUpVerdict(
+    journeys.map((j) => j.status as StepStatus),
+    parsed.findings,
+  );
+  return { ...parsed, verdict, costUsd };
 }
 
-function rollUpVerdict(statuses: StepStatus[]): Verdict {
-  if (statuses.some((s) => s === "broken" || s === "exposed")) return "broken";
-  if (statuses.some((s) => s === "risky")) return "needs_attention";
-  if (statuses.some((s) => s === "confusing")) return "mostly_ok";
-  return "all_good";
+const VERDICT_RANK: Verdict[] = ["all_good", "mostly_ok", "needs_attention", "broken"];
+function worseVerdict(a: Verdict, b: Verdict): Verdict {
+  return VERDICT_RANK.indexOf(a) >= VERDICT_RANK.indexOf(b) ? a : b;
+}
+
+// A synthesized finding (derived from exploration, not an observed runtime
+// failure) maps conservatively: a product gap categorized "broken/high" is
+// "needs_attention", not a fully broken app. Only observed broken/exposed
+// journey steps, or any "exposed" (security) finding, escalate to "broken".
+function findingVerdict(f: SynthesizedFinding): Verdict {
+  if (f.category === "exposed") return "broken";
+  if (f.category === "broken") return "needs_attention";
+  if (f.category === "risky") return f.severity === "high" ? "needs_attention" : "mostly_ok";
+  if (f.category === "confusing") return "mostly_ok";
+  return "all_good"; // polish
+}
+
+function rollUpVerdict(statuses: StepStatus[], findings: SynthesizedFinding[]): Verdict {
+  let verdict: Verdict = "all_good";
+  if (statuses.some((s) => s === "broken" || s === "exposed")) verdict = "broken";
+  else if (statuses.some((s) => s === "risky")) verdict = worseVerdict(verdict, "needs_attention");
+  else if (statuses.some((s) => s === "confusing")) verdict = worseVerdict(verdict, "mostly_ok");
+  for (const f of findings) verdict = worseVerdict(verdict, findingVerdict(f));
+  return verdict;
 }
 
 const VALID_CATEGORIES = ["broken", "risky", "confusing", "polish", "exposed"] as const;

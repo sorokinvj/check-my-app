@@ -93,6 +93,24 @@ export async function discoverApp(args: {
       );
       parsed = parseDiscoveryJson(retry);
     }
+    // A successful parse with zero journeys is a convergence failure, not an
+    // empty app — every real app has at least a primary flow. Reuse the
+    // exploration context for a focused journey extraction before giving up.
+    if (parsed && parsed.journeys.length === 0) {
+      const retry = await finalizeJson(
+        llm,
+        result.messages,
+        "You explored the app but proposed no user journeys. That is wrong — every app has " +
+          "at least one core flow. Based ONLY on what you actually saw, propose 3-5 user " +
+          "journeys a real user would take (e.g. sign up, the primary value action, account/" +
+          "settings). Output ONLY JSON: {\"journeys\":[{\"title\":\"...\",\"steps\":[\"...\"]}]}. " +
+          "No prose, no markdown fences.",
+      );
+      const recovered = parseDiscoveryJson(retry);
+      if (recovered && recovered.journeys.length > 0) {
+        parsed = { ...parsed, journeys: recovered.journeys };
+      }
+    }
     return { ...(parsed ?? empty), transcript: result.transcript, costUsd: result.costUsd };
   } finally {
     await context.close();
