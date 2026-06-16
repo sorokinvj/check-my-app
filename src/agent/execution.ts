@@ -6,7 +6,7 @@
 import type { Browser } from "@cloudflare/playwright";
 import { decryptSecret } from "@/lib/crypto";
 import type { StepStatus } from "@/lib/enums";
-import { runAgentLoop, type TranscriptEntry } from "./core";
+import { runAgentLoop, finalizeJson, type TranscriptEntry } from "./core";
 import { prepareAgentPage, type ToolEnv } from "./tools";
 import { walkingSystem } from "./instructions";
 import { putScreenshot, putText, type AgentEnv } from "./env";
@@ -25,6 +25,13 @@ function worstStatus(statuses: StepStatus[]): StepStatus {
     (worst, s) => (SEVERITY_ORDER.indexOf(s) > SEVERITY_ORDER.indexOf(worst) ? s : worst),
     "ok",
   );
+}
+
+// The forced-extraction path asks for raw code, but models still wrap it in a
+// ```ts fence about half the time. Strip a single leading/trailing fence.
+function stripCodeFence(text: string): string {
+  const fenced = text.match(/```(?:[a-zA-Z]+)?\n([\s\S]*?)```/);
+  return (fenced ? fenced[1] : text).trim();
 }
 
 async function sha256hex(input: string): Promise<string> {
@@ -63,6 +70,7 @@ export async function walkOneJourney(args: {
 
     const stepStatuses: StepStatus[] = [];
     let stepOrder = 0;
+    let testWritten = false;
     let lastScreenshot: { storageUrl: string; sha256: string } | null = null;
 
     const toolEnv: ToolEnv = {
@@ -99,6 +107,7 @@ export async function walkOneJourney(args: {
         lastScreenshot = null;
       },
       onWriteTest: async (test) => {
+        testWritten = true;
         await persistGeneratedTest(env, {
           appSlug: run.appSlug,
           journeyId: journey.id,
@@ -120,6 +129,32 @@ export async function walkOneJourney(args: {
       });
       transcripts.push(...result.transcript);
       costUsd += result.costUsd;
+
+      // The walk authors a Playwright spec via write_e2e_test, but the model
+      // often exhausts its iteration budget acting/observing and never reaches
+      // that closing call (same failure mode as discovery's journey JSON). If
+      // it walked real steps but wrote no test, reuse the journey context to
+      // force the spec out — the "worker authors its own e2e tests" guarantee
+      // must hold per run, not depend on the model remembering to wrap up.
+      if (!testWritten && stepStatuses.length > 0) {
+        const spec = await finalizeJson(
+          llm,
+          result.messages,
+          "You did not call write_e2e_test. Output ONLY a complete Playwright spec " +
+            "(TypeScript, @playwright/test) replaying this journey's happy path with " +
+            "role-based locators and process.env.TARGET_URL as base URL. Assert only on " +
+            "what you actually observed working. No prose — just the code.",
+        );
+        const content = stripCodeFence(spec);
+        if (content.includes("@playwright/test")) {
+          await persistGeneratedTest(env, {
+            appSlug: run.appSlug,
+            journeyId: journey.id,
+            title: proposed.title,
+            content,
+          });
+        }
+      }
 
       await env.db.journey.update({
         where: { id: journey.id },
