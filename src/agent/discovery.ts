@@ -80,7 +80,7 @@ export async function discoverApp(args: {
       task: `Target app: ${run.targetUrl}\nStart by navigating there, read the page, then explore.`,
       env: toolEnv,
       llm,
-      maxIterations: 30,
+      maxIterations: 55,
       onProgress,
     });
 

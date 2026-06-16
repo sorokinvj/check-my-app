@@ -33,20 +33,27 @@ async function sha256hex(input: string): Promise<string> {
   return [...new Uint8Array(hash)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-export async function walkJourneys(args: {
+// Walk ONE journey. Called per-journey from its own Workflow step (CHE-24) so a
+// CPU-limit/retry only re-does that journey, never the whole walk. Idempotent:
+// any pre-existing journey for (runId, order) is deleted first (cascades steps/
+// evidence), so a step retry can't accumulate duplicate journey rows.
+export async function walkOneJourney(args: {
   env: AgentEnv;
   llm: LlmConfig;
   browser: Browser;
   run: WalkRun;
-  journeys: ProposedJourney[];
+  proposed: ProposedJourney;
+  index: number;
   onLiveScreenshot?: (url: string) => Promise<void>;
   onProgress?: (note: string) => Promise<void>;
 }): Promise<{ transcript: TranscriptEntry[]; costUsd: number }> {
-  const { env, llm, browser, run, journeys, onLiveScreenshot, onProgress } = args;
+  const { env, llm, browser, run, proposed, index, onLiveScreenshot, onProgress } = args;
   const transcripts: TranscriptEntry[] = [];
   let costUsd = 0;
 
-  for (const [index, proposed] of journeys.entries()) {
+  await env.db.journey.deleteMany({ where: { runId: run.id, order: index } });
+
+  {
     const context = await browser.newContext();
     const page = await context.newPage();
 

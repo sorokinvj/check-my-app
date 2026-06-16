@@ -41,6 +41,12 @@ and forms (do not submit anything irreversible). Identify:
 - tech stack signals,
 - up to 5 coherent user journeys (4-10 steps each) that represent real user goals.
 
+EXPLORATION BUDGET: explore the main surfaces with roughly 15-25 tool calls,
+then STOP and emit the JSON below. Do NOT over-explore — you do not need to
+visit every page; once you can name 3-5 coherent journeys and the key services,
+output the JSON immediately. Always finish with the JSON, never with a plan to
+"explore more".
+
 When done, respond with ONLY a JSON object, no prose:
 {"journeys":[{"title":"...","steps":["...", "..."]}],
  "anatomy":{"pages":["/", ...],"actions":["...", ...],

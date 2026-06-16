@@ -13,7 +13,7 @@ import { makeAgentEnv, putText, type AgentBindings, type AgentEnv } from "./env"
 import { makeLlm } from "./llm";
 import { launchAgentBrowser, surfaceScan } from "./browser";
 import { discoverApp, type RunInput } from "./discovery";
-import { walkJourneys, type WalkRun } from "./execution";
+import { walkOneJourney, type WalkRun } from "./execution";
 import { synthesizeVerdict, type SynthesizedFinding } from "./synthesis";
 import type { TranscriptEntry } from "./core";
 
@@ -115,27 +115,39 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
         }
       });
 
-      // Phase 4 — Walking journeys (LLM).
-      const walk = await step.do("walking", async () => {
+      // Phase 4 — Walking journeys (LLM). ONE Workflow step per journey (CHE-24)
+      // so a CPU-limit/retry only re-does that journey, never the whole walk;
+      // walkOneJourney is idempotent on (runId, order). A fresh browser per
+      // journey keeps each step's session within Browser Rendering limits.
+      await step.do("walking-start", async () => {
         await transition(env, runId, "walking", {
           icon: "info",
           text: `Walking ${discovery.journeys.length} discovered journeys`,
         });
-        const browser = await launchAgentBrowser(env);
-        try {
-          return await walkJourneys({
-            env,
-            llm,
-            browser,
-            run: walkRun,
-            journeys: discovery.journeys,
-            onLiveScreenshot: (url) => setLive(env, runId, { liveScreenshotUrl: url }),
-            onProgress: (note) => setLive(env, runId, { currentAction: note }),
-          });
-        } finally {
-          await browser.close();
-        }
       });
+      let walkCost = 0;
+      for (let i = 0; i < discovery.journeys.length; i++) {
+        const proposed = discovery.journeys[i];
+        const jcost = await step.do(`walk-${i}`, async () => {
+          const browser = await launchAgentBrowser(env);
+          try {
+            const r = await walkOneJourney({
+              env,
+              llm,
+              browser,
+              run: walkRun,
+              proposed,
+              index: i,
+              onLiveScreenshot: (url) => setLive(env, runId, { liveScreenshotUrl: url }),
+              onProgress: (note) => setLive(env, runId, { currentAction: note }),
+            });
+            return r.costUsd;
+          } finally {
+            await browser.close();
+          }
+        });
+        walkCost += jcost;
+      }
 
       // Phase 5 — Anatomy (merge deterministic scan signals into the LLM map).
       const anatomy: AppAnatomy = await step.do("anatomy", async () => {
@@ -159,7 +171,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
           });
         }
 
-        const transcript: TranscriptEntry[] = [...discovery.transcript, ...walk.transcript];
+        const transcript: TranscriptEntry[] = discovery.transcript;
         let transcriptUrl: string | null = null;
         if (transcript.length) {
           transcriptUrl = await putText(
@@ -169,7 +181,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
           );
         }
 
-        const costUsd = discovery.costUsd + walk.costUsd + synth.costUsd;
+        const costUsd = discovery.costUsd + walkCost + synth.costUsd;
         await env.db.run.update({
           where: { id: runId },
           data: {
