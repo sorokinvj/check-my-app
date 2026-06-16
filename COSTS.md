@@ -59,8 +59,16 @@ Append actual measured spend here as milestones progress. Keep it terse.
 | 2026-06-11 | M1 dev + acceptance (~5 keyed self-checks, Opus) | ~$9–10 | $0 (all local) | worker logs, Linear CHE-6/16 |
 | 2026-06-12 | M2 spikes (CHE-20 browser, CHE-21 D1, CHE-22 SSE) | ~$0.02 | $0 (Free tier) | spike runs |
 | 2026-06-14 | First full agent run on Cloudflare (Sonnet-nav + Opus-synth, example.com) | **$0.10** (Run.costUsd) | $0 (local) | live Workflow run |
+| 2026-06-16 | joblander.app first client, run #2 — discovery returned 0 journeys (no walk) | **$0.45** (Run.costUsd) | incl. browser hrs | live run cmqgny6 |
+| 2026-06-16 | joblander.app first client, run #6 — full walk, 5 journeys / 9 findings | **$2.25** (Run.costUsd) | incl. browser hrs | live run cmqgojm |
 
-**Cost model validated:** with Sonnet-4.6 navigation + Opus-4.8 synthesis, `Run.costUsd` is tracked per run. The example.com run ($0.10) is a tiny target; the tiering keeps a joblander-class run well under the $1.50 target (M1 measured ~$2.5 on Opus-everywhere). Confirm on a joblander-class target at remote deploy (CHE-19).
+**Cost model — corrected with real data:** the earlier "well under $1.50" estimate
+was wrong for a rich authenticated app. A full joblander-class run (5 journeys
+walked end-to-end, each its own agent loop + browser session) costs **~$2.25** on
+Sonnet-nav + Opus-synth. The dominant cost is walking, not discovery/synthesis —
+each journey is a full 50-iteration loop. Levers if we need to cut this: cap
+journeys walked (currently 5), drop walking maxIterations (50), or move walking
+to Haiku for the act/observe steps. A discovery-only run (0 journeys) is ~$0.45.
 
 ---
 
