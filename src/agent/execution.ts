@@ -27,6 +27,22 @@ function worstStatus(statuses: StepStatus[]): StepStatus {
   );
 }
 
+// The journey summary is meant to be a 1-2 sentence "what we found" line, but
+// the model often dumps a full markdown report (headings, a step table). That
+// leaks raw markdown into the verdict UI. Strip markdown structure and keep the
+// first bit of prose so the strip caption reads cleanly.
+function cleanSummary(text: string): string | null {
+  const prose = text
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l && !l.startsWith("#") && !l.startsWith("|") && !l.startsWith("---"))
+    .join(" ")
+    .replace(/\*\*|`|__/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return prose.slice(0, 400) || null;
+}
+
 // The forced-extraction path asks for raw code, but models still wrap it in a
 // ```ts fence about half the time. Strip a single leading/trailing fence.
 function stripCodeFence(text: string): string {
@@ -160,7 +176,7 @@ export async function walkOneJourney(args: {
         where: { id: journey.id },
         data: {
           status: stepStatuses.length === 0 ? "skipped" : worstStatus(stepStatuses),
-          summary: result.finalText.slice(0, 500) || null,
+          summary: cleanSummary(result.finalText),
         },
       });
     } catch (err) {
