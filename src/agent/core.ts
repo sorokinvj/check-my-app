@@ -131,6 +131,28 @@ export async function runAgentLoop(args: AgentLoopArgs): Promise<AgentLoopResult
   return { finalText, iterations, transcript, messages, costUsd };
 }
 
+// Append a closing instruction to a conversation in a role-valid way. The agent
+// loop exits with the last turn being a `user` tool_result message; appending a
+// second `user` message there breaks role alternation (400). Merge the
+// instruction into that trailing user turn instead.
+function appendInstruction(
+  messages: Anthropic.MessageParam[],
+  instruction: string,
+): Anthropic.MessageParam[] {
+  const convo = [...messages];
+  const last = convo[convo.length - 1];
+  if (last && last.role === "user") {
+    const block: Anthropic.TextBlockParam = { type: "text", text: instruction };
+    const content: Anthropic.ContentBlockParam[] = Array.isArray(last.content)
+      ? [...last.content, block]
+      : [{ type: "text", text: String(last.content) }, block];
+    convo[convo.length - 1] = { role: "user", content };
+  } else {
+    convo.push({ role: "user", content: instruction });
+  }
+  return convo;
+}
+
 // One extra non-tool call to coax clean JSON out of a conversation whose final
 // turn didn't parse (truncation, trailing prose). Cheap recovery for the
 // discovery/synthesis hand-off — the messages already carry all the context.
@@ -143,11 +165,46 @@ export async function finalizeJson(
     llm.client.messages.create({
       model: llm.navModel,
       max_tokens: 16_000,
-      messages: [...messages, { role: "user", content: instruction }],
+      messages: appendInstruction(messages, instruction),
     }),
   );
   const text = response.content.find((b) => b.type === "text");
   return text && text.type === "text" ? text.text : "";
+}
+
+// Reliable structured extraction: structured outputs force the model to emit
+// schema-valid JSON regardless of how the exploration ended, so we never depend
+// on the model remembering to emit JSON before its iteration budget runs out
+// (the dominant cause of "No journeys mapped"). Thinking is omitted — this is a
+// pure extraction over context the model already gathered.
+export async function finalizeStructured<T>(
+  llm: LlmConfig,
+  messages: Anthropic.MessageParam[],
+  instruction: string,
+  schema: Record<string, unknown>,
+): Promise<{ parsed: T | null; costUsd: number }> {
+  const response = await createWithRetry(() =>
+    llm.client.messages.create({
+      model: llm.navModel,
+      max_tokens: 16_000,
+      output_config: { format: { type: "json_schema", schema } },
+      messages: appendInstruction(messages, instruction),
+    }),
+  );
+  const costUsd = costOf(llm.navModel, response.usage);
+  const text = response.content.find((b) => b.type === "text");
+  if (!text || text.type !== "text") return { parsed: null, costUsd };
+  try {
+    return { parsed: JSON.parse(text.text) as T, costUsd };
+  } catch {
+    const m = text.text.match(/\{[\s\S]*\}/);
+    if (!m) return { parsed: null, costUsd };
+    try {
+      return { parsed: JSON.parse(m[0]) as T, costUsd };
+    } catch {
+      return { parsed: null, costUsd };
+    }
+  }
 }
 
 // Resilient create: the SDK already retries twice, but a sustained overload

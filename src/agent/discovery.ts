@@ -5,7 +5,7 @@
 import type { Browser } from "@cloudflare/playwright";
 import { decryptSecret } from "@/lib/crypto";
 import type { AppAnatomy } from "@/lib/types";
-import { runAgentLoop, finalizeJson, type TranscriptEntry } from "./core";
+import { runAgentLoop, finalizeStructured, type TranscriptEntry } from "./core";
 import { prepareAgentPage, type ToolEnv } from "./tools";
 import { discoverySystem } from "./instructions";
 import { putScreenshot, type AgentEnv } from "./env";
@@ -84,62 +84,128 @@ export async function discoverApp(args: {
       onProgress,
     });
 
-    let parsed = parseDiscoveryJson(result.finalText);
-    if (!parsed) {
-      const retry = await finalizeJson(
-        llm,
-        result.messages,
-        "Output ONLY the discovery JSON object now (journeys + anatomy), no prose, no markdown fences.",
-      );
-      parsed = parseDiscoveryJson(retry);
-    }
-    // A successful parse with zero journeys is a convergence failure, not an
-    // empty app — every real app has at least a primary flow. Reuse the
-    // exploration context for a focused journey extraction before giving up.
+    let costUsd = result.costUsd;
+
+    // Guaranteed structured extraction. The model frequently spends its whole
+    // iteration budget exploring and never emits the closing JSON on its own —
+    // so instead of hoping its final text parses, we always run a structured
+    // pass over the exploration context that forces schema-valid journeys +
+    // anatomy. This is what makes discovery reliable instead of coin-flip.
+    const extracted = await finalizeStructured<RawDiscovery>(
+      llm,
+      result.messages,
+      "Based ONLY on what you actually explored above, output the discovery result: " +
+        "3-5 concrete user journeys (each a title + ordered steps) covering the app's core " +
+        "flows (e.g. sign up / log in, the primary value action, account/settings), plus the " +
+        "app anatomy (pages, actions, external services, tech). Every app has at least one " +
+        "core journey — never return an empty journeys array.",
+      DISCOVERY_SCHEMA,
+    );
+    costUsd += extracted.costUsd;
+    let parsed = extracted.parsed
+      ? shapeDiscovery(extracted.parsed)
+      : parseDiscoveryJson(result.finalText);
+
+    // Still no journeys → one focused structured retry dedicated to journeys.
     if (parsed && parsed.journeys.length === 0) {
-      const retry = await finalizeJson(
+      const j = await finalizeStructured<{ journeys?: RawDiscovery["journeys"] }>(
         llm,
         result.messages,
-        "You explored the app but proposed no user journeys. That is wrong — every app has " +
-          "at least one core flow. Based ONLY on what you actually saw, propose 3-5 user " +
-          "journeys a real user would take (e.g. sign up, the primary value action, account/" +
-          "settings). Output ONLY JSON: {\"journeys\":[{\"title\":\"...\",\"steps\":[\"...\"]}]}. " +
-          "No prose, no markdown fences.",
+        "You proposed no user journeys — that is wrong. Propose 3-5 user journeys a real " +
+          "user would take, based only on what you saw. Each is a title plus ordered steps.",
+        JOURNEYS_SCHEMA,
       );
-      const recovered = parseDiscoveryJson(retry);
-      if (recovered && recovered.journeys.length > 0) {
-        parsed = { ...parsed, journeys: recovered.journeys };
-      }
+      costUsd += j.costUsd;
+      const recovered = shapeDiscovery({ journeys: j.parsed?.journeys ?? [] }).journeys;
+      if (recovered.length > 0) parsed = { ...parsed, journeys: recovered };
     }
-    return { ...(parsed ?? empty), transcript: result.transcript, costUsd: result.costUsd };
+    return { ...(parsed ?? empty), transcript: result.transcript, costUsd };
   } finally {
     await context.close();
   }
 }
 
-function parseDiscoveryJson(
-  text: string,
-): Omit<DiscoveryResult, "transcript" | "costUsd"> | null {
+interface RawDiscovery {
+  journeys?: Array<{ title?: string; steps?: string[] }>;
+  anatomy?: Partial<AppAnatomy>;
+}
+
+type ShapedDiscovery = Omit<DiscoveryResult, "transcript" | "costUsd">;
+
+// Normalize a raw (structured-output or hand-parsed) discovery object into the
+// DiscoveryResult shape: at most 5 titled journeys, anatomy fields defaulted.
+function shapeDiscovery(raw: RawDiscovery): ShapedDiscovery {
+  return {
+    journeys: (raw.journeys ?? [])
+      .filter((j) => j.title)
+      .slice(0, 5)
+      .map((j) => ({ title: String(j.title), steps: (j.steps ?? []).map(String) })),
+    anatomy: {
+      pages: raw.anatomy?.pages ?? [],
+      actions: raw.anatomy?.actions ?? [],
+      services: raw.anatomy?.services ?? [],
+      tech: raw.anatomy?.tech ?? {},
+    },
+  };
+}
+
+// Fallback only — used when structured extraction returns nothing and we scrape
+// the model's final free-text for a JSON object.
+function parseDiscoveryJson(text: string): ShapedDiscovery | null {
   const match = text.match(/\{[\s\S]*\}/);
   if (!match) return null;
   try {
-    const raw = JSON.parse(match[0]) as {
-      journeys?: Array<{ title?: string; steps?: string[] }>;
-      anatomy?: Partial<AppAnatomy>;
-    };
-    return {
-      journeys: (raw.journeys ?? [])
-        .filter((j) => j.title)
-        .slice(0, 5)
-        .map((j) => ({ title: String(j.title), steps: (j.steps ?? []).map(String) })),
-      anatomy: {
-        pages: raw.anatomy?.pages ?? [],
-        actions: raw.anatomy?.actions ?? [],
-        services: raw.anatomy?.services ?? [],
-        tech: raw.anatomy?.tech ?? {},
-      },
-    };
+    return shapeDiscovery(JSON.parse(match[0]) as RawDiscovery);
   } catch {
     return null;
   }
 }
+
+// Strict JSON schemas for structured outputs. additionalProperties:false and
+// full required lists are mandatory for the json_schema output format.
+const JOURNEY_ITEM_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["title", "steps"],
+  properties: {
+    title: { type: "string" },
+    steps: { type: "array", items: { type: "string" } },
+  },
+};
+
+const JOURNEYS_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["journeys"],
+  properties: {
+    journeys: { type: "array", items: JOURNEY_ITEM_SCHEMA },
+  },
+};
+
+const DISCOVERY_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["journeys", "anatomy"],
+  properties: {
+    journeys: { type: "array", items: JOURNEY_ITEM_SCHEMA },
+    anatomy: {
+      type: "object",
+      additionalProperties: false,
+      required: ["pages", "actions", "services", "tech"],
+      properties: {
+        pages: { type: "array", items: { type: "string" } },
+        actions: { type: "array", items: { type: "string" } },
+        services: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["name", "role"],
+            properties: { name: { type: "string" }, role: { type: "string" } },
+          },
+        },
+        tech: { type: "object", additionalProperties: { type: "string" } },
+      },
+    },
+  },
+};
