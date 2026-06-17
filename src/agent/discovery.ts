@@ -91,33 +91,45 @@ export async function discoverApp(args: {
     // so instead of hoping its final text parses, we always run a structured
     // pass over the exploration context that forces schema-valid journeys +
     // anatomy. This is what makes discovery reliable instead of coin-flip.
-    const extracted = await finalizeStructured<RawDiscovery>(
-      llm,
-      result.messages,
-      "Based ONLY on what you actually explored above, output the discovery result: " +
-        "3-5 concrete user journeys (each a title + ordered steps) covering the app's core " +
-        "flows (e.g. sign up / log in, the primary value action, account/settings), plus the " +
-        "app anatomy (pages, actions, external services, tech). Every app has at least one " +
-        "core journey — never return an empty journeys array.",
-      DISCOVERY_SCHEMA,
-    );
-    costUsd += extracted.costUsd;
-    let parsed = extracted.parsed
-      ? shapeDiscovery(extracted.parsed)
-      : parseDiscoveryJson(result.finalText);
+    // A failure in the extraction (bad schema, transient API) must NEVER throw
+    // out of the discovery step — that would make Cloudflare retry the entire
+    // ~10-min exploration from scratch. Catch and fall back to scraping the
+    // model's free-text final answer instead.
+    let parsed: ShapedDiscovery | null = null;
+    try {
+      const extracted = await finalizeStructured<RawDiscovery>(
+        llm,
+        result.messages,
+        "Based ONLY on what you actually explored above, output the discovery result: " +
+          "3-5 concrete user journeys (each a title + ordered steps) covering the app's core " +
+          "flows (e.g. sign up / log in, the primary value action, account/settings), plus the " +
+          "app anatomy (pages, actions, external services, tech as key/value pairs). Every app " +
+          "has at least one core journey — never return an empty journeys array.",
+        DISCOVERY_SCHEMA,
+      );
+      costUsd += extracted.costUsd;
+      if (extracted.parsed) parsed = shapeDiscovery(extracted.parsed);
+    } catch (err) {
+      console.error("[discovery] structured extraction failed:", err);
+    }
+    if (!parsed) parsed = parseDiscoveryJson(result.finalText);
 
     // Still no journeys → one focused structured retry dedicated to journeys.
     if (parsed && parsed.journeys.length === 0) {
-      const j = await finalizeStructured<{ journeys?: RawDiscovery["journeys"] }>(
-        llm,
-        result.messages,
-        "You proposed no user journeys — that is wrong. Propose 3-5 user journeys a real " +
-          "user would take, based only on what you saw. Each is a title plus ordered steps.",
-        JOURNEYS_SCHEMA,
-      );
-      costUsd += j.costUsd;
-      const recovered = shapeDiscovery({ journeys: j.parsed?.journeys ?? [] }).journeys;
-      if (recovered.length > 0) parsed = { ...parsed, journeys: recovered };
+      try {
+        const j = await finalizeStructured<{ journeys?: RawDiscovery["journeys"] }>(
+          llm,
+          result.messages,
+          "You proposed no user journeys — that is wrong. Propose 3-5 user journeys a real " +
+            "user would take, based only on what you saw. Each is a title plus ordered steps.",
+          JOURNEYS_SCHEMA,
+        );
+        costUsd += j.costUsd;
+        const recovered = shapeDiscovery({ journeys: j.parsed?.journeys ?? [] }).journeys;
+        if (recovered.length > 0) parsed = { ...parsed, journeys: recovered };
+      } catch (err) {
+        console.error("[discovery] journeys retry failed:", err);
+      }
     }
     return { ...(parsed ?? empty), transcript: result.transcript, costUsd };
   } finally {
@@ -127,24 +139,50 @@ export async function discoverApp(args: {
 
 interface RawDiscovery {
   journeys?: Array<{ title?: string; steps?: string[] }>;
-  anatomy?: Partial<AppAnatomy>;
+  anatomy?: {
+    pages?: unknown;
+    actions?: unknown;
+    services?: unknown;
+    // structured outputs can't express an open string map, so `tech` comes back
+    // as an array of {key,value} pairs; free-text parses may send a record.
+    tech?: Array<{ key?: string; value?: string }> | Record<string, string>;
+  };
 }
 
 type ShapedDiscovery = Omit<DiscoveryResult, "transcript" | "costUsd">;
 
+function techToRecord(tech: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (Array.isArray(tech)) {
+    for (const p of tech) {
+      if (p && typeof p === "object" && typeof p.key === "string" && typeof p.value === "string") {
+        out[p.key] = p.value;
+      }
+    }
+  } else if (tech && typeof tech === "object") {
+    for (const [k, v] of Object.entries(tech as Record<string, unknown>)) {
+      if (typeof v === "string") out[k] = v;
+    }
+  }
+  return out;
+}
+
 // Normalize a raw (structured-output or hand-parsed) discovery object into the
 // DiscoveryResult shape: at most 5 titled journeys, anatomy fields defaulted.
+// normalizeAnatomy (workflow) re-coerces anatomy again before persistence, so
+// loose shapes here are safe.
 function shapeDiscovery(raw: RawDiscovery): ShapedDiscovery {
+  const a = raw.anatomy ?? {};
   return {
     journeys: (raw.journeys ?? [])
       .filter((j) => j.title)
       .slice(0, 5)
       .map((j) => ({ title: String(j.title), steps: (j.steps ?? []).map(String) })),
     anatomy: {
-      pages: raw.anatomy?.pages ?? [],
-      actions: raw.anatomy?.actions ?? [],
-      services: raw.anatomy?.services ?? [],
-      tech: raw.anatomy?.tech ?? {},
+      pages: (Array.isArray(a.pages) ? a.pages : []) as AppAnatomy["pages"],
+      actions: (Array.isArray(a.actions) ? a.actions : []) as AppAnatomy["actions"],
+      services: (Array.isArray(a.services) ? a.services : []) as AppAnatomy["services"],
+      tech: techToRecord(a.tech),
     },
   };
 }
@@ -204,7 +242,15 @@ const DISCOVERY_SCHEMA = {
             properties: { name: { type: "string" }, role: { type: "string" } },
           },
         },
-        tech: { type: "object", additionalProperties: { type: "string" } },
+        tech: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["key", "value"],
+            properties: { key: { type: "string" }, value: { type: "string" } },
+          },
+        },
       },
     },
   },
