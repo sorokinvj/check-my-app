@@ -209,7 +209,9 @@ model GeneratedTest {
 
 model Watch {
   id          String         @id @default(cuid())
-  appSlug     String         @unique
+  // NOT globally unique (CHE-36): two owners may watch the same URL. The real
+  // key is appId (one Watch per App); appSlug stays for display/legacy lookups.
+  appSlug     String
   targetUrl   String
   frequency   String         @default("daily") // WatchFrequency
   active      Boolean        @default(true)
@@ -235,6 +237,7 @@ model Watch {
   updatedAt   DateTime @updatedAt
 
   @@index([ownerId])
+  @@index([appSlug])
 }
 
 // ─── App-side counters (CHE-11) ──────────────────────────────────────────────

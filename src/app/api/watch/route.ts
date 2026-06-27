@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getDbFromContext } from "@/lib/db";
+import { getOptionalUser } from "@/lib/auth";
 import { createWatchSchema } from "@/lib/validation";
 
 function nextRunFrom(frequency: "daily" | "every_6h" | "manual"): Date | null {
@@ -8,18 +9,23 @@ function nextRunFrom(frequency: "daily" | "every_6h" | "manual"): Date | null {
   return new Date(Date.now() + hours * 60 * 60 * 1000);
 }
 
-// POST /api/watch — Loop B: enable Daily Watch from a verdict. Upserts the
-// Watch for the app, carrying credentials over from the source run so the
-// scheduler can keep re-running.
+// POST /api/watch — Loop B: enable Daily Watch from a verdict. Owner feature
+// (CHE-33): requires auth; finds-or-creates the owner's App for the run's target,
+// then upserts the owned Watch (keyed by appId, not the global appSlug — CHE-36).
 export async function POST(req: Request) {
-  const prisma = await getDbFromContext();
+  const db = await getDbFromContext();
+  const user = await getOptionalUser(db);
+  if (!user) {
+    return NextResponse.json({ error: "Sign in to enable Daily Watch" }, { status: 401 });
+  }
+
   const json = await req.json().catch(() => null);
   const parsed = createWatchSchema.safeParse(json);
   if (!parsed.success) {
     return NextResponse.json({ error: "Invalid input" }, { status: 400 });
   }
 
-  const run = await prisma.run.findUnique({
+  const run = await db.run.findUnique({
     where: { publicId: parsed.data.runId },
     select: {
       id: true,
@@ -27,14 +33,37 @@ export async function POST(req: Request) {
       targetUrl: true,
       testEmail: true,
       testPasswordEnc: true,
+      scopeHints: true,
+      userNotes: true,
       notifyEmail: true,
     },
   });
   if (!run) return NextResponse.json({ error: "Run not found" }, { status: 404 });
 
-  const watch = await prisma.watch.upsert({
-    where: { appSlug: run.appSlug },
+  // Find-or-create the owner's App for this target (owner-scoped uniqueness).
+  let app = await db.app.findUnique({
+    where: { ownerId_appSlug: { ownerId: user.id, appSlug: run.appSlug } },
+  });
+  if (!app) {
+    app = await db.app.create({
+      data: {
+        ownerId: user.id,
+        orgId: user.clerkOrgId ?? null,
+        targetUrl: run.targetUrl,
+        appSlug: run.appSlug,
+        testEmail: run.testEmail,
+        testPasswordEnc: run.testPasswordEnc,
+        scopeHints: run.scopeHints,
+        userNotes: run.userNotes,
+      },
+    });
+  }
+
+  const watch = await db.watch.upsert({
+    where: { appId: app.id },
     create: {
+      appId: app.id,
+      ownerId: user.id,
       appSlug: run.appSlug,
       targetUrl: run.targetUrl,
       frequency: parsed.data.frequency,
@@ -52,8 +81,11 @@ export async function POST(req: Request) {
     },
   });
 
-  // Link the source run to the watch so it becomes the baseline.
-  await prisma.run.update({ where: { id: run.id }, data: { watchId: watch.id } });
+  // Adopt the source run into the owner's app + watch (becomes the baseline).
+  await db.run.update({
+    where: { id: run.id },
+    data: { watchId: watch.id, ownerId: user.id, appId: app.id },
+  });
 
   return NextResponse.json({ slug: watch.appSlug }, { status: 201 });
 }

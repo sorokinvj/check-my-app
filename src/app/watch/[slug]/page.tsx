@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { getDbFromContext } from "@/lib/db";
+import { requireUser } from "@/lib/auth";
 import { VERDICT_META } from "@/lib/status";
 import { WatchSettings } from "@/components/watch-settings";
 
@@ -16,14 +16,16 @@ const DATE_FMT: Intl.DateTimeFormatOptions = {
 // Screen 4 — Watch settings · /watch/{slug}. Set-and-forget: status, recent runs,
 // minimal settings. Only meaningful once a Watch exists for the app.
 export default async function WatchPage({ params }: { params: Promise<{ slug: string }> }) {
-  const prisma = await getDbFromContext();
-  const watch = await prisma.watch.findUnique({
-    where: { appSlug: (await params).slug },
+  // Owner-scoped (CHE-33): a watch is managed only by its owner.
+  const { user, db } = await requireUser();
+  const app = await db.app.findUnique({
+    where: { ownerId_appSlug: { ownerId: user.id, appSlug: (await params).slug } },
     include: {
-      runs: { orderBy: { startedAt: "desc" }, take: 10 },
+      watch: { include: { runs: { orderBy: { startedAt: "desc" }, take: 10 } } },
     },
   });
-  if (!watch) notFound();
+  if (!app?.watch) notFound();
+  const watch = app.watch;
 
   return (
     <main className="mx-auto max-w-2xl px-4 py-10">

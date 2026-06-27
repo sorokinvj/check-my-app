@@ -37,3 +37,24 @@ export async function requireUser(): Promise<{
   });
   return { user, db };
 }
+
+// API-route auth: resolve the signed-in user's D1 mirror, or null (no redirect).
+// Use in route handlers where anonymous access is valid for some paths.
+export async function getOptionalUser(db: PrismaClient) {
+  const { userId } = await auth();
+  if (!userId) return null;
+  return db.user.findUnique({ where: { clerkUserId: userId } });
+}
+
+// Tenant guard for resources that may be owned or anonymous (CHE-33).
+// - Owned (ownerId set): only the authenticated owner may mutate.
+// - Anonymous (ownerId null): knowledge of the unguessable publicId/slug IS the
+//   capability (the public free-run funnel), so it's allowed.
+export async function canMutateOwned(
+  db: PrismaClient,
+  ownerId: string | null,
+): Promise<boolean> {
+  if (!ownerId) return true;
+  const user = await getOptionalUser(db);
+  return !!user && user.id === ownerId;
+}
