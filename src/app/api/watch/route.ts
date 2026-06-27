@@ -31,6 +31,7 @@ export async function POST(req: Request) {
     where: { publicId: parsed.data.runId },
     select: {
       id: true,
+      ownerId: true,
       appSlug: true,
       targetUrl: true,
       testEmail: true,
@@ -42,24 +43,28 @@ export async function POST(req: Request) {
   });
   if (!run) return NextResponse.json({ error: "Run not found" }, { status: 404 });
 
-  // Find-or-create the owner's App for this target (owner-scoped uniqueness).
-  let app = await db.app.findUnique({
-    where: { ownerId_appSlug: { ownerId: user.id, appSlug: run.appSlug } },
-  });
-  if (!app) {
-    app = await db.app.create({
-      data: {
-        ownerId: user.id,
-        orgId: user.clerkOrgId ?? null,
-        targetUrl: run.targetUrl,
-        appSlug: run.appSlug,
-        testEmail: run.testEmail,
-        testPasswordEnc: run.testPasswordEnc,
-        scopeHints: run.scopeHints,
-        userNotes: run.userNotes,
-      },
-    });
+  // Don't let one owner adopt another owner's run (CHE-33). Adoption is only
+  // valid for an anonymous run or one already theirs.
+  if (run.ownerId && run.ownerId !== user.id) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
   }
+
+  // Find-or-create the owner's App for this target. upsert is race-safe under
+  // D1 (no transactions) vs a check-then-create double-submit window.
+  const app = await db.app.upsert({
+    where: { ownerId_appSlug: { ownerId: user.id, appSlug: run.appSlug } },
+    update: {},
+    create: {
+      ownerId: user.id,
+      orgId: user.clerkOrgId ?? null,
+      targetUrl: run.targetUrl,
+      appSlug: run.appSlug,
+      testEmail: run.testEmail,
+      testPasswordEnc: run.testPasswordEnc,
+      scopeHints: run.scopeHints,
+      userNotes: run.userNotes,
+    },
+  });
 
   // Tier gate (CHE-34): updating an existing watch is fine; a new one counts.
   const existingWatch = await db.watch.findUnique({ where: { appId: app.id }, select: { id: true } });

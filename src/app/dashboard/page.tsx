@@ -21,14 +21,16 @@ export default async function DashboardPage() {
   // For connected apps, pull the workspace teams so the owner can pick which one
   // tickets land in (best-effort — a transient Linear error just hides the picker).
   const teamsByApp: Record<string, { id: string; name: string }[]> = {};
-  for (const app of apps) {
-    if (!app.tracker) continue;
-    try {
-      teamsByApp[app.id] = await fetchTeams(decryptSecret(app.tracker.accessTokenEnc));
-    } catch {
-      teamsByApp[app.id] = [];
-    }
-  }
+  await Promise.all(
+    apps.map(async (app) => {
+      if (!app.tracker) return;
+      try {
+        teamsByApp[app.id] = await fetchTeams(decryptSecret(app.tracker.accessTokenEnc));
+      } catch {
+        teamsByApp[app.id] = [];
+      }
+    }),
+  );
 
   return (
     <main className="mx-auto w-full max-w-3xl px-4 py-12">

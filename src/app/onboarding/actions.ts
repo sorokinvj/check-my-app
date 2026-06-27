@@ -46,36 +46,54 @@ export async function createApp(formData: FormData) {
     .map((s) => s.trim())
     .filter(Boolean);
 
-  await db.app.create({
-    data: {
-      ownerId: user.id,
-      orgId: user.clerkOrgId ?? null,
-      targetUrl,
-      appSlug,
-      testEmail,
-      testPasswordEnc,
-      scopeHints,
-      userNotes,
-      watch: {
-        create: {
-          appSlug,
-          targetUrl,
-          frequency,
-          notifyEmail,
-          ownerId: user.id,
-          testEmail,
-          testPasswordEnc,
-        },
-      },
-      policy: {
-        create: {
-          pickupLabels: JSON.stringify(pickupLabels),
-          repoLabel,
-          priorityRule: JSON.stringify({ urgent: urgentJourneys }),
-        },
-      },
-    },
+  // One App per (owner, slug). Pre-check for a clear message, and catch the
+  // unique-constraint race (D1 has no transactions, so a double-submit can slip
+  // past the check) rather than surfacing a raw 500.
+  const dupe = await db.app.findUnique({
+    where: { ownerId_appSlug: { ownerId: user.id, appSlug } },
+    select: { id: true },
   });
+  if (dupe) {
+    throw new Error("You already have this app — manage it from your dashboard.");
+  }
+
+  try {
+    await db.app.create({
+      data: {
+        ownerId: user.id,
+        orgId: user.clerkOrgId ?? null,
+        targetUrl,
+        appSlug,
+        testEmail,
+        testPasswordEnc,
+        scopeHints,
+        userNotes,
+        watch: {
+          create: {
+            appSlug,
+            targetUrl,
+            frequency,
+            notifyEmail,
+            ownerId: user.id,
+            testEmail,
+            testPasswordEnc,
+          },
+        },
+        policy: {
+          create: {
+            pickupLabels: JSON.stringify(pickupLabels),
+            repoLabel,
+            priorityRule: JSON.stringify({ urgent: urgentJourneys }),
+          },
+        },
+      },
+    });
+  } catch (err) {
+    if (err instanceof Error && err.message.includes("Unique constraint")) {
+      throw new Error("You already have this app — manage it from your dashboard.");
+    }
+    throw err;
+  }
 
   redirect("/dashboard");
 }

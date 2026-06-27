@@ -4,6 +4,8 @@ import { NextResponse, type NextRequest } from "next/server";
 import { cookies } from "next/headers";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { requireUser } from "@/lib/auth";
+import { PLAN_LIMITS } from "@/lib/plans";
+import type { UserPlan } from "@/lib/enums";
 import { buildAuthorizeUrl } from "@/lib/tracker/linear-oauth";
 
 export async function GET(req: NextRequest) {
@@ -11,6 +13,9 @@ export async function GET(req: NextRequest) {
   if (!appId) return NextResponse.json({ error: "appId required" }, { status: 400 });
 
   const { user, db } = await requireUser();
+  if (!PLAN_LIMITS[user.plan as UserPlan].trackerIntegration) {
+    return NextResponse.json({ error: "Tracker integrations require a paid plan." }, { status: 403 });
+  }
   const app = await db.app.findFirst({ where: { id: appId, ownerId: user.id } });
   if (!app) return NextResponse.json({ error: "app not found" }, { status: 404 });
 

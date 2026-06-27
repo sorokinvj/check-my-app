@@ -62,11 +62,16 @@ export class LinearTracker implements Tracker {
   }
 
   private async resolveStateId(name: string): Promise<string | undefined> {
-    const data = await this.gql<{ team: { states: { nodes: { id: string; name: string }[] } } }>(
-      `query($id:String!){ team(id:$id){ states{ nodes{ id name } } } }`,
+    // Linear's Team field is `workflowStates`, not `states`.
+    const data = await this.gql<{
+      team: { workflowStates: { nodes: { id: string; name: string }[] } };
+    }>(
+      `query($id:String!){ team(id:$id){ workflowStates{ nodes{ id name } } } }`,
       { id: this.teamId },
     );
-    return data.team.states.nodes.find((s) => s.name.toLowerCase() === name.toLowerCase())?.id;
+    return data.team.workflowStates.nodes.find(
+      (s) => s.name.toLowerCase() === name.toLowerCase(),
+    )?.id;
   }
 
   async createIssue(draft: TicketDraft): Promise<CreatedIssue> {
