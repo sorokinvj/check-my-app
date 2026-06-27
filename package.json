@@ -10,6 +10,7 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "selfcheck": "tsx scripts/selfcheck.ts",
+    "selfcheck:auth": "playwright test --config playwright.auth.config.ts",
     "replay": "tsx scripts/replay.ts",
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
