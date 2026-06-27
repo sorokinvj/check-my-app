@@ -47,6 +47,20 @@ export type EvidenceType =
 
 export type WatchFrequency = "daily" | "every_6h" | "manual";
 
+// ─── M3: owner accounts & per-owner QA→tracker loop (CHE-27) ──────────────────
+
+// Mirror of Clerk identity; absorbs the brief's future marketplace roles.
+export type UserRole = "requester" | "provider_human" | "agent_operator" | "admin";
+
+// Subscription tier (gates Watch limits); billing wires later.
+export type UserPlan = "free" | "starter" | "growth" | "business" | "enterprise";
+
+// Connected issue tracker. Only "linear" is implemented; abstraction for later.
+export type TrackerType = "linear" | "jira" | "github";
+
+// Lifecycle of a deduped regression we've already filed a ticket for.
+export type IssueLinkStatus = "open" | "resolved";
+
 // Runtime guards for values crossing a boundary (LLM output, request body).
 export const STEP_STATUSES: StepStatus[] = [
   "ok",
@@ -66,3 +80,18 @@ export const FINDING_CATEGORIES: FindingCategory[] = [
 export const SEVERITIES: Severity[] = ["high", "medium", "low"];
 export const FINDING_MARKS: FindingMark[] = ["none", "known", "fixed", "false_positive"];
 export const WATCH_FREQUENCIES: WatchFrequency[] = ["daily", "every_6h", "manual"];
+export const USER_ROLES: UserRole[] = [
+  "requester",
+  "provider_human",
+  "agent_operator",
+  "admin",
+];
+export const USER_PLANS: UserPlan[] = [
+  "free",
+  "starter",
+  "growth",
+  "business",
+  "enterprise",
+];
+export const TRACKER_TYPES: TrackerType[] = ["linear", "jira", "github"];
+export const ISSUE_LINK_STATUSES: IssueLinkStatus[] = ["open", "resolved"];
