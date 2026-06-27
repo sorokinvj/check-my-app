@@ -4,6 +4,8 @@ import { redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth";
 import { encryptSecret } from "@/lib/crypto";
 import { appSlugFromUrl } from "@/lib/utils";
+import { assertCanAddWatch } from "@/lib/plans";
+import type { UserPlan, WatchFrequency } from "@/lib/enums";
 
 // Persist an onboarded App + its Watch + TicketPolicy in one nested write.
 // D1 has no transactions, but the spike (CHE-21) proved nested create works and
@@ -23,7 +25,15 @@ export async function createApp(formData: FormData) {
   const scopeHints = (String(formData.get("scopeHints") ?? "").trim() || null) as string | null;
   const userNotes = (String(formData.get("userNotes") ?? "").trim() || null) as string | null;
   const notifyEmail = (String(formData.get("notifyEmail") ?? "").trim() || null) as string | null;
-  const frequency = String(formData.get("frequency") ?? "daily");
+  const frequency = String(formData.get("frequency") ?? "daily") as WatchFrequency;
+
+  // Tier gate (CHE-34): Daily Watch availability + cadence + count per plan.
+  const gate = await assertCanAddWatch(db, {
+    ownerId: user.id,
+    plan: user.plan as UserPlan,
+    frequency,
+  });
+  if (!gate.ok) throw new Error(gate.reason);
 
   // Ticket policy — the pickup contract with the owner's own automation.
   const pickupLabels = String(formData.get("pickupLabels") ?? "")

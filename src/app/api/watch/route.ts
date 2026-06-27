@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { getDbFromContext } from "@/lib/db";
 import { getOptionalUser } from "@/lib/auth";
+import { assertCanAddWatch } from "@/lib/plans";
+import type { UserPlan } from "@/lib/enums";
 import { createWatchSchema } from "@/lib/validation";
 
 function nextRunFrom(frequency: "daily" | "every_6h" | "manual"): Date | null {
@@ -58,6 +60,16 @@ export async function POST(req: Request) {
       },
     });
   }
+
+  // Tier gate (CHE-34): updating an existing watch is fine; a new one counts.
+  const existingWatch = await db.watch.findUnique({ where: { appId: app.id }, select: { id: true } });
+  const gate = await assertCanAddWatch(db, {
+    ownerId: user.id,
+    plan: user.plan as UserPlan,
+    frequency: parsed.data.frequency,
+    existingWatchId: existingWatch?.id ?? null,
+  });
+  if (!gate.ok) return NextResponse.json({ error: gate.reason }, { status: 403 });
 
   const watch = await db.watch.upsert({
     where: { appId: app.id },
