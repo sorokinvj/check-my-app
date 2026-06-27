@@ -20,6 +20,7 @@ export function EnableWatchButton({
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
 
   if (hasWatch) {
     return (
@@ -30,26 +31,39 @@ export function EnableWatchButton({
   }
 
   return (
-    <Button
-      variant={variant}
-      disabled={busy}
-      onClick={async () => {
-        setBusy(true);
-        const res = await fetch("/api/watch", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ runId }),
-        }).catch(() => null);
-        if (res?.ok) {
-          const { slug } = (await res.json()) as { slug: string };
-          router.push(`/watch/${slug}`);
-        } else {
+    <div className="space-y-1.5">
+      <Button
+        variant={variant}
+        disabled={busy}
+        onClick={async () => {
+          setBusy(true);
+          setErr(null);
+          const res = await fetch("/api/watch", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ runId }),
+          }).catch(() => null);
+          if (res?.ok) {
+            const { slug } = (await res.json()) as { slug: string };
+            router.push(`/watch/${slug}`);
+            return;
+          }
+          // Daily Watch is an owner feature — send anonymous visitors to sign in
+          // and bring them back here to enable it.
+          if (res?.status === 401) {
+            const back = encodeURIComponent(window.location.pathname);
+            router.push(`/sign-in?redirect_url=${back}`);
+            return;
+          }
+          const body = (await res?.json().catch(() => ({}))) as { error?: string };
+          setErr(body.error ?? "Couldn't enable Daily Watch.");
           setBusy(false);
-        }
-      }}
-    >
-      {busy ? "Enabling…" : "Enable Daily Watch"}
-    </Button>
+        }}
+      >
+        {busy ? "Enabling…" : "Enable Daily Watch"}
+      </Button>
+      {err && <p className="text-xs text-status-broken">{err}</p>}
+    </div>
   );
 }
 
