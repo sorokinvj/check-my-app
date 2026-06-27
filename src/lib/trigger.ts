@@ -6,10 +6,30 @@ import { getCloudflareContext } from "@opennextjs/cloudflare";
 
 export async function triggerRun(runId: string): Promise<void> {
   const { env } = getCloudflareContext();
-  const workflow = (env as unknown as { CHECK_RUN?: Workflow }).CHECK_RUN;
-  if (!workflow) {
-    console.warn(`[trigger] CHECK_RUN binding missing — run ${runId} left queued`);
+  const e = env as unknown as { CHECK_RUN?: Workflow; AGENT_DEV_URL?: string };
+
+  // Production / cf:dev: the cross-worker Workflow binding is present.
+  if (e.CHECK_RUN) {
+    await e.CHECK_RUN.create({ params: { runId } });
     return;
   }
-  await workflow.create({ params: { runId } });
+
+  // Local `next dev`: no cross-worker binding exists. Forward to the agent
+  // worker's HTTP /trigger so runs actually execute locally. The agent shares
+  // the same local D1 (same database_id), so it reads the queued run. Start it
+  // with `npm run agent:dev` (default :8787); override port via AGENT_DEV_URL.
+  const agentUrl = e.AGENT_DEV_URL ?? "http://localhost:8787";
+  try {
+    const res = await fetch(`${agentUrl}/trigger`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ runId }),
+    });
+    if (!res.ok) throw new Error(`agent /trigger returned ${res.status}`);
+  } catch (err) {
+    console.warn(
+      `[trigger] could not reach the agent worker at ${agentUrl} — run ${runId} left queued. ` +
+        `Start it with \`npm run agent:dev\`. (${err instanceof Error ? err.message : err})`,
+    );
+  }
 }
