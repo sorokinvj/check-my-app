@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getDbFromContext } from "@/lib/db";
+import { canMutateOwned } from "@/lib/auth";
 import { updateLensSchema } from "@/lib/validation";
 
 // PATCH /api/runs/{publicId}/lens — Loop C: user edits the App Lens or reacts
@@ -14,9 +15,12 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 
   const run = await prisma.run.findUnique({
     where: { publicId: (await params).id },
-    select: { id: true },
+    select: { id: true, ownerId: true },
   });
   if (!run) return NextResponse.json({ error: "Run not found" }, { status: 404 });
+  if (!(await canMutateOwned(prisma, run.ownerId))) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+  }
 
   const updated = await prisma.run.update({
     where: { id: run.id },

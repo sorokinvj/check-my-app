@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getDbFromContext } from "@/lib/db";
+import { canMutateOwned } from "@/lib/auth";
 import { markFindingSchema } from "@/lib/validation";
 
 // PATCH /api/findings/{id} — Loop C: triage a finding from the verdict page
@@ -12,14 +13,19 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     return NextResponse.json({ error: "Invalid input" }, { status: 400 });
   }
 
-  const finding = await prisma.finding
-    .update({
-      where: { id: (await params).id },
-      data: { mark: parsed.data.mark },
-      select: { id: true, mark: true },
-    })
-    .catch(() => null);
+  const existing = await prisma.finding.findUnique({
+    where: { id: (await params).id },
+    select: { id: true, run: { select: { ownerId: true } } },
+  });
+  if (!existing) return NextResponse.json({ error: "Finding not found" }, { status: 404 });
+  if (!(await canMutateOwned(prisma, existing.run.ownerId))) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+  }
 
-  if (!finding) return NextResponse.json({ error: "Finding not found" }, { status: 404 });
+  const finding = await prisma.finding.update({
+    where: { id: existing.id },
+    data: { mark: parsed.data.mark },
+    select: { id: true, mark: true },
+  });
   return NextResponse.json(finding);
 }

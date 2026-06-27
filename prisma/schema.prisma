@@ -81,6 +81,13 @@ model Run {
   // The baseline run this one is diffed against (Daily Check).
   baselineRunId String?
 
+  // M3: owner-scoping. Anonymous runs keep these null and stay reachable only
+  // by their unguessable publicId — the multi-tenant layer is additive.
+  app      App?    @relation(fields: [appId], references: [id])
+  appId    String?
+  owner    User?   @relation(fields: [ownerId], references: [id])
+  ownerId  String?
+
   journeys Journey[]
   findings Finding[]
 
@@ -91,6 +98,8 @@ model Run {
 
   @@index([appSlug])
   @@index([watchId])
+  @@index([appId])
+  @@index([ownerId])
 }
 
 // ─── Journeys & steps ────────────────────────────────────────────────────────
@@ -200,7 +209,9 @@ model GeneratedTest {
 
 model Watch {
   id          String         @id @default(cuid())
-  appSlug     String         @unique
+  // NOT globally unique (CHE-36): two owners may watch the same URL. The real
+  // key is appId (one Watch per App); appSlug stays for display/legacy lookups.
+  appSlug     String
   targetUrl   String
   frequency   String         @default("daily") // WatchFrequency
   active      Boolean        @default(true)
@@ -212,12 +223,21 @@ model Watch {
   testEmail        String?
   testPasswordEnc  String?
 
+  // M3: owner-scoping + one Watch per App. Legacy anonymous watches keep null.
+  app      App?    @relation(fields: [appId], references: [id])
+  appId    String? @unique
+  owner    User?   @relation(fields: [ownerId], references: [id])
+  ownerId  String?
+
   runs        Run[]
   lastRunAt   DateTime?
   nextRunAt   DateTime?
 
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+
+  @@index([ownerId])
+  @@index([appSlug])
 }
 
 // ─── App-side counters (CHE-11) ──────────────────────────────────────────────
@@ -227,4 +247,117 @@ model Watch {
 model Counter {
   name  String @id // e.g. "runNumber"
   value Int    @default(0)
+}
+
+// ─── M3: Owner accounts & per-owner QA→tracker loop (CHE-27) ──────────────────
+// Identity of record is Clerk (Google OAuth + email-code; Organizations for
+// multi-tenancy; SSO deferred — paid). This `User` is a THIN mirror synced via
+// Clerk webhooks so domain rows can tenant-scope without calling Clerk per
+// request. role/plan are String unions (no SQLite enums) — see src/lib/enums.ts.
+
+model User {
+  id          String  @id @default(cuid())
+  clerkUserId String  @unique
+  clerkOrgId  String? // active org for team/multi-tenant accounts
+  email       String
+  name        String?
+  role        String  @default("requester") // requester | provider_human | agent_operator | admin
+  plan        String  @default("free")       // free | starter | growth | business | enterprise
+
+  apps    App[]
+  runs    Run[]
+  watches Watch[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([clerkOrgId])
+}
+
+// One owner ↔ one target app. Holds the canonical appSlug for that owner; a URL
+// checked by two different owners is two Apps. The owner-facing test creds live
+// here (encrypted); anonymous one-off runs never create an App.
+model App {
+  id        String  @id @default(cuid())
+  owner     User    @relation(fields: [ownerId], references: [id])
+  ownerId   String
+  orgId     String?
+  targetUrl String
+  appSlug   String
+
+  // Target test credentials retained for recurring runs (encrypted, never logged).
+  testEmail       String?
+  testPasswordEnc String?
+  scopeHints      String?
+  userNotes       String?
+
+  watch   Watch?
+  tracker TrackerIntegration?
+  policy  TicketPolicy?
+  runs    Run[]
+  issues  IssueLink[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([ownerId, appSlug])
+  @@index([ownerId])
+}
+
+// The owner's connected issue tracker. type='linear' for now, behind a Tracker
+// abstraction (Jira/GitHub later). Tokens encrypted at rest (src/lib/crypto.ts).
+model TrackerIntegration {
+  id              String    @id @default(cuid())
+  app             App       @relation(fields: [appId], references: [id])
+  appId           String    @unique
+  type            String    @default("linear") // linear | jira | github
+  accessTokenEnc  String
+  refreshTokenEnc String?
+  tokenExpiresAt  DateTime?
+  teamId          String?   // tracker team/project the tickets land in
+  externalOrg     String?   // workspace/org identifier
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// How a 🔴 regression becomes a ticket the owner's automation will pick up.
+// JobLander (tenant #1) seed: pickupLabels=["monitor"], repoLabel="repo: joblander-app".
+// Generalizes Contract v1 (the labels were hardcoded there).
+model TicketPolicy {
+  id                String  @id @default(cuid())
+  app               App     @relation(fields: [appId], references: [id])
+  appId             String  @unique
+  pickupLabels      String  @default("[]") // JSON string[] — owner's automation pickup key(s)
+  repoLabel         String?                // routing label, e.g. "repo: joblander-app"
+  provenanceLabel   String  @default("checkmyapp")
+  state             String  @default("Backlog")
+  priorityRule      String  @default("{}") // JSON: journeys → priority, e.g. {"urgent":["login","dashboard"]}
+  titleFormat       String  @default("[Monitor] {verdict}")
+  escalateAfterRuns Int     @default(3)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// Dedup + idempotency + escalation state for a recurring regression. One row per
+// (app, dedupKey); reused across daily runs so we comment-and-count instead of
+// refiling, and escalate once occurrences pass the policy threshold.
+model IssueLink {
+  id              String   @id @default(cuid())
+  app             App      @relation(fields: [appId], references: [id])
+  appId           String
+  dedupKey        String   // hash(journey + step + failure signature)
+  externalIssueId String   // tracker issue id/identifier
+  status          String   @default("open") // open | resolved
+  occurrences     Int      @default(1)
+  escalatedAt     DateTime?
+  firstSeenRunId  String?
+  lastSeenAt      DateTime @default(now())
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([appId, dedupKey])
+  @@index([appId])
 }

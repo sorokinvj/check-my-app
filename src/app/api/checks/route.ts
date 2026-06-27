@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getDbFromContext, nextRunNumber } from "@/lib/db";
+import { getOptionalUser } from "@/lib/auth";
 import { triggerRun } from "@/lib/trigger";
 import { encryptSecret } from "@/lib/crypto";
 import { appSlugFromUrl } from "@/lib/utils";
@@ -30,6 +31,10 @@ export async function POST(req: Request) {
 
   const input = parsed.data;
 
+  // Attribute the run to the signed-in owner (if any) so it's tenant-scoped and
+  // shows on their dashboard; anonymous free-run funnel keeps ownerId null.
+  const owner = await getOptionalUser(prisma);
+
   const run = await prisma.run.create({
     data: {
       runNumber: await nextRunNumber(prisma),
@@ -39,6 +44,7 @@ export async function POST(req: Request) {
       testPasswordEnc: input.testPassword ? encryptSecret(input.testPassword) : null,
       userNotes: input.userNotes || null,
       notifyEmail: input.notifyEmail || null,
+      ownerId: owner?.id ?? null,
       status: "queued",
     },
     select: { id: true, publicId: true },
