@@ -9,6 +9,7 @@ export default async function DashboardPage() {
     include: {
       watch: true,
       policy: true,
+      tracker: true,
       runs: { orderBy: { createdAt: "desc" }, take: 1 },
     },
     orderBy: { createdAt: "desc" },
@@ -49,6 +50,18 @@ export default async function DashboardPage() {
                     {app.watch?.active ? `watching · ${app.watch.frequency}` : "paused"}
                     {labels && ` · labels: ${labels}`}
                   </p>
+                  {app.tracker ? (
+                    <p className="text-xs text-status-ok">
+                      ✓ Linear connected{app.tracker.externalOrg ? ` · ${app.tracker.externalOrg}` : ""}
+                    </p>
+                  ) : (
+                    <a
+                      href={`/api/integrations/linear/start?appId=${app.id}`}
+                      className="text-xs text-accent hover:underline"
+                    >
+                      Connect Linear →
+                    </a>
+                  )}
                 </div>
                 {latest ? (
                   <Link

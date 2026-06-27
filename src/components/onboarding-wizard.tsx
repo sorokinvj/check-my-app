@@ -60,18 +60,10 @@ export function OnboardingWizard({ prefillUrl }: { prefillUrl: string }) {
       {/* 3 — Tracker (Linear) */}
       <section className="card space-y-3 p-5">
         <p className="text-sm font-medium text-fg">3 · Connect your tracker</p>
-        <div className="flex items-center gap-3">
-          <button
-            type="button"
-            disabled
-            className="cursor-not-allowed rounded-md border border-ink-700 px-3 py-2 font-mono text-[13px] text-fg-faint"
-          >
-            Connect Linear (OAuth — coming next)
-          </button>
-        </div>
         <p className="text-xs text-fg-faint">
-          OAuth connect lands in CHE-31. For now, set the ticket parameters below manually so your
-          self-healing automation picks them up.
+          After you save, connect Linear from your dashboard (one-click OAuth) — we&apos;ll file
+          tickets into the team you authorize. Set the pickup parameters below so your self-healing
+          automation picks them up.
         </p>
       </section>
 

@@ -15,7 +15,7 @@ export async function requireUser(): Promise<{
   user: NonNullable<Awaited<ReturnType<PrismaClient["user"]["upsert"]>>>;
   db: PrismaClient;
 }> {
-  const { userId } = await auth();
+  const { userId, orgId } = await auth();
   if (!userId) redirect("/sign-in");
 
   const clerkUser = await currentUser();
@@ -27,6 +27,13 @@ export async function requireUser(): Promise<{
   const name =
     [clerkUser?.firstName, clerkUser?.lastName].filter(Boolean).join(" ") || null;
 
-  const user = await upsertUserFromClerk(db, { clerkUserId: userId, email, name });
+  // Capture the active Clerk organization so domain rows can org-scope (the
+  // user picks/creates an org in the Clerk <OrganizationSwitcher>); null = personal.
+  const user = await upsertUserFromClerk(db, {
+    clerkUserId: userId,
+    email,
+    name,
+    clerkOrgId: orgId ?? null,
+  });
   return { user, db };
 }
