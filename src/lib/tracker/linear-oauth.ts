@@ -57,21 +57,30 @@ export async function exchangeCode(opts: {
   return (await res.json()) as LinearToken;
 }
 
-// First team in the authorized workspace — used as the default ticket destination
-// (team selection UI is a later refinement; most owners have one main team).
+// First team in the authorized workspace — the default ticket destination at
+// connect time; the owner re-points it via the dashboard team picker.
 export async function fetchFirstTeam(
   accessToken: string,
 ): Promise<{ id: string; name: string } | null> {
+  const teams = await fetchTeams(accessToken);
+  return teams[0] ?? null;
+}
+
+// All teams in the authorized workspace, for the team picker. Linear caps the
+// page at 250; an owner with more teams is far outside our ICP.
+export async function fetchTeams(
+  accessToken: string,
+): Promise<{ id: string; name: string }[]> {
   const res = await fetch(GRAPHQL_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${accessToken}`,
     },
-    body: JSON.stringify({ query: "{ teams(first: 1) { nodes { id name } } }" }),
+    body: JSON.stringify({ query: "{ teams(first: 250) { nodes { id name } } }" }),
   });
   const json = (await res.json()) as {
     data?: { teams: { nodes: { id: string; name: string }[] } };
   };
-  return json.data?.teams.nodes[0] ?? null;
+  return json.data?.teams.nodes ?? [];
 }

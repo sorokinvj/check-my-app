@@ -1,5 +1,8 @@
 import Link from "next/link";
 import { requireUser } from "@/lib/auth";
+import { decryptSecret } from "@/lib/crypto";
+import { fetchTeams } from "@/lib/tracker/linear-oauth";
+import { TeamSelect } from "@/components/team-select";
 
 // Owner home (protected). Lists the apps this owner has under daily QA.
 export default async function DashboardPage() {
@@ -14,6 +17,18 @@ export default async function DashboardPage() {
     },
     orderBy: { createdAt: "desc" },
   });
+
+  // For connected apps, pull the workspace teams so the owner can pick which one
+  // tickets land in (best-effort — a transient Linear error just hides the picker).
+  const teamsByApp: Record<string, { id: string; name: string }[]> = {};
+  for (const app of apps) {
+    if (!app.tracker) continue;
+    try {
+      teamsByApp[app.id] = await fetchTeams(decryptSecret(app.tracker.accessTokenEnc));
+    } catch {
+      teamsByApp[app.id] = [];
+    }
+  }
 
   return (
     <main className="mx-auto w-full max-w-3xl px-4 py-12">
@@ -51,9 +66,20 @@ export default async function DashboardPage() {
                     {labels && ` · labels: ${labels}`}
                   </p>
                   {app.tracker ? (
-                    <p className="text-xs text-status-ok">
-                      ✓ Linear connected{app.tracker.externalOrg ? ` · ${app.tracker.externalOrg}` : ""}
-                    </p>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-status-ok">✓ Linear · team:</span>
+                      {teamsByApp[app.id]?.length ? (
+                        <TeamSelect
+                          appId={app.id}
+                          teams={teamsByApp[app.id]}
+                          current={app.tracker.teamId}
+                        />
+                      ) : (
+                        <span className="text-xs text-fg-faint">
+                          {app.tracker.externalOrg ?? "—"}
+                        </span>
+                      )}
+                    </div>
                   ) : (
                     <a
                       href={`/api/integrations/linear/start?appId=${app.id}`}
