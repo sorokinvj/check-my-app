@@ -85,8 +85,8 @@ Two ways to run:
 npm run dev:cf              # opennextjs build + wrangler dev -c web -c agent
 ```
 
-Real cross-worker `CHECK_RUN` binding, no proxy sockets. No HMR — rebuild to
-pick up changes.
+Web app on **http://localhost:8787** (wrangler's port). Real cross-worker
+`CHECK_RUN` binding, no proxy sockets. No HMR — rebuild to pick up changes.
 
 **UI development (HMR): two processes**
 
