@@ -61,6 +61,8 @@ Append actual measured spend here as milestones progress. Keep it terse.
 | 2026-06-14 | First full agent run on Cloudflare (Sonnet-nav + Opus-synth, example.com) | **$0.10** (Run.costUsd) | $0 (local) | live Workflow run |
 | 2026-06-16 | joblander.app first client, run #2 — discovery returned 0 journeys (no walk) | **$0.45** (Run.costUsd) | incl. browser hrs | live run cmqgny6 |
 | 2026-06-16 | joblander.app first client, run #6 — full walk, 5 journeys / 9 findings | **$2.25** (Run.costUsd) | incl. browser hrs | live run cmqgojm |
+| 2026-07-22 | joblander.app prod runs #10 (empty-walk hallucinated verdict) + #11 (false-positive Broken) | **$2.05 + $2.01** | incl. browser hrs | led to hydration+evidence fixes |
+| 2026-07-23 | Verification runs #12/#13 after agent fixes — #13: mostly_ok, 0 broken findings, honest hedging | **$2.11 + $2.12** | incl. browser hrs | fixes 77e61d7/4029bc8 confirmed |
 
 **Cost model — corrected with real data:** the earlier "well under $1.50" estimate
 was wrong for a rich authenticated app. A full joblander-class run (5 journeys
