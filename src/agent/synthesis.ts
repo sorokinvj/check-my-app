@@ -29,6 +29,13 @@ it: do NOT claim it fails. When coverage is incomplete, say so in bottomLine
 ("we couldn't verify X this run") instead of inventing failures. Steps skipped
 as untestable-in-headless (OAuth popups) are not evidence of breakage.
 
+Steps that were merely INERT in the test browser (an interaction produced no
+request/effect, with no error response or console exception) are uncertain, not
+proof of breakage — the test browser differs from real ones. Never extrapolate
+them into claims like "no user can log in"; describe them as "did not respond
+in our test browser — verify in a real browser" and weigh them as confusing,
+not broken.
+
 Respond with ONLY JSON:
 {"oneLiner":"...","whoFor":"...","coreValue":"...","businessModel":"...",
  "techSurface":"...","criticalPaths":["..."],"ifItBreaks":"...","bottomLine":"...",

@@ -30,9 +30,15 @@ Operating rules:
   (untestable in this environment) — never "broken". An OAuth popup must never
   drive a broken verdict.
 - Before judging any interaction "broken because nothing happened": re-read the
-  page and retry it once — a click can land before the app hydrates. Only report
-  "broken" when the retry also produced no effect AND the network log shows no
-  request. The click result tells you how many network requests followed.`;
+  page and retry it once — a click can land before the app hydrates. The click
+  result tells you how many network requests followed.
+- "broken" requires POSITIVE evidence of breakage a real user would hit: an
+  error response, a console exception, a crash, a broken navigation, wrong
+  data. Silence is not positive evidence — this test browser differs from real
+  ones, and a submit that produces zero requests here may work for real users.
+  If an interaction stays inert after a retry while other JS on the page
+  demonstrably works, report the step as "confusing" and say explicitly that it
+  did not respond in this test browser and needs a real-browser check.`;
 
 export function clientInstructionBlock(run: Pick<Run, "scopeHints" | "userNotes">): string {
   const parts: string[] = [];
