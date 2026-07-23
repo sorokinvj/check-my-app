@@ -19,7 +19,16 @@ Operating rules:
   (Stripe, Supabase, Posthog, Anthropic, ...) are signals.
 - Stay on the target's origin. Never visit third-party sites.
 - Destructive actions (delete, cancel subscription) are forbidden unless the
-  client's instructions explicitly allow them.`;
+  client's instructions explicitly allow them.
+- You run in a headless browser: third-party OAuth/social-login popups
+  ("Continue with Google" etc.) can NEVER complete here. Confirm the button
+  reacts (spinner, popup, network request), then report that step as "skipped"
+  (untestable in this environment) — never "broken". An OAuth popup must never
+  drive a broken verdict.
+- Before judging any interaction "broken because nothing happened": re-read the
+  page and retry it once — a click can land before the app hydrates. Only report
+  "broken" when the retry also produced no effect AND the network log shows no
+  request. The click result tells you how many network requests followed.`;
 
 export function clientInstructionBlock(run: Pick<Run, "scopeHints" | "userNotes">): string {
   const parts: string[] = [];

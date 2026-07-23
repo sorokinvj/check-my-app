@@ -195,14 +195,27 @@ async function navigate(env: ToolEnv, url: string): Promise<string> {
     waitUntil: "domcontentloaded",
     timeout: 20_000,
   });
+  // Give client JS a moment to hydrate: clicking a not-yet-interactive button is
+  // the #1 source of false "broken" findings on React/Next targets.
+  await env.page.waitForLoadState("load", { timeout: 8_000 }).catch(() => {});
+  await env.page.waitForTimeout(700);
   return `Navigated to ${env.page.url()} (status ${res?.status() ?? "?"})`;
 }
 
 async function click(env: ToolEnv, input: Record<string, unknown>): Promise<string> {
   const locator = resolveLocator(env.page, input);
+  const netBefore = env.networkLog.length;
   await locator.first().click({ timeout: 8_000 });
   await env.page.waitForLoadState("domcontentloaded").catch(() => {});
-  return `Clicked. Current URL: ${env.page.url()}`;
+  // Settle so the rolling network log captures whatever the click kicked off —
+  // the request count below is what lets the model tell "dead button" from
+  // "clicked before hydration".
+  await env.page.waitForTimeout(1_200);
+  const followed = env.networkLog.length - netBefore;
+  const base = `Clicked. Current URL: ${env.page.url()} (${followed} network request${followed === 1 ? "" : "s"} followed)`;
+  return followed > 0
+    ? base
+    : `${base}. If you expected this click to submit or load something, the page may not have finished hydrating — re-read the page and retry the click once before judging the element broken.`;
 }
 
 async function fill(env: ToolEnv, input: Record<string, unknown>): Promise<string> {
@@ -234,7 +247,15 @@ async function fill(env: ToolEnv, input: Record<string, unknown>): Promise<strin
           .or(page.getByRole("textbox", { name: label }))
       : page.locator("input:visible");
 
-  await locator.first().fill(value, { timeout: 8_000 });
+  const field = locator.first();
+  await field.fill(value, { timeout: 8_000 });
+  // React controlled inputs silently drop values typed before hydration —
+  // verify the value stuck and retry once if not.
+  const stuck = await field.inputValue().catch(() => null);
+  if (stuck !== null && stuck !== value) {
+    await env.page.waitForTimeout(600);
+    await field.fill(value, { timeout: 8_000 });
+  }
   return usedSecret ? "Filled (credential substituted server-side)." : "Filled.";
 }
 

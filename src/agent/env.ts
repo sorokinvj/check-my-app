@@ -17,6 +17,11 @@ export interface AgentBindings {
   ANTHROPIC_API_KEY: string;
   ANTHROPIC_NAV_MODEL?: string;
   ANTHROPIC_SYNTH_MODEL?: string;
+  // Verdict-ready notifications (Resend). All optional — absent = log-only.
+  EMAIL_API_KEY?: string;
+  EMAIL_FROM?: string;
+  // Public web origin for links in emails, e.g. https://checkmyapp.dev
+  APP_URL?: string;
 }
 
 export interface AgentEnv {

@@ -1,11 +1,16 @@
-// Verdict-ready notifications. Provider-agnostic: wire Resend/Postmark/SES here.
-// With no EMAIL_API_KEY set, it logs to the console so local dev works offline.
+// Verdict-ready notifications, provider = Resend (plain fetch — works in both
+// Node and workerd). Config arrives as arguments because the agent worker has
+// no process.env: bindings flow in from workflow.ts. With no apiKey the send
+// degrades to a console log so local dev works offline.
 
 interface VerdictReadyArgs {
   to: string;
   appSlug: string;
   publicId: string;
   partial?: boolean;
+  apiKey?: string;
+  from?: string;
+  baseUrl?: string;
 }
 
 export async function sendVerdictReady({
@@ -13,20 +18,33 @@ export async function sendVerdictReady({
   appSlug,
   publicId,
   partial,
+  apiKey,
+  from,
+  baseUrl,
 }: VerdictReadyArgs): Promise<void> {
-  const base = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+  const base = baseUrl ?? "http://localhost:3000";
   const url = `${base}/verdict/${publicId}`;
   const subject = partial
     ? `We got partway through ${appSlug} — here's what we found`
     : `Your verdict for ${appSlug} is ready`;
 
-  if (!process.env.EMAIL_API_KEY) {
+  if (!apiKey || !from) {
     // eslint-disable-next-line no-console
     console.log(`[email:dev] to=${to} subject="${subject}" url=${url}`);
     return;
   }
 
-  // TODO: replace with real provider call, e.g. Resend:
-  //   await resend.emails.send({ from: process.env.EMAIL_FROM, to, subject, html });
-  throw new Error("Email provider not implemented — set up src/lib/email.ts");
+  const res = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      from,
+      to: [to],
+      subject,
+      html: `<p>We finished looking at <strong>${appSlug}</strong>.</p><p><a href="${url}">Open your verdict</a></p><p>— CheckMyApp</p>`,
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(`Resend send failed: ${res.status} ${await res.text()}`);
+  }
 }

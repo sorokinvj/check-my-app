@@ -7,6 +7,12 @@
   "limits": {
     "cpu_ms": 300000
   },
+  // Public (non-secret) runtime vars. EMAIL_API_KEY is a secret — set it with
+  // `wrangler secret put EMAIL_API_KEY --config wrangler-agent.jsonc`.
+  "vars": {
+    "APP_URL": "https://checkmyapp.dev",
+    "EMAIL_FROM": "verdicts@checkmyapp.dev"
+  },
   "browser": {
     "binding": "MYBROWSER"
   },

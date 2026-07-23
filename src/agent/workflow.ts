@@ -16,6 +16,7 @@ import { launchAgentBrowser, surfaceScan } from "./browser";
 import { discoverApp, type RunInput } from "./discovery";
 import { walkOneJourney, type WalkRun } from "./execution";
 import { synthesizeVerdict, type SynthesizedFinding } from "./synthesis";
+import { sendVerdictReady } from "@/lib/email";
 import type { TranscriptEntry } from "./core";
 
 export interface CheckRunParams {
@@ -33,6 +34,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
         where: { id: runId },
         select: {
           id: true,
+          publicId: true,
           targetUrl: true,
           appSlug: true,
           testEmail: true,
@@ -203,6 +205,24 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
           },
         });
       });
+
+      // Verdict-ready email (CHE: the /check form promises it). Non-fatal: a
+      // notification failure must never fail a completed run.
+      if (run.notifyEmail) {
+        await step.do("notify", async () => {
+          await sendVerdictReady({
+            to: run.notifyEmail!,
+            appSlug: run.appSlug,
+            publicId: run.publicId,
+            apiKey: this.env.EMAIL_API_KEY,
+            from: this.env.EMAIL_FROM,
+            baseUrl: this.env.APP_URL,
+          }).catch((err) => {
+            // eslint-disable-next-line no-console
+            console.warn(`[notify] verdict email failed: ${err instanceof Error ? err.message : err}`);
+          });
+        });
+      }
 
       // Privacy: clear test credentials after a terminal completion, unless a
       // Watch retains them for recurring runs.

@@ -24,6 +24,11 @@ Severity: high / medium / low. Every finding must trace back to something
 actually observed in the steps — no speculation. Where possible reference the
 step it came from via stepRef (journeyIndex and stepIndex are 0-based).
 
+If the journeys array is empty, or a step was skipped, nothing was verified for
+it: do NOT claim it fails. When coverage is incomplete, say so in bottomLine
+("we couldn't verify X this run") instead of inventing failures. Steps skipped
+as untestable-in-headless (OAuth popups) are not evidence of breakage.
+
 Respond with ONLY JSON:
 {"oneLiner":"...","whoFor":"...","coreValue":"...","businessModel":"...",
  "techSurface":"...","criticalPaths":["..."],"ifItBreaks":"...","bottomLine":"...",
@@ -97,10 +102,20 @@ export async function synthesizeVerdict(args: {
   // Verdict rolls up BOTH observed journey-step outcomes AND synthesized
   // findings. Earlier it ignored findings, so a run with 0 journeys but several
   // high-severity findings reported "all_good" — a contradiction.
-  const verdict = rollUpVerdict(
+  let verdict = rollUpVerdict(
     journeys.map((j) => j.status as StepStatus),
     parsed.findings,
   );
+  // Nothing walked ⇒ nothing verified end-to-end: a "broken" verdict would be
+  // speculation (Run #10 fabricated a broken login exactly this way). Cap at
+  // needs_attention unless a security exposure was directly observed.
+  if (
+    journeys.length === 0 &&
+    verdict === "broken" &&
+    !parsed.findings.some((f) => f.category === "exposed")
+  ) {
+    verdict = "needs_attention";
+  }
   return { ...parsed, verdict, costUsd };
 }
 
