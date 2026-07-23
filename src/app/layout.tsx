@@ -49,6 +49,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                   </SignInButton>
                 </Show>
                 <Show when="signed-in">
+                  <Link
+                    href="/dashboard"
+                    className="font-mono text-[13px] text-fg-muted transition-colors hover:text-fg"
+                  >
+                    Dashboard
+                  </Link>
                   <UserButton />
                 </Show>
               </div>

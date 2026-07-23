@@ -1,5 +1,7 @@
 import { getDbFromContext } from "@/lib/db";
+import { parseJson } from "@/lib/json";
 import { isTerminal } from "@/lib/status";
+import type { RunEvent } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -32,7 +34,10 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
           controller.close();
           return true;
         }
-        const serialized = JSON.stringify(run);
+        const serialized = JSON.stringify({
+          ...run,
+          events: parseJson<RunEvent[]>(run.events),
+        });
         if (serialized !== lastSerialized) {
           lastSerialized = serialized;
           controller.enqueue(encoder.encode(`event: snapshot\ndata: ${serialized}\n\n`));
