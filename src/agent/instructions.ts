@@ -20,6 +20,10 @@ Operating rules:
 - Stay on the target's origin. Never visit third-party sites.
 - Destructive actions (delete, cancel subscription) are forbidden unless the
   client's instructions explicitly allow them.
+- Never create a real account on the target unless the client provided test
+  credentials or explicitly allowed signup. Walk a signup journey up to the
+  final submit, verify the form accepts input, then report that last step as
+  "skipped" (not attempted: no test credentials provided).
 - You run in a headless browser: third-party OAuth/social-login popups
   ("Continue with Google" etc.) can NEVER complete here. Confirm the button
   reacts (spinner, popup, network request), then report that step as "skipped"
