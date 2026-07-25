@@ -128,3 +128,21 @@ Test credentials: encrypted at rest, substituted server-side (the LLM only sees
 transcripts, blurred in screenshots, refused off the target origin, cleared
 after terminal runs unless a Watch retains them. Evidence R2 is private and
 proxied through the web worker; verdict permalinks are unguessable.
+
+## MCP — checks from agentic frameworks
+
+`mcp/server.ts` is a stdio MCP server exposing CheckMyApp to any MCP client
+(Claude Code first). Tools: `start_check` (url + focus notes → run id),
+`get_check_status` (poll), `get_verdict` (structured verdict: journeys,
+findings, cost — decide pass/fail).
+
+```bash
+claude mcp add checkmyapp -- npx tsx mcp/server.ts
+# CHECKMYAPP_URL=https://checkmyapp.dev is the default target
+```
+
+The canonical post-merge loop: CI deploys → your agent calls
+`start_check{url, notes: "PR #123 touched checkout — verify it first"}` →
+polls `get_check_status` → on `needs_attention`/`broken` verdict files the
+findings (or blocks the release). The same API is curl-able without MCP:
+`POST /api/checks`, `GET /api/runs/{id}`, `GET /api/runs/{id}/verdict`.
