@@ -36,7 +36,7 @@ export type FindingCategory =
   | "polish"
   | "exposed";
 
-export type FindingMark = "none" | "known" | "fixed" | "false_positive";
+export type FindingMark = "none" | "known" | "fixed" | "false_positive" | "watch";
 
 export type EvidenceType =
   | "screenshot"
@@ -78,7 +78,7 @@ export const FINDING_CATEGORIES: FindingCategory[] = [
   "exposed",
 ];
 export const SEVERITIES: Severity[] = ["high", "medium", "low"];
-export const FINDING_MARKS: FindingMark[] = ["none", "known", "fixed", "false_positive"];
+export const FINDING_MARKS: FindingMark[] = ["none", "known", "fixed", "false_positive", "watch"];
 export const WATCH_FREQUENCIES: WatchFrequency[] = ["daily", "every_6h", "manual"];
 export const USER_ROLES: UserRole[] = [
   "requester",

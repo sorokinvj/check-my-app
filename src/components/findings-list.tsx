@@ -19,9 +19,10 @@ const EVIDENCE_LABEL: Record<Evidence["type"], string> = {
 
 const MARK_LABEL: Record<FindingMark, string | null> = {
   none: null,
-  known: "known issue",
+  known: "that's fine",
   fixed: "marked fixed",
   false_positive: "disputed",
+  watch: "watching",
 };
 
 // Verdict §3.4 — "WHAT WE FOUND". Third on purpose: lead with the mirror, not the
@@ -80,9 +81,31 @@ export function FindingsList({ findings }: { findings: FindingWithEvidence[] }) 
 function FindingRow({ finding }: { finding: FindingWithEvidence }) {
   const [mark, setMark] = useState<FindingMark>(finding.mark as FindingMark);
   const [busy, setBusy] = useState(false);
+  const [ticket, setTicket] = useState<{ id: string; url?: string } | null>(null);
+  const [ticketErr, setTicketErr] = useState<string | null>(null);
   const detail = parseJson<FindingDetail>(finding.detail) ?? {};
   const sev = SEVERITY_META[finding.severity];
   const markLabel = MARK_LABEL[mark];
+
+  async function createTicket() {
+    setBusy(true);
+    setTicketErr(null);
+    const res = await fetch(`/api/findings/${finding.id}/ticket`, { method: "POST" }).catch(
+      () => null,
+    );
+    const body = ((await res?.json().catch(() => null)) ?? {}) as {
+      identifier?: string;
+      url?: string;
+      message?: string;
+      error?: string;
+    };
+    if (res?.ok && body.identifier) {
+      setTicket({ id: body.identifier, url: body.url });
+    } else {
+      setTicketErr(body.message ?? body.error ?? "Couldn't create the ticket.");
+    }
+    setBusy(false);
+  }
 
   async function setMarkRemote(next: FindingMark) {
     setBusy(true);
@@ -182,13 +205,24 @@ function FindingRow({ finding }: { finding: FindingWithEvidence }) {
             </div>
           )}
 
-          <div className="flex flex-wrap gap-2 border-t border-ink-700 pt-3">
+          <div className="flex flex-wrap items-center gap-2 border-t border-ink-700 pt-3">
+            {/* Loop C triage: "That's fine" mutes it for future runs (noise
+                filter), "Watch it" makes the next run verify it FIRST, and
+                "Create Ticket" files it into the owner's Linear with the
+                onboarding TicketPolicy parameters. */}
             <TriageButton
               active={mark === "known"}
               disabled={busy}
               onClick={() => setMarkRemote(mark === "known" ? "none" : "known")}
             >
-              Mark as known
+              That&apos;s fine
+            </TriageButton>
+            <TriageButton
+              active={mark === "watch"}
+              disabled={busy}
+              onClick={() => setMarkRemote(mark === "watch" ? "none" : "watch")}
+            >
+              Watch it
             </TriageButton>
             <TriageButton
               active={mark === "fixed"}
@@ -204,6 +238,21 @@ function FindingRow({ finding }: { finding: FindingWithEvidence }) {
             >
               Dispute
             </TriageButton>
+            {ticket ? (
+              <a
+                href={ticket.url}
+                target="_blank"
+                rel="noreferrer"
+                className="rounded-md border border-accent/40 bg-accent/10 px-2.5 py-1 font-mono text-xs text-accent"
+              >
+                ✓ {ticket.id}
+              </a>
+            ) : (
+              <TriageButton active={false} disabled={busy} onClick={createTicket}>
+                Create Ticket
+              </TriageButton>
+            )}
+            {ticketErr && <span className="text-xs text-status-broken">{ticketErr}</span>}
           </div>
         </div>
       </details>

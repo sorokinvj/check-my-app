@@ -49,6 +49,24 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
       return r;
     });
 
+    // Loop C: findings the owner marked "watch" on earlier runs of this app are
+    // verified FIRST — they become a priority block in the client instructions.
+    const watched = await step.do("load-watched-findings", async () => {
+      const rows = await env.db.finding.findMany({
+        where: { mark: "watch", run: { appSlug: run.appSlug, id: { not: run.id } } },
+        orderBy: { createdAt: "desc" },
+        take: 10,
+        select: { title: true },
+      });
+      return rows.map((f) => f.title);
+    });
+    const watchNotes = watched.length
+      ? `PRIORITY — the owner flagged these earlier findings to verify first thing this run:\n${watched
+          .map((t) => `- ${t}`)
+          .join("\n")}`
+      : null;
+    const userNotes = [run.userNotes, watchNotes].filter(Boolean).join("\n\n") || null;
+
     const walkRun: WalkRun = {
       id: run.id,
       appSlug: run.appSlug,
@@ -56,7 +74,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
       testEmail: run.testEmail,
       testPasswordEnc: run.testPasswordEnc,
       scopeHints: run.scopeHints,
-      userNotes: run.userNotes,
+      userNotes,
     };
 
     try {
@@ -102,7 +120,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
             env,
             llm,
             browser,
-            run: run as RunInput,
+            run: { ...run, userNotes } as RunInput,
             onLiveScreenshot: (url) => setLive(env, runId, { liveScreenshotUrl: url }),
             onProgress: (note) => setLive(env, runId, { currentAction: note }),
           });

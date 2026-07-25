@@ -35,7 +35,7 @@ export const updateLensSchema = z.object({
 
 // Loop C — finding triage from the verdict page (feeds Daily Check noise filter).
 export const markFindingSchema = z.object({
-  mark: z.enum(["none", "known", "fixed", "false_positive"]),
+  mark: z.enum(["none", "known", "fixed", "false_positive", "watch"]),
 });
 
 // Enable Daily Watch from the verdict footer (Loop B).
