@@ -69,41 +69,53 @@ function JourneyCard({
 
       {open && (
         <div className="border-t border-ink-700 px-5 py-4">
-          <div className="strip-scroll flex items-stretch gap-1 overflow-x-auto pb-2">
+          {/* Storyboard discipline (NN/g, Playwright trace viewer): equal
+              fixed-size cells top-aligned, caption in a fixed-height box below
+              the frame, arrows on the thumbnail axis — caption length can
+              never make the row ragged. Failed steps get a status ring;
+              skipped ones dim. */}
+          <div className="strip-scroll flex items-start gap-1 overflow-x-auto pb-2 pt-1">
             {journey.steps.map((step, i) => {
               const s = STEP_STATUS_META[step.status];
               const isSelected = selected?.id === step.id;
+              const isFailed = step.status === "broken" || step.status === "exposed";
               return (
                 <div key={step.id} className="flex items-start">
-                  {/* mt-9 keeps the arrow on the thumbnail's horizontal axis
-                      (p-2 card padding + half of the h-20 thumbnail). */}
-                  {i > 0 && <span className="mx-1 mt-9 shrink-0 text-fg-faint">→</span>}
+                  {/* mt-12 ≈ card padding + half of the aspect-[16/10] thumb
+                      on a w-40 cell — arrow points frame-to-frame. */}
+                  {i > 0 && <span className="mx-1 mt-12 shrink-0 text-fg-faint">→</span>}
                   <button
                     onClick={() => setSelected(isSelected ? null : step)}
-                    className={`w-32 shrink-0 rounded-lg border p-2 text-left transition-all ${
+                    className={`w-40 shrink-0 rounded-lg border p-2 text-left transition-all ${
                       isSelected
                         ? "border-accent bg-ink-800 shadow-glow"
                         : "border-ink-700 bg-ink-900 hover:border-ink-600 hover:bg-ink-800"
-                    }`}
+                    } ${step.status === "skipped" ? "opacity-60" : ""}`}
                   >
-                    <div className="relative flex h-20 items-center justify-center overflow-hidden rounded bg-ink-950">
+                    <div
+                      className={`relative flex aspect-[16/10] items-center justify-center overflow-hidden rounded bg-ink-950 ${
+                        isFailed ? "ring-2 ring-status-broken" : ""
+                      }`}
+                    >
                       {step.screenshotUrl ? (
                         // eslint-disable-next-line @next/next/no-img-element
                         <img
                           src={step.screenshotUrl}
                           alt={step.label}
-                          className="h-full w-full object-cover object-top"
+                          className={`h-full w-full object-cover object-top ${
+                            step.status === "skipped" ? "grayscale" : ""
+                          }`}
                         />
                       ) : (
                         <span className={`text-xl ${s.className}`}>{s.emoji}</span>
                       )}
                       <span
-                        className={`absolute left-1.5 top-1.5 flex h-4 w-4 items-center justify-center rounded-full text-[10px] font-bold text-ink-950 ${s.dotClassName}`}
+                        className={`absolute bottom-1 right-1 flex h-4 w-4 items-center justify-center rounded-full text-[10px] font-bold text-ink-950 ${s.dotClassName}`}
                       >
                         {s.emoji}
                       </span>
                     </div>
-                    <p className="mt-1.5 line-clamp-2 min-h-8 text-[11px] leading-4 text-fg-muted">
+                    <p className="mt-1.5 line-clamp-2 h-8 text-[11px] leading-4 text-fg-muted">
                       {step.label}
                     </p>
                   </button>
@@ -115,8 +127,14 @@ function JourneyCard({
           {selected && <StepDetail step={selected} />}
 
           {journey.summary && (
-            <p className="mt-3 text-sm text-fg-muted">
-              <span className="text-fg">What we found:</span> {journey.summary}
+            /* Takeaway zone (NN/g "insights"): full-width bar with a left
+               accent in the journey's worst status color — a verdict line,
+               not another step caption. */
+            <p
+              className={`mt-3 rounded-r-md border-l-2 border-current/50 bg-ink-800/40 py-2 pl-3 pr-3 text-sm text-fg-muted ${meta.className}`}
+            >
+              <span className="font-medium">What we found:</span>{" "}
+              <span className="text-fg-muted">{journey.summary}</span>
             </p>
           )}
 
