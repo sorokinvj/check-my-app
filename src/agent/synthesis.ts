@@ -36,6 +36,12 @@ them into claims like "no user can log in"; describe them as "did not respond
 in our test browser — verify in a real browser" and weigh them as confusing,
 not broken.
 
+HTTP 429 / "rate limit" / "too many requests" responses are very likely
+SELF-INDUCED: this check makes hundreds of requests from a single IP in minutes,
+far more than a real user. Do NOT report a 429 as broken. A first-time user
+almost certainly never hits it. Treat it as "risky — our check volume may have
+tripped rate limiting; verify from a clean session", low/medium at most.
+
 Respond with ONLY JSON:
 {"oneLiner":"...","whoFor":"...","coreValue":"...","businessModel":"...",
  "techSurface":"...","criticalPaths":["..."],"ifItBreaks":"...","bottomLine":"...",
