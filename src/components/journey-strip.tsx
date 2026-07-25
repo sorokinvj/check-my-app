@@ -79,6 +79,7 @@ function JourneyCard({
               const s = STEP_STATUS_META[step.status];
               const isSelected = selected?.id === step.id;
               const isFailed = step.status === "broken" || step.status === "exposed";
+              const hasShot = Boolean(step.screenshotUrl);
               return (
                 <div key={step.id} className="flex items-start">
                   {/* mt-12 ≈ card padding + half of the aspect-[16/10] thumb
@@ -92,29 +93,41 @@ function JourneyCard({
                         : "border-ink-700 bg-ink-900 hover:border-ink-600 hover:bg-ink-800"
                     } ${step.status === "skipped" ? "opacity-60" : ""}`}
                   >
-                    <div
-                      className={`relative flex aspect-[16/10] items-center justify-center overflow-hidden rounded bg-ink-950 ${
-                        isFailed ? "ring-2 ring-status-broken" : ""
-                      }`}
-                    >
-                      {step.screenshotUrl ? (
-                        // eslint-disable-next-line @next/next/no-img-element
+                    {hasShot ? (
+                      <div
+                        className={`relative flex aspect-[16/10] items-center justify-center overflow-hidden rounded bg-ink-950 ${
+                          isFailed ? "ring-2 ring-status-broken" : ""
+                        }`}
+                      >
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img
-                          src={step.screenshotUrl}
+                          src={step.screenshotUrl!}
                           alt={step.label}
                           className={`h-full w-full object-cover object-top ${
                             step.status === "skipped" ? "grayscale" : ""
                           }`}
                         />
-                      ) : (
-                        <span className={`text-xl ${s.className}`}>{s.emoji}</span>
-                      )}
-                      <span
-                        className={`absolute bottom-1 right-1 flex h-4 w-4 items-center justify-center rounded-full text-[10px] font-bold text-ink-950 ${s.dotClassName}`}
+                        <span
+                          className={`absolute bottom-1 right-1 flex h-4 w-4 items-center justify-center rounded-full text-[10px] font-bold text-ink-950 ${s.dotClassName}`}
+                        >
+                          {s.emoji}
+                        </span>
+                      </div>
+                    ) : (
+                      // Non-visual step (an assertion / check with no meaningful
+                      // screenshot): a status chip on a dashed frame, not a fake
+                      // photo box that reads as a broken image.
+                      <div
+                        className={`flex aspect-[16/10] items-center justify-center gap-1.5 rounded border border-dashed ${
+                          isFailed ? "border-status-broken/60" : "border-ink-600"
+                        } bg-ink-900`}
                       >
-                        {s.emoji}
-                      </span>
-                    </div>
+                        <span className={`text-base ${s.className}`}>{s.emoji}</span>
+                        <span className="font-mono text-[10px] uppercase tracking-wider text-fg-faint">
+                          {s.label}
+                        </span>
+                      </div>
+                    )}
                     <p className="mt-1.5 line-clamp-2 h-8 text-[11px] leading-4 text-fg-muted">
                       {step.label}
                     </p>
