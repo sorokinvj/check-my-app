@@ -40,10 +40,29 @@ export async function requireUser(): Promise<{
 
 // API-route auth: resolve the signed-in user's D1 mirror, or null (no redirect).
 // Use in route handlers where anonymous access is valid for some paths.
+// Lazily upserts the mirror like requireUser does: without this, a Clerk user
+// who never visited a protected page has no D1 row, every optional-auth API
+// treats them as anonymous, and flows like Enable Daily Watch 401-loop through
+// sign-in with no visible error (the webhook that would create the row is
+// inert until CLERK_WEBHOOK_SIGNING_SECRET is configured).
 export async function getOptionalUser(db: PrismaClient) {
-  const { userId } = await auth();
+  const { userId, orgId } = await auth();
   if (!userId) return null;
-  return db.user.findUnique({ where: { clerkUserId: userId } });
+  const existing = await db.user.findUnique({ where: { clerkUserId: userId } });
+  if (existing) return existing;
+  const clerkUser = await currentUser();
+  const email =
+    clerkUser?.primaryEmailAddress?.emailAddress ??
+    clerkUser?.emailAddresses?.[0]?.emailAddress ??
+    "";
+  const name =
+    [clerkUser?.firstName, clerkUser?.lastName].filter(Boolean).join(" ") || null;
+  return upsertUserFromClerk(db, {
+    clerkUserId: userId,
+    email,
+    name,
+    clerkOrgId: orgId ?? null,
+  });
 }
 
 // Tenant guard for resources that may be owned or anonymous (CHE-33).

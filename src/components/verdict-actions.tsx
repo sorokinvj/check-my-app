@@ -55,7 +55,7 @@ export function EnableWatchButton({
             router.push(`/sign-in?redirect_url=${back}`);
             return;
           }
-          const body = (await res?.json().catch(() => ({}))) as { error?: string };
+          const body = ((await res?.json().catch(() => null)) ?? {}) as { error?: string };
           setErr(body.error ?? "Couldn't enable Daily Watch.");
           setBusy(false);
         }}

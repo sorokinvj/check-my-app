@@ -13,7 +13,11 @@ export interface PlanLimits {
 }
 
 export const PLAN_LIMITS: Record<UserPlan, PlanLimits> = {
-  free: { maxWatches: 0, maxFrequency: null, trackerIntegration: false },
+  // Free gets ONE daily watch: every verdict page advertises "Enable Daily
+  // Watch", and with no billing wired a 0-cap made the button a dead end for
+  // every account that exists. One watch is the product's hook; caps bite at
+  // the second app.
+  free: { maxWatches: 1, maxFrequency: "daily", trackerIntegration: false },
   starter: { maxWatches: 1, maxFrequency: "daily", trackerIntegration: true },
   growth: { maxWatches: 10, maxFrequency: "every_6h", trackerIntegration: true },
   business: { maxWatches: 50, maxFrequency: "every_6h", trackerIntegration: true },
