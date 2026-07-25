@@ -9,6 +9,8 @@ import { JourneyStrips } from "@/components/journey-strip";
 import { AppAnatomySection } from "@/components/app-anatomy";
 import { FindingsList } from "@/components/findings-list";
 import { EnableWatchButton, RecheckButton } from "@/components/verdict-actions";
+import { ExportSpecs } from "@/components/export-specs";
+import { getOptionalUser } from "@/lib/auth";
 import type { AppLens } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -56,6 +58,16 @@ export default async function VerdictPage({ params }: { params: Promise<{ id: st
     orderBy: [{ title: "asc" }, { version: "desc" }],
     distinct: ["title"],
   });
+  // If the signed-in viewer owns this target, surface their GitHub connection
+  // so "Export to GitHub" renders in its connected state. Anonymous viewers get
+  // the connect path (the export API redirects them to sign-in).
+  const viewer = await getOptionalUser(prisma);
+  const viewerApp = viewer
+    ? await prisma.app.findUnique({
+        where: { ownerId_appSlug: { ownerId: viewer.id, appSlug: run.appSlug } },
+        include: { repo: { select: { repoFullName: true } } },
+      })
+    : null;
   const newerRun = await prisma.run.findFirst({
     where: { baselineRunId: run.id, status: { in: ["completed", "partial"] } },
     orderBy: { createdAt: "desc" },
@@ -184,6 +196,12 @@ export default async function VerdictPage({ params }: { params: Promise<{ id: st
                 </li>
               )}
             </ul>
+            {generatedTests.length > 0 && (
+              <ExportSpecs
+                runId={run.publicId}
+                connectedRepo={viewerApp?.repo?.repoFullName ?? null}
+              />
+            )}
           </section>
         )}
 

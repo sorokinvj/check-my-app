@@ -294,6 +294,7 @@ model App {
 
   watch   Watch?
   tracker TrackerIntegration?
+  repo    RepoIntegration?
   policy  TicketPolicy?
   runs    Run[]
   issues  IssueLink[]
@@ -317,6 +318,26 @@ model TrackerIntegration {
   tokenExpiresAt  DateTime?
   teamId          String?   // tracker team/project the tickets land in
   externalOrg     String?   // workspace/org identifier
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// The owner's connected code host, used to export generated Playwright specs
+// as a PR (verdict "Export to GitHub"). Separate from TrackerIntegration: code
+// host ≠ issue tracker, and Linear may already occupy that (unique) slot.
+// provider='github' only for now. v1 auth is an owner-provided fine-grained PAT
+// (Contents + Pull requests read/write on one repo), encrypted at rest via
+// src/lib/crypto.ts — swapping to a GitHub App later only changes how tokenEnc
+// is obtained. We never push to defaultBranch; export is branch + PR only.
+model RepoIntegration {
+  id            String @id @default(cuid())
+  app           App    @relation(fields: [appId], references: [id])
+  appId         String @unique
+  provider      String @default("github")
+  tokenEnc      String
+  repoFullName  String // "owner/repo"
+  defaultBranch String @default("main")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
