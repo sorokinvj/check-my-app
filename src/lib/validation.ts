@@ -45,6 +45,17 @@ export const createWatchSchema = z.object({
   notifyOnChangeOnly: z.boolean().default(true),
 });
 
+// Connect GitHub for spec export (verdict "Export to GitHub"). v1: fine-grained
+// PAT + owner/repo; the token is validated against the repo before storing.
+export const connectGithubSchema = z.object({
+  runId: z.string().min(1), // run publicId the connect started from
+  token: z.string().trim().min(20).max(400),
+  repo: z
+    .string()
+    .trim()
+    .regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/, "Use the owner/repo form"),
+});
+
 // Watch settings (Screen 4).
 export const updateWatchSchema = z.object({
   frequency: z.enum(["daily", "every_6h", "manual"]).optional(),
