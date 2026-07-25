@@ -31,12 +31,25 @@ export default async function VerdictPage({ params }: { params: Promise<{ id: st
       journeys: { include: { steps: { orderBy: { order: "asc" } } }, orderBy: { order: "asc" } },
       findings: { include: { evidence: true }, orderBy: { number: "asc" } },
       watch: { select: { active: true } },
+      llmUsage: true,
     },
   });
   if (!run) notFound();
 
   const verdictMeta = run.verdict ? VERDICT_META[run.verdict] : null;
   const duration = formatDuration(run.startedAt, run.completedAt);
+  // Tokens-model-money — the primary metric. Ledger rows when present (new
+  // runs), Run.costUsd alone for runs that predate the LlmUsage table.
+  const totalTokens = run.llmUsage.reduce(
+    (s, u) => s + u.inputTokens + u.cacheWriteTokens + u.cacheReadTokens + u.outputTokens,
+    0,
+  );
+  const byModel = [...new Set(run.llmUsage.map((u) => u.model))].map((model) => ({
+    model: model.replace(/^claude-/, "").replace(/-[\d-]+$/, ""),
+    costUsd: run.llmUsage.filter((u) => u.model === model).reduce((s, u) => s + u.costUsd, 0),
+  }));
+  const fmtTok = (n: number) =>
+    n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : `${n}`;
   const hasWatch = Boolean(run.watch?.active);
   const generatedTests = await prisma.generatedTest.findMany({
     where: { appSlug: run.appSlug },
@@ -78,7 +91,14 @@ export default async function VerdictPage({ params }: { params: Promise<{ id: st
                 minute: "2-digit",
               }) ?? "—"}
               {duration && ` · ${duration}`} · Run #{run.runNumber}
+              {run.costUsd != null && ` · $${run.costUsd.toFixed(2)}`}
             </p>
+            {totalTokens > 0 && (
+              <p className="mt-0.5 font-mono text-xs text-fg-faint">
+                {fmtTok(totalTokens)} tokens
+                {byModel.map((m) => ` · ${m.model} $${m.costUsd.toFixed(2)}`).join("")}
+              </p>
+            )}
             {run.bottomLine && <p className="mt-2 text-sm text-fg-muted">{run.bottomLine}</p>}
           </div>
           <div className="flex items-center gap-2.5">

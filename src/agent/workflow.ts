@@ -11,7 +11,7 @@ import type { AppAnatomy } from "@/lib/types";
 import { normalizeAnatomy } from "@/lib/anatomy";
 import type { RunEvent, RunPhase } from "@/lib/types";
 import { makeAgentEnv, putText, type AgentBindings, type AgentEnv } from "./env";
-import { makeLlm } from "./llm";
+import { makeLlm, type UsageTotals } from "./llm";
 import { launchAgentBrowser, surfaceScan } from "./browser";
 import { discoverApp, type RunInput } from "./discovery";
 import { walkOneJourney, type WalkRun } from "./execution";
@@ -112,6 +112,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
               ? `Proposed ${d.journeys.length} user journeys`
               : "No journeys mapped",
           });
+          await recordUsage(env, runId, "discovery", llm.navModel, d.usage);
           return d;
         } finally {
           await browser.close();
@@ -144,6 +145,11 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
               onLiveScreenshot: (url) => setLive(env, runId, { liveScreenshotUrl: url }),
               onProgress: (note) => setLive(env, runId, { currentAction: note }),
             });
+            const journey = await env.db.journey.findFirst({
+              where: { runId, order: i },
+              select: { id: true },
+            });
+            await recordUsage(env, runId, "walking", llm.navModel, r.usage, journey?.id ?? null);
             return r.costUsd;
           } finally {
             await browser.close();
@@ -172,6 +178,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
       await step.do("writing", async () => {
         await transition(env, runId, "writing", { icon: "info", text: "Writing your verdict" });
         const synth = await synthesizeVerdict({ env, llm, runId, anatomy });
+        await recordUsage(env, runId, "synthesis", llm.synthModel, synth.usage);
         await persistFindings(env, runId, synth.findings);
         if (synth.findings.length) {
           await appendEvent(env, runId, "writing", {
@@ -241,6 +248,26 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
       throw err;
     }
   }
+}
+
+// ─── LLM usage ledger ────────────────────────────────────────────────────────
+// One row per unit of work (phase, or journey within walking). Idempotent per
+// (runId, phase, journeyId) so Workflow step retries replace, not duplicate.
+
+async function recordUsage(
+  env: AgentEnv,
+  runId: string,
+  phase: string,
+  model: string,
+  usage: UsageTotals,
+  journeyId?: string | null,
+) {
+  await env.db.llmUsage.deleteMany({
+    where: { runId, phase, journeyId: journeyId ?? null },
+  });
+  await env.db.llmUsage.create({
+    data: { runId, phase, journeyId: journeyId ?? null, model, ...usage },
+  });
 }
 
 // ─── findings persistence (port of pipeline.persistFindings) ─────────────────

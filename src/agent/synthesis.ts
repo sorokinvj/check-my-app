@@ -5,7 +5,7 @@
 import type { AppLens, AppAnatomy } from "@/lib/types";
 import type { Verdict, StepStatus } from "@/lib/enums";
 import type Anthropic from "@anthropic-ai/sdk";
-import { costOf, type LlmConfig } from "./llm";
+import { addUsage, costOf, emptyUsage, type LlmConfig, type UsageTotals } from "./llm";
 import type { AgentEnv } from "./env";
 import type { ProposedJourney } from "./discovery";
 
@@ -63,6 +63,7 @@ export async function synthesizeVerdict(args: {
   bottomLine: string | null;
   findings: SynthesizedFinding[];
   costUsd: number;
+  usage: UsageTotals;
 }> {
   const { env, llm, runId, anatomy } = args;
 
@@ -105,6 +106,8 @@ export async function synthesizeVerdict(args: {
   });
 
   const costUsd = costOf(llm.synthModel, message.usage);
+  const usage = emptyUsage();
+  addUsage(usage, llm.synthModel, message.usage);
   const parsed = parseAppLens(message);
   // Verdict rolls up BOTH observed journey-step outcomes AND synthesized
   // findings. Earlier it ignored findings, so a run with 0 journeys but several
@@ -123,7 +126,7 @@ export async function synthesizeVerdict(args: {
   ) {
     verdict = "needs_attention";
   }
-  return { ...parsed, verdict, costUsd };
+  return { ...parsed, verdict, costUsd, usage };
 }
 
 const VERDICT_RANK: Verdict[] = ["all_good", "mostly_ok", "needs_attention", "broken"];

@@ -9,7 +9,7 @@ import { runAgentLoop, finalizeStructured, type TranscriptEntry } from "./core";
 import { prepareAgentPage, type ToolEnv } from "./tools";
 import { discoverySystem } from "./instructions";
 import { putScreenshot, type AgentEnv } from "./env";
-import type { LlmConfig } from "./llm";
+import { emptyUsage, mergeUsage, type LlmConfig, type UsageTotals } from "./llm";
 
 export interface RunInput {
   targetUrl: string;
@@ -29,6 +29,7 @@ export interface DiscoveryResult {
   anatomy: AppAnatomy;
   transcript: TranscriptEntry[];
   costUsd: number;
+  usage: UsageTotals;
 }
 
 export function originOf(url: string): string {
@@ -53,6 +54,7 @@ export async function discoverApp(args: {
     anatomy: { pages: [], actions: [], services: [], tech: {} },
     transcript: [],
     costUsd: 0,
+    usage: emptyUsage(),
   };
 
   const context = await browser.newContext();
@@ -85,6 +87,7 @@ export async function discoverApp(args: {
     });
 
     let costUsd = result.costUsd;
+    const usage = result.usage;
 
     // Guaranteed structured extraction. The model frequently spends its whole
     // iteration budget exploring and never emits the closing JSON on its own —
@@ -108,6 +111,7 @@ export async function discoverApp(args: {
         DISCOVERY_SCHEMA,
       );
       costUsd += extracted.costUsd;
+      mergeUsage(usage, extracted.usage);
       if (extracted.parsed) parsed = shapeDiscovery(extracted.parsed);
     } catch (err) {
       console.error("[discovery] structured extraction failed:", err);
@@ -125,13 +129,14 @@ export async function discoverApp(args: {
           JOURNEYS_SCHEMA,
         );
         costUsd += j.costUsd;
+        mergeUsage(usage, j.usage);
         const recovered = shapeDiscovery({ journeys: j.parsed?.journeys ?? [] }).journeys;
         if (recovered.length > 0) parsed = { ...parsed, journeys: recovered };
       } catch (err) {
         console.error("[discovery] journeys retry failed:", err);
       }
     }
-    return { ...(parsed ?? empty), transcript: result.transcript, costUsd };
+    return { ...(parsed ?? empty), transcript: result.transcript, costUsd, usage };
   } finally {
     await context.close();
   }
@@ -149,7 +154,7 @@ interface RawDiscovery {
   };
 }
 
-type ShapedDiscovery = Omit<DiscoveryResult, "transcript" | "costUsd">;
+type ShapedDiscovery = Omit<DiscoveryResult, "transcript" | "costUsd" | "usage">;
 
 function techToRecord(tech: unknown): Record<string, string> {
   const out: Record<string, string> = {};

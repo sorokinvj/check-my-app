@@ -11,7 +11,7 @@ import { prepareAgentPage, type ToolEnv } from "./tools";
 import { walkingSystem } from "./instructions";
 import { putScreenshot, putText, type AgentEnv } from "./env";
 import { originOf, type ProposedJourney, type RunInput } from "./discovery";
-import type { LlmConfig } from "./llm";
+import { emptyUsage, mergeUsage, type LlmConfig, type UsageTotals } from "./llm";
 
 export interface WalkRun extends RunInput {
   id: string;
@@ -69,10 +69,11 @@ export async function walkOneJourney(args: {
   index: number;
   onLiveScreenshot?: (url: string) => Promise<void>;
   onProgress?: (note: string) => Promise<void>;
-}): Promise<{ transcript: TranscriptEntry[]; costUsd: number }> {
+}): Promise<{ transcript: TranscriptEntry[]; costUsd: number; usage: UsageTotals }> {
   const { env, llm, browser, run, proposed, index, onLiveScreenshot, onProgress } = args;
   const transcripts: TranscriptEntry[] = [];
   let costUsd = 0;
+  const usage = emptyUsage();
 
   await env.db.journey.deleteMany({ where: { runId: run.id, order: index } });
 
@@ -145,6 +146,7 @@ export async function walkOneJourney(args: {
       });
       transcripts.push(...result.transcript);
       costUsd += result.costUsd;
+      mergeUsage(usage, result.usage);
 
       // The walk authors a Playwright spec via write_e2e_test, but the model
       // often exhausts its iteration budget acting/observing and never reaches
@@ -160,6 +162,7 @@ export async function walkOneJourney(args: {
             "(TypeScript, @playwright/test) replaying this journey's happy path with " +
             "role-based locators and process.env.TARGET_URL as base URL. Assert only on " +
             "what you actually observed working. No prose — just the code.",
+          usage,
         );
         const content = stripCodeFence(spec);
         if (content.includes("@playwright/test")) {
@@ -194,7 +197,7 @@ export async function walkOneJourney(args: {
     }
   }
 
-  return { transcript: transcripts, costUsd };
+  return { transcript: transcripts, costUsd, usage };
 }
 
 // Generated specs: versioned in D1 (served by /api/tests/{id}) + a copy in R2

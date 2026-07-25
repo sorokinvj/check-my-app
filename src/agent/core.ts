@@ -6,7 +6,7 @@
 // transcript. No BullMQ, no Prisma — portable to Cloudflare Workflows as-is.
 
 import Anthropic from "@anthropic-ai/sdk";
-import { costOf, type LlmConfig } from "./llm";
+import { addUsage, costOf, emptyUsage, type LlmConfig, type UsageTotals } from "./llm";
 import { BROWSER_TOOLS, executeTool, type ToolEnv } from "./tools";
 
 export interface AgentLoopArgs {
@@ -28,6 +28,8 @@ export interface AgentLoopResult {
   messages: Anthropic.MessageParam[];
   // Rolled-up Anthropic cost of this loop (USD) — feeds Run.costUsd (CHE-16).
   costUsd: number;
+  // Full token/cost breakdown of the loop — feeds the LlmUsage ledger.
+  usage: UsageTotals;
 }
 
 export interface TranscriptEntry {
@@ -48,6 +50,7 @@ export async function runAgentLoop(args: AgentLoopArgs): Promise<AgentLoopResult
   let iterations = 0;
   let finalText = "";
   let costUsd = 0;
+  const usage = emptyUsage();
 
   while (iterations < maxIterations) {
     iterations += 1;
@@ -75,6 +78,7 @@ export async function runAgentLoop(args: AgentLoopArgs): Promise<AgentLoopResult
 
     const u = response.usage;
     costUsd += costOf(llm.navModel, u);
+    addUsage(usage, llm.navModel, u);
     console.log(
       `[agent] iter ${iterations}: stop=${response.stop_reason} in=${u.input_tokens} cache_write=${u.cache_creation_input_tokens ?? 0} cache_read=${u.cache_read_input_tokens ?? 0} out=${u.output_tokens}`,
     );
@@ -128,7 +132,7 @@ export async function runAgentLoop(args: AgentLoopArgs): Promise<AgentLoopResult
     messages.push({ role: "user", content: results });
   }
 
-  return { finalText, iterations, transcript, messages, costUsd };
+  return { finalText, iterations, transcript, messages, costUsd, usage };
 }
 
 // Append a closing instruction to a conversation in a role-valid way. The agent
@@ -160,6 +164,9 @@ export async function finalizeJson(
   llm: LlmConfig,
   messages: Anthropic.MessageParam[],
   instruction: string,
+  // When provided, this call's tokens/cost are added to the caller's totals —
+  // finalizeJson used to be a blind spot in the cost ledger.
+  usage?: UsageTotals,
 ): Promise<string> {
   const response = await createWithRetry(() =>
     llm.client.messages.create({
@@ -168,6 +175,7 @@ export async function finalizeJson(
       messages: appendInstruction(messages, instruction),
     }),
   );
+  if (usage) addUsage(usage, llm.navModel, response.usage);
   const text = response.content.find((b) => b.type === "text");
   return text && text.type === "text" ? text.text : "";
 }
@@ -182,7 +190,7 @@ export async function finalizeStructured<T>(
   messages: Anthropic.MessageParam[],
   instruction: string,
   schema: Record<string, unknown>,
-): Promise<{ parsed: T | null; costUsd: number }> {
+): Promise<{ parsed: T | null; costUsd: number; usage: UsageTotals }> {
   const response = await createWithRetry(() =>
     llm.client.messages.create({
       model: llm.navModel,
@@ -192,17 +200,19 @@ export async function finalizeStructured<T>(
     }),
   );
   const costUsd = costOf(llm.navModel, response.usage);
+  const usage = emptyUsage();
+  addUsage(usage, llm.navModel, response.usage);
   const text = response.content.find((b) => b.type === "text");
-  if (!text || text.type !== "text") return { parsed: null, costUsd };
+  if (!text || text.type !== "text") return { parsed: null, costUsd, usage };
   try {
-    return { parsed: JSON.parse(text.text) as T, costUsd };
+    return { parsed: JSON.parse(text.text) as T, costUsd, usage };
   } catch {
     const m = text.text.match(/\{[\s\S]*\}/);
-    if (!m) return { parsed: null, costUsd };
+    if (!m) return { parsed: null, costUsd, usage };
     try {
-      return { parsed: JSON.parse(m[0]) as T, costUsd };
+      return { parsed: JSON.parse(m[0]) as T, costUsd, usage };
     } catch {
-      return { parsed: null, costUsd };
+      return { parsed: null, costUsd, usage };
     }
   }
 }

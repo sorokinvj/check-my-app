@@ -74,8 +74,10 @@ function JourneyCard({
               const s = STEP_STATUS_META[step.status];
               const isSelected = selected?.id === step.id;
               return (
-                <div key={step.id} className="flex items-center">
-                  {i > 0 && <span className="mx-1 shrink-0 text-fg-faint">→</span>}
+                <div key={step.id} className="flex items-start">
+                  {/* mt-9 keeps the arrow on the thumbnail's horizontal axis
+                      (p-2 card padding + half of the h-20 thumbnail). */}
+                  {i > 0 && <span className="mx-1 mt-9 shrink-0 text-fg-faint">→</span>}
                   <button
                     onClick={() => setSelected(isSelected ? null : step)}
                     className={`w-32 shrink-0 rounded-lg border p-2 text-left transition-all ${
@@ -101,7 +103,7 @@ function JourneyCard({
                         {s.emoji}
                       </span>
                     </div>
-                    <p className="mt-1.5 line-clamp-2 text-[11px] leading-4 text-fg-muted">
+                    <p className="mt-1.5 line-clamp-2 min-h-8 text-[11px] leading-4 text-fg-muted">
                       {step.label}
                     </p>
                   </button>

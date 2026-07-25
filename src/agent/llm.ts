@@ -37,6 +37,46 @@ export interface Usage {
   cache_read_input_tokens?: number | null;
 }
 
+// Accumulated tokens+cost for one unit of work (a loop, a phase). Feeds the
+// LlmUsage ledger — tokens-model-money is the primary product metric.
+export interface UsageTotals {
+  inputTokens: number;
+  cacheWriteTokens: number;
+  cacheReadTokens: number;
+  outputTokens: number;
+  iterations: number;
+  costUsd: number;
+}
+
+export function emptyUsage(): UsageTotals {
+  return {
+    inputTokens: 0,
+    cacheWriteTokens: 0,
+    cacheReadTokens: 0,
+    outputTokens: 0,
+    iterations: 0,
+    costUsd: 0,
+  };
+}
+
+export function addUsage(t: UsageTotals, model: string, u: Usage): void {
+  t.inputTokens += u.input_tokens;
+  t.cacheWriteTokens += u.cache_creation_input_tokens ?? 0;
+  t.cacheReadTokens += u.cache_read_input_tokens ?? 0;
+  t.outputTokens += u.output_tokens;
+  t.iterations += 1;
+  t.costUsd += costOf(model, u);
+}
+
+export function mergeUsage(into: UsageTotals, from: UsageTotals): void {
+  into.inputTokens += from.inputTokens;
+  into.cacheWriteTokens += from.cacheWriteTokens;
+  into.cacheReadTokens += from.cacheReadTokens;
+  into.outputTokens += from.outputTokens;
+  into.iterations += from.iterations;
+  into.costUsd += from.costUsd;
+}
+
 export function costOf(model: string, u: Usage): number {
   const [inP, outP] = PRICING[model] ?? PRICING["claude-sonnet-4-6"];
   return (
