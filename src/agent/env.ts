@@ -17,6 +17,9 @@ export interface AgentBindings {
   ANTHROPIC_API_KEY: string;
   ANTHROPIC_NAV_MODEL?: string;
   ANTHROPIC_SYNTH_MODEL?: string;
+  // Cheap-model epic: models with a provider prefix ("z-ai/glm-5.2") route
+  // through OpenRouter's Anthropic-compatible endpoint with this key.
+  OPENROUTER_API_KEY?: string;
   // Verdict-ready notifications (Resend). All optional — absent = log-only.
   EMAIL_API_KEY?: string;
   EMAIL_FROM?: string;

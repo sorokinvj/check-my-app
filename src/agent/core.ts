@@ -62,7 +62,7 @@ export async function runAgentLoop(args: AgentLoopArgs): Promise<AgentLoopResult
     // Retried on transient API errors so a 20-min run isn't lost to one 529 —
     // the messages array is intact, so resume is just re-issuing the call.
     const response = await createWithRetry(() =>
-      llm.client.messages.create({
+      llm.navClient.messages.create({
         // 16k keeps non-streaming under the SDK timeout while leaving room for
         // adaptive thinking + a long final JSON (discovery/synthesis emit the
         // whole app map at once — 8k truncated it and silently lost journeys).
@@ -169,7 +169,7 @@ export async function finalizeJson(
   usage?: UsageTotals,
 ): Promise<string> {
   const response = await createWithRetry(() =>
-    llm.client.messages.create({
+    llm.navClient.messages.create({
       model: llm.navModel,
       max_tokens: 16_000,
       messages: appendInstruction(messages, instruction),
@@ -192,7 +192,7 @@ export async function finalizeStructured<T>(
   schema: Record<string, unknown>,
 ): Promise<{ parsed: T | null; costUsd: number; usage: UsageTotals }> {
   const response = await createWithRetry(() =>
-    llm.client.messages.create({
+    llm.navClient.messages.create({
       model: llm.navModel,
       max_tokens: 16_000,
       output_config: { format: { type: "json_schema", schema } },

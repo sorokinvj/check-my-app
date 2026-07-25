@@ -97,7 +97,7 @@ export async function synthesizeVerdict(args: {
     })),
   });
 
-  const message = await llm.client.messages.create({
+  const message = await llm.synthClient.messages.create({
     model: llm.synthModel,
     max_tokens: 8_000,
     thinking: { type: "adaptive" },
