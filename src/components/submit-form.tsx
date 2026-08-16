@@ -4,14 +4,30 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { VERDICT_META } from "@/lib/status";
 
 const TURNSTILE_SITE_KEY = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
 
+// Domain-keyed result cache hit (CHE-39) — latest completed run for this domain.
+type LookupHit = {
+  appSlug: string;
+  count: number;
+  run: {
+    publicId: string;
+    runNumber: number;
+    verdict: string | null;
+    bottomLine: string | null;
+    completedAt: string | null;
+  };
+};
+
 // Screen 1 — Submit. One field, one button; credentials/notes hidden behind a
 // single toggle so casual visitors aren't scared off.
-export function SubmitForm() {
+export function SubmitForm({ initialUrl = "" }: { initialUrl?: string }) {
   const router = useRouter();
-  const [url, setUrl] = useState("");
+  const [url, setUrl] = useState(initialUrl);
+  // The URL the hit was fetched for rides along so a stale card never renders.
+  const [lookupState, setLookupState] = useState<{ forUrl: string; hit: LookupHit } | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [testEmail, setTestEmail] = useState("");
   const [testPassword, setTestPassword] = useState("");
@@ -45,6 +61,24 @@ export function SubmitForm() {
   // Bare domains are fine — we assume https:// (mirrors normalizeTargetUrl on the server).
   const normalizedUrl = /^https?:\/\//i.test(url.trim()) ? url.trim() : `https://${url.trim()}`;
   const valid = /^https?:\/\/.+\..+/.test(normalizedUrl);
+
+  // Domain-keyed cache (CHE-39): once the URL looks real, ask if we've already
+  // checked this domain and offer the existing verdict instead of a cold start.
+  useEffect(() => {
+    if (!valid) return;
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/checks/lookup?url=${encodeURIComponent(normalizedUrl)}`);
+        const body = (await res.json()) as { found: boolean } & LookupHit;
+        setLookupState(body.found ? { forUrl: normalizedUrl, hit: body } : null);
+      } catch {
+        setLookupState(null);
+      }
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [normalizedUrl, valid]);
+
+  const lookup = valid && lookupState?.forUrl === normalizedUrl ? lookupState.hit : null;
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -97,6 +131,44 @@ export function SubmitForm() {
       </div>
       {url.length > 0 && !valid && (
         <p className="-mt-3 text-sm text-status-broken">Doesn&apos;t look like a working URL</p>
+      )}
+
+      {lookup && (
+        <div className="card animate-fade-up space-y-2 p-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-sm text-fg">
+              We&apos;ve already checked <span className="font-mono">{lookup.appSlug}</span>
+              {lookup.count > 1 ? ` (${lookup.count} runs)` : ""}
+            </p>
+            {lookup.run.verdict && VERDICT_META[lookup.run.verdict] && (
+              <span
+                className={`rounded-full border px-2 py-0.5 font-mono text-xs ${VERDICT_META[lookup.run.verdict].pillClassName}`}
+              >
+                {VERDICT_META[lookup.run.verdict].label}
+              </span>
+            )}
+            {lookup.run.completedAt && (
+              <span className="font-mono text-xs text-fg-faint">
+                {new Date(lookup.run.completedAt).toLocaleDateString("en-US", {
+                  month: "short",
+                  day: "numeric",
+                })}
+              </span>
+            )}
+          </div>
+          {lookup.run.bottomLine && (
+            <p className="text-sm text-fg-muted">{lookup.run.bottomLine}</p>
+          )}
+          <a
+            href={`/verdict/${lookup.run.publicId}`}
+            className="inline-block font-mono text-[13px] text-accent transition-colors hover:underline"
+          >
+            See the last results →
+          </a>
+          <p className="font-mono text-xs text-fg-faint">
+            …or submit below for a fresh check.
+          </p>
+        </div>
       )}
 
       <div className="text-center">
