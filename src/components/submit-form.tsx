@@ -42,7 +42,9 @@ export function SubmitForm() {
     };
   }, []);
 
-  const valid = /^https?:\/\/.+\..+/.test(url.trim());
+  // Bare domains are fine — we assume https:// (mirrors normalizeTargetUrl on the server).
+  const normalizedUrl = /^https?:\/\//i.test(url.trim()) ? url.trim() : `https://${url.trim()}`;
+  const valid = /^https?:\/\/.+\..+/.test(normalizedUrl);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -52,7 +54,7 @@ export function SubmitForm() {
       const res = await fetch("/api/checks", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url, testEmail, testPassword, userNotes, notifyEmail, turnstileToken }),
+        body: JSON.stringify({ url: normalizedUrl, testEmail, testPassword, userNotes, notifyEmail, turnstileToken }),
       });
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string };
@@ -80,8 +82,9 @@ export function SubmitForm() {
       <div className="card p-1.5">
         <div className="flex items-center gap-2">
           <span className="pl-3 font-mono text-sm text-fg-faint">→</span>
+          {/* type="text": the browser's own type="url" validation rejects bare domains */}
           <input
-            type="url"
+            type="text"
             inputMode="url"
             placeholder="https://"
             value={url}

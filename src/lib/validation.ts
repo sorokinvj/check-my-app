@@ -1,12 +1,30 @@
 import { z } from "zod";
 
+// Bare domains ("theins.ru") are fine — we assume https:// for them.
+export function normalizeTargetUrl(raw: string): string {
+  const u = raw.trim();
+  return /^https?:\/\//i.test(u) ? u : `https://${u}`;
+}
+
 // Submission payload from the /check form (Screen 1).
 export const createCheckSchema = z.object({
   url: z
     .string()
     .trim()
-    .url("Doesn't look like a working URL")
-    .refine((u) => /^https?:\/\//.test(u), "URL must start with http:// or https://"),
+    .min(1, "Doesn't look like a working URL")
+    .transform(normalizeTargetUrl)
+    .pipe(
+      z
+        .string()
+        .url("Doesn't look like a working URL")
+        .refine((u) => {
+          try {
+            return new URL(u).hostname.includes(".");
+          } catch {
+            return false;
+          }
+        }, "Doesn't look like a working URL"),
+    ),
   testEmail: z.string().email().optional().or(z.literal("")),
   testPassword: z.string().optional().or(z.literal("")),
   scopeHints: z.string().max(2000).optional().or(z.literal("")),
