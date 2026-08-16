@@ -60,7 +60,15 @@ jobs:
       # worker binds to cross-worker).
       - if: steps.creds.outputs.ready == 'true'
         run: npx wrangler deploy --config wrangler-agent.jsonc
-      # Build + deploy the web worker (OpenNext).
+      # Build + deploy the web worker (OpenNext). The build must run with the
+      # same .env as a local deploy: Next.js bakes NEXT_PUBLIC_* AND server env
+      # (Clerk keys etc.) into the workerd bundle at build time — without them
+      # every SSR page 500s with "Missing publishableKey" (incident 2026-08-16).
+      # WEB_BUILD_DOTENV is the owner's .env stored as a single GitHub secret.
+      - if: steps.creds.outputs.ready == 'true'
+        run: printf '%s\n' "$WEB_BUILD_DOTENV" > .env
+        env:
+          WEB_BUILD_DOTENV: ${{ secrets.WEB_BUILD_DOTENV }}
       - if: steps.creds.outputs.ready == 'true'
         run: npx opennextjs-cloudflare build
       - if: steps.creds.outputs.ready == 'true'
