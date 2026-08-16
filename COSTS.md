@@ -63,6 +63,14 @@ Append actual measured spend here as milestones progress. Keep it terse.
 | 2026-06-16 | joblander.app first client, run #6 — full walk, 5 journeys / 9 findings | **$2.25** (Run.costUsd) | incl. browser hrs | live run cmqgojm |
 | 2026-07-22 | joblander.app prod runs #10 (empty-walk hallucinated verdict) + #11 (false-positive Broken) | **$2.05 + $2.01** | incl. browser hrs | led to hydration+evidence fixes |
 | 2026-07-23 | Verification runs #12/#13 after agent fixes — #13: mostly_ok, 0 broken findings, honest hedging | **$2.11 + $2.12** | incl. browser hrs | fixes 77e61d7/4029bc8 confirmed |
+| 2026-08-16 | First cheap-model prod runs (glm-5.2 nav + Opus synth): #17 example.com **$0.07**, #18 theins.ru (5 journeys walked) **$0.47** ($0.40 glm + $0.07 Opus) | **$0.54** | incl. browser hrs | LlmUsage ledger |
+
+**Model decision (2026-08-16):** staying on `z-ai/glm-5.2` nav + `claude-opus-4-8`
+synthesis. Kimi K3 benches better on agentic/browser tasks but costs $2.80/$14
+per 1M on OpenRouter vs glm-5.2's $0.308/$0.968 (~10–14×) — a theins-class run
+would be ~$4–5, over the $1.50 target. Cerebras is an inference host (speed),
+not a cost/quality lever; our runs are async so speed isn't the bottleneck.
+Revisit = one spike run with `ANTHROPIC_NAV_MODEL=moonshotai/kimi-k3`.
 
 **Cost model — corrected with real data:** the earlier "well under $1.50" estimate
 was wrong for a rich authenticated app. A full joblander-class run (5 journeys
