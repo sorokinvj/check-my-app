@@ -21,9 +21,12 @@ npm-debug.log*
 # prisma
 prisma/*.db
 
-# evidence artifacts (screenshots, transcripts, generated specs)
-evidence/
-storage/
+# evidence artifacts (screenshots, transcripts, generated specs).
+# Root-anchored: a bare "evidence/" also swallowed src/app/api/evidence/ — the
+# evidence API route was never committed and the first CI-built deploy shipped
+# without it (every screenshot 404'd, 2026-08-16).
+/evidence/
+/storage/
 generated-tests/
 
 # typescript
