@@ -35,6 +35,14 @@ export const STEP_STATUS_META: Record<
     dotClassName: "bg-status-exposed",
   },
   skipped: { emoji: "—", label: "Skipped", className: "text-fg-faint", dotClassName: "bg-ink-600" },
+  // Journey-level only: every attempted step worked, some steps went unverified
+  // (out of scope / untestable here). Honest middle ground between ✓ and —.
+  partial: {
+    emoji: "✓",
+    label: "Works · partly verified",
+    className: "text-status-ok",
+    dotClassName: "bg-status-ok",
+  },
 };
 
 export const VERDICT_META: Record<

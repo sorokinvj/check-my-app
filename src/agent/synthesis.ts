@@ -27,7 +27,10 @@ step it came from via stepRef (journeyIndex and stepIndex are 0-based).
 If the journeys array is empty, or a step was skipped, nothing was verified for
 it: do NOT claim it fails. When coverage is incomplete, say so in bottomLine
 ("we couldn't verify X this run") instead of inventing failures. Steps skipped
-as untestable-in-headless (OAuth popups) are not evidence of breakage.
+as untestable-in-headless (OAuth popups) are not evidence of breakage. A
+journey with status "partial" means everything attempted worked and only some
+steps went unverified — treat it as working, with a coverage caveat, never as
+a failure.
 
 Steps that were merely INERT in the test browser (an interaction produced no
 request/effect, with no error response or console exception) are uncertain, not

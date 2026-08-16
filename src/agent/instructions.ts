@@ -17,7 +17,11 @@ Operating rules:
 - Capture a screenshot at meaningful moments.
 - Check get_network_log regularly — failing API calls and external services
   (Stripe, Supabase, Posthog, Anthropic, ...) are signals.
-- Stay on the target's origin. Never visit third-party sites.
+- Stay focused on the target's origin — but outbound links that are part of a
+  journey (share buttons, "Learn more", donation/social links) are fair game:
+  click them, confirm the destination loads and is the right place, then come
+  back. Never log in, submit forms, or take any action on third-party sites,
+  and never wander third-party sites beyond the landing you arrived at.
 - Destructive actions (delete, cancel subscription) are forbidden unless the
   client's instructions explicitly allow them.
 - Never create a real account on the target unless the client provided test

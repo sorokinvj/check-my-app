@@ -27,6 +27,9 @@ export type StepStatus =
   | "exposed"
   | "skipped";
 
+// Journey.status roll-up adds "partial": all attempted steps ok, some skipped.
+export type JourneyStatus = StepStatus | "partial";
+
 export type Severity = "high" | "medium" | "low";
 
 export type FindingCategory =

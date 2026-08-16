@@ -27,6 +27,16 @@ function worstStatus(statuses: StepStatus[]): StepStatus {
   );
 }
 
+// Journey roll-up. Skipped steps must not drag a working journey down to
+// "Skipped": ok + skipped mixes become "partial" (the flow works, part of it
+// went unverified). All-skipped stays "skipped"; any real problem still wins.
+function journeyStatus(statuses: StepStatus[]): string {
+  const attempted = statuses.filter((s) => s !== "skipped");
+  if (attempted.length === 0) return "skipped";
+  const worst = worstStatus(attempted);
+  return worst === "ok" && attempted.length < statuses.length ? "partial" : worst;
+}
+
 // The journey summary is meant to be a 1-2 sentence "what we found" line, but
 // the model often dumps a full markdown report (headings, a step table). That
 // leaks raw markdown into the verdict UI. Strip markdown structure and keep the
@@ -178,7 +188,7 @@ export async function walkOneJourney(args: {
       await env.db.journey.update({
         where: { id: journey.id },
         data: {
-          status: stepStatuses.length === 0 ? "skipped" : worstStatus(stepStatuses),
+          status: journeyStatus(stepStatuses),
           summary: cleanSummary(result.finalText),
         },
       });
@@ -188,7 +198,7 @@ export async function walkOneJourney(args: {
       await env.db.journey.update({
         where: { id: journey.id },
         data: {
-          status: stepStatuses.length === 0 ? "skipped" : worstStatus(stepStatuses),
+          status: journeyStatus(stepStatuses),
           summary: `Walk aborted: ${err instanceof Error ? err.message : String(err)}`.slice(0, 500),
         },
       });
