@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { VERDICT_META } from "@/lib/status";
@@ -37,7 +38,8 @@ export function SubmitForm({ initialUrl = "" }: { initialUrl?: string }) {
   const [userNotes, setUserNotes] = useState("");
   const [notifyEmail, setNotifyEmail] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // `code` is set for quota rejections (CHE-40) so the copy can offer a way out.
+  const [error, setError] = useState<{ message: string; code?: string } | null>(null);
   const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
   const turnstileRef = useRef<HTMLDivElement>(null);
 
@@ -94,13 +96,15 @@ export function SubmitForm({ initialUrl = "" }: { initialUrl?: string }) {
         body: JSON.stringify({ url: normalizedUrl, testEmail, testPassword, userNotes, notifyEmail, turnstileToken }),
       });
       if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(body.error ?? "Something went wrong");
+        const body = (await res.json().catch(() => ({}))) as { error?: string; code?: string };
+        setError({ message: body.error ?? "Something went wrong", code: body.code });
+        setSubmitting(false);
+        return;
       }
       const { id } = (await res.json()) as { id: string };
       router.push(`/run/${id}`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong");
+      setError({ message: err instanceof Error ? err.message : "Something went wrong" });
       setSubmitting(false);
     }
   }
@@ -244,7 +248,19 @@ export function SubmitForm({ initialUrl = "" }: { initialUrl?: string }) {
         </div>
       )}
 
-      {error && <p className="text-center text-sm text-status-broken">{error}</p>}
+      {error && (
+        <p className="text-center text-sm text-status-broken">
+          {error.message}
+          {error.code === "quota_anon" && (
+            <>
+              {" "}
+              <Link href="/sign-in" className="text-accent transition-colors hover:underline">
+                Sign in →
+              </Link>
+            </>
+          )}
+        </p>
+      )}
 
       {TURNSTILE_SITE_KEY && <div ref={turnstileRef} className="flex justify-center" />}
 

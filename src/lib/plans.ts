@@ -28,6 +28,13 @@ export const PLAN_LIMITS: Record<UserPlan, PlanLimits> = {
   },
 };
 
+// Run quotas (CHE-40 phase 1 — limits only, no checkout). A run costs real
+// money to execute, so the free funnel is capped at both ends: one taste for a
+// stranger, a handful for a signed-up account. Every paid plan is uncapped for
+// now; per-tier run allowances land with billing.
+export const ANON_RUNS_PER_DAY = 1;
+export const FREE_RUNS_LIFETIME = 3;
+
 const FREQ_RANK: Record<WatchFrequency, number> = { manual: 0, daily: 1, every_6h: 2 };
 
 export function canUseFrequency(plan: UserPlan, freq: WatchFrequency): boolean {
@@ -60,6 +67,47 @@ export async function assertCanAddWatch(
     if (count >= limits.maxWatches) {
       return { ok: false, reason: `Plan limit reached: ${limits.maxWatches} watched app(s).` };
     }
+  }
+  return { ok: true };
+}
+
+export type RunGate = { ok: true } | { ok: false; reason: string; code: "quota_anon" | "quota_free" };
+
+// Gate for starting a one-off run from the submit form. Only that route calls
+// it: Watch/scheduler runs are already paid for by the plan that enabled them
+// and must never be blocked by a quota.
+//
+// `anonKeyHash` identifies the client of an anonymous submission; null means we
+// couldn't derive one (see hashClientKey), and an unidentifiable client is let
+// through rather than blocked — over-counting strangers would break the funnel
+// this whole product runs on.
+export async function assertCanStartRun(
+  db: PrismaClient,
+  owner: { id: string; plan: UserPlan } | null,
+  anonKeyHash: string | null,
+): Promise<RunGate> {
+  if (owner) {
+    if (owner.plan !== "free") return { ok: true };
+    const used = await db.run.count({ where: { ownerId: owner.id } });
+    if (used >= FREE_RUNS_LIFETIME) {
+      return {
+        ok: false,
+        code: "quota_free",
+        reason: `You've used all ${FREE_RUNS_LIFETIME} runs on the Free plan. Enable Daily Watch on an app you've already checked, or upgrade for unlimited runs.`,
+      };
+    }
+    return { ok: true };
+  }
+
+  if (!anonKeyHash) return { ok: true };
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const used = await db.run.count({ where: { anonKeyHash, createdAt: { gte: since } } });
+  if (used >= ANON_RUNS_PER_DAY) {
+    return {
+      ok: false,
+      code: "quota_anon",
+      reason: "That was your free run for today. Sign up for a free account to get more.",
+    };
   }
   return { ok: true };
 }

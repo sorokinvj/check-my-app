@@ -23,6 +23,23 @@ export function encryptSecret(plaintext: string): string {
   return [iv, tag, enc].map((b) => b.toString("base64")).join(".");
 }
 
+// Anonymous run quotas (CHE-40) need a stable per-client key, and an IP is not
+// something we want at rest — so we keep only a salted one-way hash of it.
+// Web Crypto rather than the node:crypto above: this runs on every submit in the
+// web worker, and subtle.digest is native there under any compat flag.
+// globalThis because this module's `crypto` import shadows the global.
+// Null when there's nothing to key on (no IP behind Cloudflare, or no secret in
+// local dev) — the caller treats that as "can't identify, don't gate".
+export async function hashClientKey(ip: string | null | undefined): Promise<string | null> {
+  const secret = process.env.CREDENTIALS_SECRET;
+  if (!ip || !secret) return null;
+  const digest = await globalThis.crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(`${ip}:${secret}`),
+  );
+  return Buffer.from(digest).toString("base64");
+}
+
 export function decryptSecret(blob: string): string {
   const [ivB64, tagB64, dataB64] = blob.split(".");
   const decipher = crypto.createDecipheriv(ALGO, key(), Buffer.from(ivB64, "base64"));

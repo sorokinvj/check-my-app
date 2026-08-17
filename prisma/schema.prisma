@@ -87,6 +87,10 @@ model Run {
   appId    String?
   owner    User?   @relation(fields: [ownerId], references: [id])
   ownerId  String?
+  // Anonymous counterpart of ownerId: a salted one-way hash of the submitter's
+  // IP, set only on anonymous runs so the free-run quota (CHE-40) can be counted
+  // per client without ever storing an IP. Null on owner and scheduler runs.
+  anonKeyHash String?
 
   journeys Journey[]
   findings Finding[]
@@ -101,6 +105,7 @@ model Run {
   @@index([watchId])
   @@index([appId])
   @@index([ownerId])
+  @@index([anonKeyHash])
 }
 
 // ─── Journeys & steps ────────────────────────────────────────────────────────
