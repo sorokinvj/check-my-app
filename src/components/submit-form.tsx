@@ -19,6 +19,9 @@ type LookupHit = {
     bottomLine: string | null;
     completedAt: string | null;
   };
+  watched: boolean;
+  ageDays: number | null;
+  stale: boolean;
 };
 
 // Screen 1 — Submit. One field, one button; credentials/notes hidden behind a
@@ -142,7 +145,7 @@ export function SubmitForm({ initialUrl = "" }: { initialUrl?: string }) {
             </p>
             {lookup.run.verdict && VERDICT_META[lookup.run.verdict] && (
               <span
-                className={`rounded-full border px-2 py-0.5 font-mono text-xs ${VERDICT_META[lookup.run.verdict].pillClassName}`}
+                className={`rounded-full border px-2 py-0.5 font-mono text-xs ${VERDICT_META[lookup.run.verdict].pillClassName} ${lookup.stale ? "opacity-50" : ""}`}
               >
                 {VERDICT_META[lookup.run.verdict].label}
               </span>
@@ -155,9 +158,19 @@ export function SubmitForm({ initialUrl = "" }: { initialUrl?: string }) {
                 })}
               </span>
             )}
+            {lookup.watched && (
+              <span className="font-mono text-xs text-status-ok">● watched daily</span>
+            )}
           </div>
-          {lookup.run.bottomLine && (
-            <p className="text-sm text-fg-muted">{lookup.run.bottomLine}</p>
+          {lookup.stale ? (
+            <p className="text-sm text-status-risky">
+              Checked {lookup.ageDays} days ago — this may be out of date. Run a fresh check
+              below, or enable Daily Watch so it never goes stale.
+            </p>
+          ) : (
+            lookup.run.bottomLine && (
+              <p className="text-sm text-fg-muted">{lookup.run.bottomLine}</p>
+            )
           )}
           <a
             href={`/verdict/${lookup.run.publicId}`}
@@ -165,9 +178,11 @@ export function SubmitForm({ initialUrl = "" }: { initialUrl?: string }) {
           >
             See the last results →
           </a>
-          <p className="font-mono text-xs text-fg-faint">
-            …or submit below for a fresh check.
-          </p>
+          {!lookup.stale && (
+            <p className="font-mono text-xs text-fg-faint">
+              …or submit below for a fresh check.
+            </p>
+          )}
         </div>
       )}
 

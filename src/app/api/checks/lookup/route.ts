@@ -20,7 +20,7 @@ export async function GET(req: Request) {
 
   const prisma = await getDbFromContext();
   const where = { appSlug, ownerId: null, status: "completed" };
-  const [latest, count] = await Promise.all([
+  const [latest, count, watch] = await Promise.all([
     prisma.run.findFirst({
       where,
       orderBy: { completedAt: "desc" },
@@ -33,10 +33,23 @@ export async function GET(req: Request) {
       },
     }),
     prisma.run.count({ where }),
+    prisma.watch.findFirst({ where: { appSlug, active: true }, select: { id: true } }),
   ]);
 
   if (!latest) {
     return NextResponse.json({ found: false });
   }
-  return NextResponse.json({ found: true, appSlug, count, run: latest });
+
+  // Freshness (CHE-39 follow-up): a Watch re-runs daily so its domains never go
+  // stale; unwatched results expire after 7 days — the card then pushes a fresh
+  // check + Daily Watch instead of asserting a possibly outdated verdict.
+  const ageDays = latest.completedAt
+    ? Math.floor((Date.now() - new Date(latest.completedAt).getTime()) / 86_400_000)
+    : null;
+  const watched = watch !== null;
+  const stale = !watched && (ageDays === null || ageDays >= STALE_AFTER_DAYS);
+
+  return NextResponse.json({ found: true, appSlug, count, run: latest, watched, ageDays, stale });
 }
+
+const STALE_AFTER_DAYS = 7;
