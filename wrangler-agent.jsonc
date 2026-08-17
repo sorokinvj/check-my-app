@@ -7,6 +7,11 @@
   "limits": {
     "cpu_ms": 300000
   },
+  // Watch scheduler (CHE-41). Fires every 15 min; the handler only starts the
+  // Watch rows whose nextRunAt is due, capped at 3 runs per tick.
+  "triggers": {
+    "crons": ["*/15 * * * *"]
+  },
   // Public (non-secret) runtime vars. EMAIL_API_KEY is a secret — set it with
   // `wrangler secret put EMAIL_API_KEY --config wrangler-agent.jsonc`.
   "vars": {

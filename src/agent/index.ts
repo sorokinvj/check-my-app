@@ -1,9 +1,10 @@
-// Agent worker entry. Exports the CheckRunWorkflow (durable orchestrator) and a
-// thin fetch handler: the web app starts a run by creating a Workflow instance
-// via the CHECK_RUN binding (see src/lib/trigger.ts). A manual POST /trigger is
-// kept for ops/testing. Daily Watch cron lands with CHE-15's scheduler.
+// Agent worker entry. Exports the CheckRunWorkflow (durable orchestrator), a
+// thin fetch handler — the web app starts a run by creating a Workflow instance
+// via the CHECK_RUN binding (see src/lib/trigger.ts), and a manual POST /trigger
+// is kept for ops/testing — and the cron handler that fires due Watches (CHE-41).
 
 import type { AgentBindings } from "./env";
+import { runDueWatches } from "./scheduler";
 import type { CheckRunParams } from "./workflow";
 import { CheckRunWorkflow } from "./workflow";
 
@@ -29,5 +30,12 @@ export default {
     }
 
     return new Response("agent worker", { status: 200 });
+  },
+
+  // Cron (*/15) — start the Watch rows that have come due. Awaited rather than
+  // waitUntil'd so a failure shows up as a failed cron invocation in the logs.
+  async scheduled(_controller: ScheduledController, env: AgentBindings): Promise<void> {
+    const { started, skipped } = await runDueWatches(env);
+    console.log(`[scheduler] tick: started ${started.length}, skipped ${skipped}`);
   },
 };

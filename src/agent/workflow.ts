@@ -43,6 +43,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
           userNotes: true,
           notifyEmail: true,
           watchId: true,
+          baselineRunId: true,
         },
       });
       if (!r) throw new Error(`run ${runId} not found`);
@@ -193,7 +194,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
       });
 
       // Phase 6 — Writing (LLM synthesis + findings + verdict).
-      await step.do("writing", async () => {
+      const verdict = await step.do("writing", async () => {
         await transition(env, runId, "writing", { icon: "info", text: "Writing your verdict" });
         const synth = await synthesizeVerdict({ env, llm, runId, anatomy });
         await recordUsage(env, runId, "synthesis", llm.synthModel, synth.usage);
@@ -229,16 +230,24 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
             completedAt: new Date(),
           },
         });
+        return synth.verdict;
       });
 
       // Verdict-ready email (CHE: the /check form promises it). Non-fatal: a
-      // notification failure must never fail a completed run.
+      // notification failure must never fail a completed run. Watch runs arrive
+      // here too — the scheduler copies notifyEmail onto the run — but a
+      // notifyOnChangeOnly watch stays quiet while the verdict holds steady.
       if (run.notifyEmail) {
         await step.do("notify", async () => {
+          if (run.watchId && !(await watchWantsNotice(env, run.watchId, run.baselineRunId, verdict))) {
+            return;
+          }
           await sendVerdictReady({
             to: run.notifyEmail!,
             appSlug: run.appSlug,
             publicId: run.publicId,
+            verdict,
+            recurring: Boolean(run.watchId),
             apiKey: this.env.EMAIL_API_KEY,
             from: this.env.EMAIL_FROM,
             baseUrl: this.env.APP_URL,
@@ -266,6 +275,30 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
       throw err;
     }
   }
+}
+
+// ─── Watch notifications (CHE-41) ────────────────────────────────────────────
+// notifyOnChangeOnly means the owner only wants to hear from a recurring watch
+// when something moved: the verdict differs from the baseline this run was
+// diffed against. No baseline = first run of the watch = always worth sending.
+
+async function watchWantsNotice(
+  env: AgentEnv,
+  watchId: string,
+  baselineRunId: string | null,
+  verdict: string | null,
+): Promise<boolean> {
+  const watch = await env.db.watch.findUnique({
+    where: { id: watchId },
+    select: { notifyOnChangeOnly: true },
+  });
+  if (!watch?.notifyOnChangeOnly) return true;
+  if (!baselineRunId) return true;
+  const baseline = await env.db.run.findUnique({
+    where: { id: baselineRunId },
+    select: { verdict: true },
+  });
+  return !baseline || baseline.verdict !== verdict;
 }
 
 // ─── LLM usage ledger ────────────────────────────────────────────────────────
