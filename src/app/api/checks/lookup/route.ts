@@ -40,14 +40,14 @@ export async function GET(req: Request) {
     return NextResponse.json({ found: false });
   }
 
-  // Freshness (CHE-39 follow-up): a Watch re-runs daily so its domains never go
-  // stale; unwatched results expire after 7 days — the card then pushes a fresh
-  // check + Daily Watch instead of asserting a possibly outdated verdict.
+  // Freshness (CHE-39 follow-up): results expire after 7 days by AGE, always —
+  // a working Daily Watch keeps age near 0 so its domains never hit the cutoff,
+  // but an existing Watch row is no exemption (CHE-41: watches can be stalled).
   const ageDays = latest.completedAt
     ? Math.floor((Date.now() - new Date(latest.completedAt).getTime()) / 86_400_000)
     : null;
   const watched = watch !== null;
-  const stale = !watched && (ageDays === null || ageDays >= STALE_AFTER_DAYS);
+  const stale = ageDays === null || ageDays >= STALE_AFTER_DAYS;
 
   return NextResponse.json({ found: true, appSlug, count, run: latest, watched, ageDays, stale });
 }
