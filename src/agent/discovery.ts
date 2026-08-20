@@ -7,6 +7,7 @@ import { decryptSecret } from "@/lib/crypto";
 import type { AppAnatomy } from "@/lib/types";
 import { runAgentLoop, finalizeStructured, type TranscriptEntry } from "./core";
 import { prepareAgentPage, type ToolEnv } from "./tools";
+import { agentContextOptions } from "./browser";
 import { discoverySystem } from "./instructions";
 import { putScreenshot, type AgentEnv } from "./env";
 import { emptyUsage, mergeUsage, type LlmConfig, type UsageTotals } from "./llm";
@@ -68,7 +69,7 @@ export async function discoverApp(args: {
     notes.push(text);
   };
 
-  const context = await browser.newContext();
+  const context = await browser.newContext(agentContextOptions(browser));
   const page = await context.newPage();
 
   const toolEnv: ToolEnv = {

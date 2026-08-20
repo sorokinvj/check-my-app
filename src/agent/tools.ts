@@ -195,27 +195,163 @@ async function navigate(env: ToolEnv, url: string): Promise<string> {
     waitUntil: "domcontentloaded",
     timeout: 20_000,
   });
-  // Give client JS a moment to hydrate: clicking a not-yet-interactive button is
-  // the #1 source of false "broken" findings on React/Next targets.
-  await env.page.waitForLoadState("load", { timeout: 8_000 }).catch(() => {});
-  await env.page.waitForTimeout(700);
+  // Give client JS a real chance to hydrate: clicking a not-yet-interactive
+  // button is the #1 source of false "broken" findings on React/Next targets.
+  await waitForHydration(env.page, 3_000);
   return `Navigated to ${env.page.url()} (status ${res?.status() ?? "?"})`;
 }
 
-async function click(env: ToolEnv, input: Record<string, unknown>): Promise<string> {
-  const locator = resolveLocator(env.page, input);
-  const netBefore = env.networkLog.length;
-  await locator.first().click({ timeout: 8_000 });
+// Hydration gate before interacting: full load, then a double-rAF tick (lets
+// the framework flush the effects that attach event listeners), then a capped
+// network-idle wait (hydration chunks still in flight). Every wait is
+// best-effort — a chatty page must not stall the walk.
+async function waitForHydration(page: Page, networkIdleMs: number): Promise<void> {
+  await page.waitForLoadState("load", { timeout: 8_000 }).catch(() => {});
+  await page
+    .evaluate("new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))")
+    .catch(() => {});
+  if (networkIdleMs > 0) {
+    await page.waitForLoadState("networkidle", { timeout: networkIdleMs }).catch(() => {});
+  }
+}
+
+interface ReactionSnapshot {
+  net: number;
+  mut: number;
+  url: string;
+}
+
+async function snapshotReaction(env: ToolEnv): Promise<ReactionSnapshot> {
+  const mut = await env.page.evaluate("window.__cmaMutations || 0").catch(() => 0);
+  return { net: env.networkLog.length, mut: Number(mut) || 0, url: env.page.url() };
+}
+
+interface Reaction {
+  requests: number;
+  mutations: number;
+  navigated: boolean;
+}
+
+// Let the page settle after an interaction, then measure what it did: network
+// requests, DOM mutations, navigation. Navigation resets the mutation counter
+// (fresh document), so it is reported as its own definitive signal.
+async function settleAndMeasure(env: ToolEnv, before: ReactionSnapshot): Promise<Reaction> {
   await env.page.waitForLoadState("domcontentloaded").catch(() => {});
-  // Settle so the rolling network log captures whatever the click kicked off —
-  // the request count below is what lets the model tell "dead button" from
-  // "clicked before hydration".
   await env.page.waitForTimeout(1_200);
-  const followed = env.networkLog.length - netBefore;
-  const base = `Clicked. Current URL: ${env.page.url()} (${followed} network request${followed === 1 ? "" : "s"} followed)`;
-  return followed > 0
-    ? base
-    : `${base}. If you expected this click to submit or load something, the page may not have finished hydrating — re-read the page and retry the click once before judging the element broken.`;
+  const after = await snapshotReaction(env);
+  const navigated = after.url !== before.url;
+  return {
+    requests: Math.max(after.net - before.net, 0),
+    mutations: navigated ? after.mut : Math.max(after.mut - before.mut, 0),
+    navigated,
+  };
+}
+
+const isInert = (r: Reaction) => r.requests === 0 && r.mutations === 0 && !r.navigated;
+
+// CHE-37: on Browser Rendering, clicks that work in every real browser come
+// back inert (0 requests). Strategy ladder, escalating only while the page
+// shows ZERO reaction (no requests, no DOM mutations, no navigation):
+//   1. locator.click — trusted pointer sequence with full actionability checks
+//      (scroll into view, visible, stable, receives events). Always first.
+//   2. form.requestSubmit(button) — when the target is a submit button whose
+//      trusted click was inert: fires a real cancelable `submit` event, so
+//      framework onSubmit handlers run exactly as if the user submitted.
+//   3. synthetic pointer/mouse event sequence via dispatchEvent — untrusted
+//      events, labeled as such; last resort for listeners that ignore the
+//      trusted click in this environment.
+// The result text records WHICH strategy produced a reaction, so transcripts
+// (and the synthesis pass) can see when only a fallback worked.
+async function click(env: ToolEnv, input: Record<string, unknown>): Promise<string> {
+  const target = resolveLocator(env.page, input).first();
+  // Never interact before hydration: a click landing before listeners attach
+  // is indistinguishable from a dead button.
+  await waitForHydration(env.page, 1_500);
+  const before = await snapshotReaction(env);
+
+  await target.click({ timeout: 8_000 });
+  let reaction = await settleAndMeasure(env, before);
+  let strategy = "trusted click";
+  const tried = [strategy];
+
+  if (isInert(reaction)) {
+    // Re-querying could hit a different node than the visually-labeled one —
+    // both fallbacks reuse the SAME locator's element.
+    const handle = await target.elementHandle({ timeout: 2_000 }).catch(() => null);
+    if (handle) {
+      const submitted = await handle
+        .evaluate((el: Element) => {
+          const btn = (el.closest('button, input[type="submit"]') ?? el) as HTMLElement;
+          const form = btn.closest("form");
+          if (!form) return false;
+          const isSubmit =
+            (btn instanceof HTMLButtonElement && btn.type === "submit") ||
+            (btn instanceof HTMLInputElement && btn.type === "submit");
+          if (!isSubmit) return false;
+          if (typeof form.requestSubmit === "function") {
+            form.requestSubmit(btn as HTMLButtonElement);
+          } else {
+            (form as HTMLFormElement).submit();
+          }
+          return true;
+        })
+        .catch(() => false);
+      if (submitted) {
+        tried.push("form.requestSubmit()");
+        reaction = await settleAndMeasure(env, before);
+        if (!isInert(reaction)) strategy = "form.requestSubmit() fallback (trusted click was inert)";
+      }
+      if (isInert(reaction)) {
+        const dispatched = await handle
+          .evaluate((el: Element) => {
+            const r = el.getBoundingClientRect();
+            const opts = {
+              bubbles: true,
+              cancelable: true,
+              composed: true,
+              button: 0,
+              clientX: r.x + r.width / 2,
+              clientY: r.y + r.height / 2,
+            };
+            for (const type of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) {
+              el.dispatchEvent(
+                type.startsWith("pointer")
+                  ? new PointerEvent(type, opts)
+                  : new MouseEvent(type, opts),
+              );
+            }
+            return true;
+          })
+          .catch(() => false);
+        if (dispatched) {
+          tried.push("synthetic event dispatch");
+          reaction = await settleAndMeasure(env, before);
+          if (!isInert(reaction))
+            strategy = "synthetic event dispatch fallback (untrusted events; trusted click was inert)";
+        }
+      }
+    }
+  }
+
+  const observed = `${reaction.requests} network request${reaction.requests === 1 ? "" : "s"}, ${reaction.mutations} DOM mutation${reaction.mutations === 1 ? "" : "s"}${reaction.navigated ? ", navigated" : ""}`;
+  if (isInert(reaction)) {
+    // Honest zero-reaction signal (CHE-37): the model must see "the page did
+    // nothing at all" instead of silence, and must not translate it straight
+    // into "broken" — this environment is known to be ignored by some apps.
+    return (
+      `Clicked, but the page did not react AT ALL: 0 network requests and 0 DOM mutations ` +
+      `(strategies tried: ${tried.join(", ")}). Current URL: ${env.page.url()}. ` +
+      `This is either a genuinely dead control or this test browser being ignored ` +
+      `(overlay/consent layer, bot gating). Check for overlays with read_page/screenshot; ` +
+      `if it stays inert while other JS on the page works, report it as unresponsive ` +
+      `IN THIS TEST BROWSER — not as broken for real users.`
+    );
+  }
+  const note =
+    reaction.requests === 0 && !reaction.navigated
+      ? " No network request followed, but the DOM changed — likely an in-page reaction (validation message, menu, state change); re-read the page to see what happened."
+      : "";
+  return `Clicked (strategy: ${strategy}). Current URL: ${env.page.url()} (${observed}).${note}`;
 }
 
 async function fill(env: ToolEnv, input: Record<string, unknown>): Promise<string> {
@@ -248,6 +384,9 @@ async function fill(env: ToolEnv, input: Record<string, unknown>): Promise<strin
       : page.locator("input:visible");
 
   const field = locator.first();
+  // Same hydration gate as click: values typed before listeners attach are
+  // silently dropped by controlled inputs.
+  await waitForHydration(page, 1_000);
   await field.fill(value, { timeout: 8_000 });
   // React controlled inputs silently drop values typed before hydration —
   // verify the value stuck and retry once if not.
@@ -361,12 +500,27 @@ async function readPage(page: Page): Promise<string> {
   ].join("\n\n");
 }
 
+// Counts every DOM mutation from document creation onward. Gives interactions
+// a second honest reaction signal besides the network log: "0 requests AND 0
+// mutations" means the page truly ignored us (CHE-37), while "0 requests but
+// N mutations" is client-side validation / in-page state change — a real
+// difference the model previously could not see. Kept as a plain string so
+// esbuild cannot inject helpers into it.
+const MUTATION_COUNTER_SCRIPT = `(() => {
+  window.__cmaMutations = 0;
+  try {
+    new MutationObserver((records) => { window.__cmaMutations += records.length; })
+      .observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
+  } catch (e) {}
+})();`;
+
 // Prepare a fresh page for agent use: the __name shim works around esbuild
 // (tsx) injecting `__name(...)` helper calls into functions that Playwright
 // serializes for page.evaluate — without it every evaluate throws
 // "ReferenceError: __name is not defined" in the browser.
 export async function prepareAgentPage(env: ToolEnv): Promise<void> {
   await env.page.addInitScript("window.__name = (fn) => fn;");
+  await env.page.addInitScript(MUTATION_COUNTER_SCRIPT);
   attachLogCapture(env);
 }
 

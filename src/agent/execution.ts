@@ -8,6 +8,7 @@ import { decryptSecret } from "@/lib/crypto";
 import type { StepStatus } from "@/lib/enums";
 import { runAgentLoop, finalizeJson, type TranscriptEntry } from "./core";
 import { prepareAgentPage, type ToolEnv } from "./tools";
+import { agentContextOptions } from "./browser";
 import { walkingSystem } from "./instructions";
 import { putScreenshot, putText, type AgentEnv } from "./env";
 import { originOf, type ProposedJourney, type RunInput } from "./discovery";
@@ -88,7 +89,7 @@ export async function walkOneJourney(args: {
   await env.db.journey.deleteMany({ where: { runId: run.id, order: index } });
 
   {
-    const context = await browser.newContext();
+    const context = await browser.newContext(agentContextOptions(browser));
     const page = await context.newPage();
 
     const journey = await env.db.journey.create({
