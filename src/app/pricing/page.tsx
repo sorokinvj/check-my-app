@@ -1,13 +1,15 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { UpgradeCta } from "@/components/upgrade-cta";
 
 export const metadata: Metadata = {
   title: "Pricing — CheckMyApp",
   description: "Free first check. Daily Watch from $29/mo per app.",
 };
 
-// Pricing · /pricing (CHE-40 phase 2a) — static page, no checkout yet.
-// Paid CTAs land on /sign-in; Stripe arrives in a later phase.
+// Pricing · /pricing (CHE-40 phases 2a + 3). Starter/Growth CTAs go through
+// <UpgradeCta>: signed-out → /sign-in, signed-in → Stripe Checkout (or a quiet
+// "launches soon" note until billing is configured). Business stays a mailto.
 
 type Plan = {
   name: string;
@@ -16,6 +18,8 @@ type Plan = {
   blurb: string;
   features: string[];
   cta: { label: string; href: string };
+  // Set → the CTA starts Stripe Checkout for this plan when signed in.
+  checkoutPlan?: "starter" | "growth";
   recommended?: boolean;
 };
 
@@ -44,6 +48,7 @@ const PLANS: Plan[] = [
       "Export Playwright specs to GitHub as a PR",
     ],
     cta: { label: "Start free", href: "/sign-in" },
+    checkoutPlan: "starter",
     recommended: true,
   },
   {
@@ -58,6 +63,7 @@ const PLANS: Plan[] = [
       "Team access",
     ],
     cta: { label: "Start free", href: "/sign-in" },
+    checkoutPlan: "growth",
   },
   {
     name: "Business",
@@ -129,12 +135,20 @@ export default function PricingPage() {
                 ))}
               </ul>
               <div className="mt-5">
-                <Link
-                  href={plan.cta.href}
-                  className={`${CTA_BASE} ${plan.recommended ? CTA_PRIMARY : CTA_OUTLINE}`}
-                >
-                  {plan.cta.label}
-                </Link>
+                {plan.checkoutPlan ? (
+                  <UpgradeCta
+                    plan={plan.checkoutPlan}
+                    label={plan.cta.label}
+                    className={`${CTA_BASE} ${plan.recommended ? CTA_PRIMARY : CTA_OUTLINE}`}
+                  />
+                ) : (
+                  <Link
+                    href={plan.cta.href}
+                    className={`${CTA_BASE} ${plan.recommended ? CTA_PRIMARY : CTA_OUTLINE}`}
+                  >
+                    {plan.cta.label}
+                  </Link>
+                )}
               </div>
             </div>
           ))}

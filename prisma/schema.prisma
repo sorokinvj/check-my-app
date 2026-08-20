@@ -270,6 +270,11 @@ model User {
   role        String  @default("requester") // requester | provider_human | agent_operator | admin
   plan        String  @default("free")       // free | starter | growth | business | enterprise
 
+  // Stripe billing (CHE-40 phase 3). Set by /api/billing/checkout + the Stripe
+  // webhook; null for free/manual accounts. Customer is 1:1 with a user.
+  stripeCustomerId     String? @unique
+  stripeSubscriptionId String?
+
   apps    App[]
   runs    Run[]
   watches Watch[]

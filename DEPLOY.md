@@ -48,3 +48,33 @@ in `wrangler.jsonc`), so deploy the agent first.
 - R2 is private — evidence is proxied through the web Worker (`/api/evidence`);
   keys are content-addressed and the verdict permalink is unguessable.
 - Turnstile gates `/check`; add a Cloudflare WAF rate-limit rule on `/api/checks`.
+
+## Stripe setup (CHE-40 phase 3)
+
+Billing code is deployed but inert until these exist — endpoints answer 503
+`billing_unconfigured` and the pricing CTAs show a "launches soon" note.
+
+1. In the Stripe dashboard create one product ("CheckMyApp") with two
+   **monthly** recurring prices: Starter $29/mo and Growth $99/mo. Capture the
+   two `price_…` ids.
+2. Set the four env values:
+
+```bash
+# Secrets — set on the WEB worker (checkout + webhook run there)
+npx wrangler secret put STRIPE_SECRET_KEY
+npx wrangler secret put STRIPE_WEBHOOK_SECRET
+```
+
+Also add all four (`STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`,
+`STRIPE_PRICE_STARTER`, `STRIPE_PRICE_GROWTH`) to the local `.env` for build
+parity, then re-sync the `WEB_BUILD_DOTENV` GitHub secret from it (CI writes
+that secret out as `.env` before the OpenNext build).
+
+3. Register a webhook endpoint at `https://checkmyapp.dev/api/webhooks/stripe`
+   listening for `checkout.session.completed`, `customer.subscription.updated`,
+   `customer.subscription.deleted` — its signing secret is the
+   `STRIPE_WEBHOOK_SECRET` above.
+
+Price↔plan mapping: `STRIPE_PRICE_STARTER` → `plan=starter`,
+`STRIPE_PRICE_GROWTH` → `plan=growth`; subscription deleted / past-due →
+`free`. Business/enterprise stay manual (mailto), no Stripe involved.
