@@ -185,12 +185,26 @@ export async function finalizeJson(
 // on the model remembering to emit JSON before its iteration budget runs out
 // (the dominant cause of "No journeys mapped"). Thinking is omitted — this is a
 // pure extraction over context the model already gathered.
+//
+// A null `parsed` is NOT always an exception: `output_config` is an Anthropic
+// param, and OpenRouter's Anthropic-compatible endpoint sometimes answers a
+// structured request with a well-formed but empty message (no content blocks,
+// zero tokens billed) instead of an error — that is exactly how prod run #19
+// lost its journeys without a single line in the logs. `note` says which of the
+// no-result shapes we got so the caller can surface it instead of guessing.
+export interface StructuredResult<T> {
+  parsed: T | null;
+  note: string | null;
+  costUsd: number;
+  usage: UsageTotals;
+}
+
 export async function finalizeStructured<T>(
   llm: LlmConfig,
   messages: Anthropic.MessageParam[],
   instruction: string,
   schema: Record<string, unknown>,
-): Promise<{ parsed: T | null; costUsd: number; usage: UsageTotals }> {
+): Promise<StructuredResult<T>> {
   const response = await createWithRetry(() =>
     llm.navClient.messages.create({
       model: llm.navModel,
@@ -202,17 +216,25 @@ export async function finalizeStructured<T>(
   const costUsd = costOf(llm.navModel, response.usage);
   const usage = emptyUsage();
   addUsage(usage, llm.navModel, response.usage);
+  const nothing = (note: string): StructuredResult<T> => ({ parsed: null, note, costUsd, usage });
+
   const text = response.content.find((b) => b.type === "text");
-  if (!text || text.type !== "text") return { parsed: null, costUsd, usage };
+  if (!text || text.type !== "text") {
+    const u = response.usage;
+    return nothing(
+      `${llm.navModel} returned no text block (stop=${response.stop_reason ?? "?"}, ` +
+        `in=${u?.input_tokens ?? 0} out=${u?.output_tokens ?? 0} tokens)`,
+    );
+  }
   try {
-    return { parsed: JSON.parse(text.text) as T, costUsd, usage };
+    return { parsed: JSON.parse(text.text) as T, note: null, costUsd, usage };
   } catch {
     const m = text.text.match(/\{[\s\S]*\}/);
-    if (!m) return { parsed: null, costUsd, usage };
+    if (!m) return nothing(`${llm.navModel} answered with prose, not JSON`);
     try {
-      return { parsed: JSON.parse(m[0]) as T, costUsd, usage };
+      return { parsed: JSON.parse(m[0]) as T, note: null, costUsd, usage };
     } catch {
-      return { parsed: null, costUsd, usage };
+      return nothing(`${llm.navModel} emitted unparseable JSON (${text.text.length} chars)`);
     }
   }
 }

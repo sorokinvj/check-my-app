@@ -17,7 +17,10 @@ export type RunStatus =
   | "partial"
   | "failed";
 
-export type Verdict = "all_good" | "mostly_ok" | "needs_attention" | "broken";
+// "unverified" is off the good→bad axis: the run finished but walked nothing,
+// so we have no opinion to give. Only the workflow's coverage guard sets it —
+// synthesis never picks it (CHE-42).
+export type Verdict = "all_good" | "mostly_ok" | "needs_attention" | "broken" | "unverified";
 
 export type StepStatus =
   | "ok"

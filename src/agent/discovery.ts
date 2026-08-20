@@ -30,6 +30,11 @@ export interface DiscoveryResult {
   transcript: TranscriptEntry[];
   costUsd: number;
   usage: UsageTotals;
+  // Extraction trouble, in plain English, for the run's live feed. Discovery
+  // never touches the DB (it stays a pure function of the exploration), so the
+  // workflow turns these into events — a silent extraction failure is how run
+  // #19 shipped "all good" over zero journeys.
+  notes: string[];
 }
 
 export function originOf(url: string): string {
@@ -55,6 +60,12 @@ export async function discoverApp(args: {
     transcript: [],
     costUsd: 0,
     usage: emptyUsage(),
+    notes: [],
+  };
+  const notes: string[] = [];
+  const note = (text: string) => {
+    console.error(`[discovery] ${text}`);
+    notes.push(text);
   };
 
   const context = await browser.newContext();
@@ -113,13 +124,24 @@ export async function discoverApp(args: {
       costUsd += extracted.costUsd;
       mergeUsage(usage, extracted.usage);
       if (extracted.parsed) parsed = shapeDiscovery(extracted.parsed);
+      else note(`structured extraction returned nothing — ${extracted.note}`);
     } catch (err) {
-      console.error("[discovery] structured extraction failed:", err);
+      note(`structured extraction failed: ${errText(err)}`);
     }
-    if (!parsed) parsed = parseDiscoveryJson(result.finalText);
+    if (!parsed) {
+      parsed = parseDiscoveryJson(result.finalText);
+      note(
+        parsed
+          ? "fell back to the JSON in the model's free-text answer"
+          : "the model's free-text answer had no parseable JSON either",
+      );
+    }
 
     // Still no journeys → one focused structured retry dedicated to journeys.
-    if (parsed && parsed.journeys.length === 0) {
+    // This also runs when nothing parsed at all: gating it on a non-null
+    // `parsed` is what let run #19 fall through every rung of this ladder and
+    // still report a clean verdict over zero journeys.
+    if (!parsed || parsed.journeys.length === 0) {
       try {
         const j = await finalizeStructured<{ journeys?: RawDiscovery["journeys"] }>(
           llm,
@@ -131,12 +153,19 @@ export async function discoverApp(args: {
         costUsd += j.costUsd;
         mergeUsage(usage, j.usage);
         const recovered = shapeDiscovery({ journeys: j.parsed?.journeys ?? [] }).journeys;
-        if (recovered.length > 0) parsed = { ...parsed, journeys: recovered };
+        if (recovered.length > 0) {
+          parsed = { anatomy: parsed?.anatomy ?? empty.anatomy, journeys: recovered };
+        } else {
+          note(`journeys retry recovered none — ${j.note ?? "the model returned an empty list"}`);
+        }
       } catch (err) {
-        console.error("[discovery] journeys retry failed:", err);
+        note(`journeys retry failed: ${errText(err)}`);
       }
     }
-    return { ...(parsed ?? empty), transcript: result.transcript, costUsd, usage };
+    if (!parsed?.journeys.length) {
+      note("no journeys could be extracted — this run walks nothing and verifies nothing");
+    }
+    return { ...(parsed ?? empty), transcript: result.transcript, costUsd, usage, notes };
   } finally {
     await context.close();
   }
@@ -154,7 +183,7 @@ interface RawDiscovery {
   };
 }
 
-type ShapedDiscovery = Omit<DiscoveryResult, "transcript" | "costUsd" | "usage">;
+type ShapedDiscovery = Omit<DiscoveryResult, "transcript" | "costUsd" | "usage" | "notes">;
 
 function techToRecord(tech: unknown): Record<string, string> {
   const out: Record<string, string> = {};
@@ -193,15 +222,49 @@ function shapeDiscovery(raw: RawDiscovery): ShapedDiscovery {
 }
 
 // Fallback only — used when structured extraction returns nothing and we scrape
-// the model's final free-text for a JSON object.
+// the model's final free-text for a JSON object. The object usually arrives in
+// a ```json fence and is often followed by prose, so try the fenced body and
+// the first *balanced* {...} before the old first-brace-to-last-brace grab:
+// that one swallows any trailing sign-off containing a brace and then fails to
+// parse, throwing away journeys the model did emit.
 function parseDiscoveryJson(text: string): ShapedDiscovery | null {
-  const match = text.match(/\{[\s\S]*\}/);
-  if (!match) return null;
-  try {
-    return shapeDiscovery(JSON.parse(match[0]) as RawDiscovery);
-  } catch {
-    return null;
+  const start = text.indexOf("{");
+  const candidates = [
+    text.match(/```(?:json)?\s*([\s\S]*?)```/)?.[1],
+    start >= 0 ? balancedObject(text, start) : null,
+    start >= 0 ? text.slice(start, text.lastIndexOf("}") + 1) : null,
+  ];
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    try {
+      return shapeDiscovery(JSON.parse(candidate) as RawDiscovery);
+    } catch {
+      // Try the next candidate.
+    }
   }
+  return null;
+}
+
+// The first balanced {...} starting at `from`, ignoring braces inside strings.
+function balancedObject(text: string, from: number): string | null {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = from; i < text.length; i += 1) {
+    const c = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (c === "\\") escaped = true;
+      else if (c === '"') inString = false;
+    } else if (c === '"') inString = true;
+    else if (c === "{") depth += 1;
+    else if (c === "}" && (depth -= 1) === 0) return text.slice(from, i + 1);
+  }
+  return null;
+}
+
+function errText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 // Strict JSON schemas for structured outputs. additionalProperties:false and

@@ -8,6 +8,7 @@
 
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import type { AppAnatomy } from "@/lib/types";
+import type { Verdict } from "@/lib/enums";
 import { normalizeAnatomy } from "@/lib/anatomy";
 import type { RunEvent, RunPhase } from "@/lib/types";
 import { makeAgentEnv, putText, type AgentBindings, type AgentEnv } from "./env";
@@ -125,6 +126,11 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
             onLiveScreenshot: (url) => setLive(env, runId, { liveScreenshotUrl: url }),
             onProgress: (note) => setLive(env, runId, { currentAction: note }),
           });
+          // Extraction trouble first, then the outcome — so "No journeys
+          // mapped" always arrives with the reason it happened next to it.
+          for (const n of d.notes) {
+            await appendEvent(env, runId, "discovery", { icon: "warn", text: n });
+          }
           await appendEvent(env, runId, "discovery", {
             icon: d.journeys.length ? "ok" : "warn",
             text: d.journeys.length
@@ -206,6 +212,11 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
           });
         }
 
+        const checked = await checkVerdictIntegrity(env, runId, synth);
+        if (checked.note) {
+          await appendEvent(env, runId, "writing", { icon: "warn", text: checked.note });
+        }
+
         const transcript: TranscriptEntry[] = discovery.transcript;
         let transcriptUrl: string | null = null;
         if (transcript.length) {
@@ -221,8 +232,8 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
           where: { id: runId },
           data: {
             status: "completed",
-            verdict: synth.verdict,
-            bottomLine: synth.bottomLine,
+            verdict: checked.verdict,
+            bottomLine: checked.bottomLine,
             appLens: JSON.stringify(synth.appLens),
             transcriptUrl,
             costUsd,
@@ -230,7 +241,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
             completedAt: new Date(),
           },
         });
-        return synth.verdict;
+        return checked.verdict;
       });
 
       // Verdict-ready email (CHE: the /check form promises it). Non-fatal: a
@@ -275,6 +286,69 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
       throw err;
     }
   }
+}
+
+// ─── Verdict integrity (CHE-42) ──────────────────────────────────────────────
+// Two rules the synthesis prompt asks for and this code then enforces, because
+// a prompt is a request and a verdict is a promise:
+//
+//   1. Zero coverage is never a pass. Run #19 walked nothing and still shipped
+//      "all good" — a run that verified nothing gets "unverified", full stop.
+//   2. "Broken" needs a body. Run #20 called an app broken off eight risky /
+//      confusing / polish findings; without a broken/exposed finding or an
+//      observed broken/exposed step, it downgrades to "needs attention".
+//
+// Both rewrite bottomLine too — a corrected pill over uncorrected prose would
+// just move the contradiction one line down.
+
+async function checkVerdictIntegrity(
+  env: AgentEnv,
+  runId: string,
+  synth: { verdict: Verdict; bottomLine: string | null },
+): Promise<{ verdict: Verdict; bottomLine: string | null; note: string | null }> {
+  const journeys = await env.db.journey.findMany({
+    where: { runId },
+    select: { status: true, steps: { select: { status: true } } },
+  });
+  const findings = await env.db.finding.findMany({ where: { runId }, select: { category: true } });
+
+  const walked = journeys.filter((j) => j.status !== "skipped");
+  if (walked.length === 0) {
+    // The model wrote its bottom line believing its verdict would stand, so it
+    // is demoted to an outside observation rather than dropped or left to
+    // contradict the coverage sentence.
+    return {
+      verdict: "unverified",
+      bottomLine:
+        "We couldn't verify anything this run — no user journey was walked, so read this as " +
+        "zero coverage, not a clean bill of health." +
+        (synth.bottomLine ? ` What we saw from the outside: ${synth.bottomLine}` : ""),
+      note: `Zero journeys walked — verdict recorded as Not verified, not ${synth.verdict}`,
+    };
+  }
+
+  const isBreakage = (s: string) => s === "broken" || s === "exposed";
+  if (synth.verdict === "broken") {
+    const evidence =
+      findings.some((f) => isBreakage(f.category)) ||
+      journeys.some((j) => isBreakage(j.status) || j.steps.some((s) => isBreakage(s.status)));
+    if (!evidence) {
+      return {
+        verdict: "needs_attention",
+        bottomLine:
+          sentence(synth.bottomLine ?? "Nothing we walked failed outright") +
+          " Downgraded from Broken: no direct breakage evidence was captured.",
+        note: "Verdict downgraded from Broken — nothing we observed actually broke",
+      };
+    }
+  }
+  return { verdict: synth.verdict, bottomLine: synth.bottomLine, note: null };
+}
+
+// Close a model-written line so a clause can be appended after it.
+function sentence(text: string): string {
+  const trimmed = text.trim();
+  return /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
 }
 
 // ─── Watch notifications (CHE-41) ────────────────────────────────────────────

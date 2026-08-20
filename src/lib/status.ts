@@ -69,6 +69,13 @@ export const VERDICT_META: Record<
     label: "Broken",
     pillClassName: "border-status-broken/40 bg-status-broken/10 text-status-broken",
   },
+  // Zero coverage — the run walked nothing, so there is no verdict to give.
+  // Deliberately colourless: it must not read as either a pass or a failure.
+  unverified: {
+    emoji: "◌",
+    label: "Not verified",
+    pillClassName: "border-ink-600 bg-ink-800 text-fg-faint",
+  },
 };
 
 export const SEVERITY_META: Record<string, { label: string; className: string }> = {

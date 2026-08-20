@@ -113,7 +113,8 @@ server.tool(
   "get_verdict",
   "Full verdict of a completed run: bottom line, per-journey outcomes, findings " +
     "by severity, and cost. Use this to decide whether the deploy is healthy " +
-    "(all_good / mostly_ok) or needs action (needs_attention / broken).",
+    "(all_good / mostly_ok) or needs action (needs_attention / broken). " +
+    "A verdict of `unverified` means the check walked nothing — no signal either way.",
   { run_id: z.string().describe("Run id of a completed check") },
   async ({ run_id }) => {
     const res = await fetch(`${BASE}/api/runs/${run_id}/verdict`);

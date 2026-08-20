@@ -32,6 +32,11 @@ journey with status "partial" means everything attempted worked and only some
 steps went unverified — treat it as working, with a coverage caveat, never as
 a failure.
 
+Never call an app broken unless you can point at it: a finding you categorized
+"broken" or "exposed", or a step we actually observed fail. Absence of evidence
+is not evidence of breakage — if nothing you saw broke, the worst honest verdict
+is "needs attention".
+
 Steps that were merely INERT in the test browser (an interaction produced no
 request/effect, with no error response or console exception) are uncertain, not
 proof of breakage — the test browser differs from real ones. Never extrapolate
