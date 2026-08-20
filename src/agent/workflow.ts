@@ -310,7 +310,10 @@ async function checkVerdictIntegrity(
     where: { runId },
     select: { status: true, steps: { select: { status: true } } },
   });
-  const findings = await env.db.finding.findMany({ where: { runId }, select: { category: true } });
+  const findings = await env.db.finding.findMany({
+    where: { runId },
+    select: { category: true, severity: true },
+  });
 
   const walked = journeys.filter((j) => j.status !== "skipped");
   if (walked.length === 0) {
@@ -327,11 +330,15 @@ async function checkVerdictIntegrity(
     };
   }
 
-  const isBreakage = (s: string) => s === "broken" || s === "exposed";
+  // Findings are the adjudicated evidence (synthesis re-reads every step with
+  // full context); step labels alone don't qualify — run #28's background
+  // analytics 401 was step-labeled broken while every user journey worked.
+  // Security exposures need HIGH severity to carry a broken verdict (run #29's
+  // by-design medium exposure painted a working product broken).
   if (synth.verdict === "broken") {
-    const evidence =
-      findings.some((f) => isBreakage(f.category)) ||
-      journeys.some((j) => isBreakage(j.status) || j.steps.some((s) => isBreakage(s.status)));
+    const evidence = findings.some(
+      (f) => f.category === "broken" || (f.category === "exposed" && f.severity === "high"),
+    );
     if (!evidence) {
       return {
         verdict: "needs_attention",

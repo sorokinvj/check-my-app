@@ -150,21 +150,34 @@ function worseVerdict(a: Verdict, b: Verdict): Verdict {
 
 // A synthesized finding (derived from exploration, not an observed runtime
 // failure) maps conservatively: a product gap categorized "broken/high" is
-// "needs_attention", not a fully broken app. Only observed broken/exposed
-// journey steps, or any "exposed" (security) finding, escalate to "broken".
+// "needs_attention", not a fully broken app. Security exposures escalate by
+// severity — a medium "evidence links are public by design" must not paint the
+// whole app broken (run #29 did exactly that), a high one should.
 function findingVerdict(f: SynthesizedFinding): Verdict {
-  if (f.category === "exposed") return "broken";
+  if (f.category === "exposed") return f.severity === "high" ? "broken" : "needs_attention";
   if (f.category === "broken") return "needs_attention";
   if (f.category === "risky") return f.severity === "high" ? "needs_attention" : "mostly_ok";
   if (f.category === "confusing") return "mostly_ok";
   return "all_good"; // polish
 }
 
+// Synthesis is the adjudicator: it re-reads every step with full context and
+// writes findings off that picture. A step the walking model labeled broken
+// mid-flight (run #28: a background analytics 401 flagged "client priority")
+// only drives a broken VERDICT when a finding corroborates it — otherwise the
+// step caps the roll-up at needs_attention and the pill stays honest.
 function rollUpVerdict(statuses: StepStatus[], findings: SynthesizedFinding[]): Verdict {
   let verdict: Verdict = "all_good";
-  if (statuses.some((s) => s === "broken" || s === "exposed")) verdict = "broken";
-  else if (statuses.some((s) => s === "risky")) verdict = worseVerdict(verdict, "needs_attention");
-  else if (statuses.some((s) => s === "confusing")) verdict = worseVerdict(verdict, "mostly_ok");
+  const corroborated = findings.some(
+    (f) => f.category === "broken" || (f.category === "exposed" && f.severity === "high"),
+  );
+  if (statuses.some((s) => s === "broken" || s === "exposed")) {
+    verdict = corroborated ? "broken" : "needs_attention";
+  } else if (statuses.some((s) => s === "risky")) {
+    verdict = worseVerdict(verdict, "needs_attention");
+  } else if (statuses.some((s) => s === "confusing")) {
+    verdict = worseVerdict(verdict, "mostly_ok");
+  }
   for (const f of findings) verdict = worseVerdict(verdict, findingVerdict(f));
   return verdict;
 }
