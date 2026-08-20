@@ -12,6 +12,25 @@ export async function launchAgentBrowser(env: AgentEnv): Promise<Browser> {
   return launch(env.bindings.MYBROWSER);
 }
 
+// Context options for testing customers' OWN apps (they consented to the run).
+// Browser Rendering's defaults advertise "HeadlessChrome/…" in the UA and an
+// 800x600 viewport — enough for frameworks, consent gates and analytics
+// wrappers to silently no-op handlers, which is our #1 false-positive source
+// (CHE-37: inert clicks/submits that work in every real browser). We present a
+// normal desktop Chrome profile instead; the UA is derived from the actual
+// engine version, so it stays truthful (Chrome's UA-reduction freezes the
+// platform/minor tokens anyway). Deliberately NOT touched: navigator.webdriver
+// and other fingerprint surfaces — defeating third-party bot protection is out
+// of scope and prohibited.
+export function agentContextOptions(browser: Browser): NonNullable<Parameters<Browser["newContext"]>[0]> {
+  const major = browser.version().split(".")[0] || "126";
+  return {
+    viewport: { width: 1366, height: 900 },
+    locale: "en-US",
+    userAgent: `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major}.0.0.0 Safari/537.36`,
+  };
+}
+
 export async function applyNameShim(page: Page): Promise<void> {
   await page.addInitScript("window.__name = (fn) => fn;");
 }
@@ -48,7 +67,7 @@ export async function surfaceScan(
   browser: Browser,
   targetUrl: string,
 ): Promise<SurfaceScanResult> {
-  const context = await browser.newContext();
+  const context = await browser.newContext(agentContextOptions(browser));
   const page = await context.newPage();
   await applyNameShim(page);
   try {

@@ -33,9 +33,12 @@ Operating rules:
   reacts (spinner, popup, network request), then report that step as "skipped"
   (untestable in this environment) — never "broken". An OAuth popup must never
   drive a broken verdict.
-- Before judging any interaction "broken because nothing happened": re-read the
-  page and retry it once — a click can land before the app hydrates. The click
-  result tells you how many network requests followed.
+- The click tool already waits for hydration, tries fallback strategies on its
+  own (form.requestSubmit, synthetic events) and reports how many network
+  requests and DOM mutations followed, plus which strategy worked. "DOM changed
+  but no request" means an in-page reaction (validation, menu) — re-read the
+  page. Before judging any interaction "broken because nothing happened":
+  re-read the page and retry it once.
 - "broken" requires POSITIVE evidence of breakage a real user would hit: an
   error response, a console exception, a crash, a broken navigation, wrong
   data. Silence is not positive evidence — this test browser differs from real
