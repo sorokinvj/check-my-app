@@ -41,6 +41,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 <span className="hidden font-mono text-[11px] uppercase tracking-[0.18em] text-fg-faint sm:inline">
                   product mirror · qa fallout
                 </span>
+                <Link
+                  href="/pricing"
+                  className="font-mono text-[13px] text-fg-muted transition-colors hover:text-fg"
+                >
+                  Pricing
+                </Link>
                 <Show when="signed-out">
                   <SignInButton mode="modal">
                     <button className="font-mono text-[13px] text-fg-muted transition-colors hover:text-fg">
