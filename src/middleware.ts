@@ -14,10 +14,13 @@ export default clerkMiddleware(async (auth, req) => {
 });
 
 export const config = {
-  matcher: [
-    // Skip Next internals and static files unless referenced in search params.
-    "/((?!_next|[^?]*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)",
-    // Always run for API routes (so auth() is available where needed).
-    "/(api|trpc)(.*)",
-  ],
+  // Everything that reaches the Worker, with no file-extension escape hatch
+  // (CHE-44). Clerk's stock matcher skips paths that look like static files —
+  // safe on Vercel, wrong here: on Workers a *missing* /favicon.ico or /foo.png
+  // is not short-circuited, it falls through to Next, which renders the 404 page
+  // inside the root layout, whose <ClerkProvider> throws
+  // "auth() was called but Clerk can't detect usage of clerkMiddleware()".
+  // Every such 404 came back as a 500. Real assets are served by the Workers
+  // ASSETS binding before the Worker runs, so they never reach this.
+  matcher: ["/(.*)"],
 };
