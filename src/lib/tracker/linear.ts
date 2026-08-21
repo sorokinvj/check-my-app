@@ -1,7 +1,9 @@
 import type { Tracker, TicketDraft, CreatedIssue } from "./types";
+import { linearAuthHeader } from "./linear-auth";
 
 // Linear adapter over the GraphQL API (CHE-31). Multi-tenant SaaS auth = OAuth2
-// access token (Bearer). The token comes from the owner's TrackerIntegration
+// access token (Bearer); a seeded personal API key goes in bare — see
+// linearAuthHeader. The token comes from the owner's TrackerIntegration
 // (decrypted at the call site) and is scoped to their workspace.
 //
 // NOTE: not yet exercised against the live API — wiring is blocked on the Linear
@@ -21,7 +23,7 @@ export class LinearTracker implements Tracker {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${this.accessToken}`,
+        Authorization: linearAuthHeader(this.accessToken),
       },
       body: JSON.stringify({ query, variables }),
     });
@@ -98,10 +100,26 @@ export class LinearTracker implements Tracker {
     return data.issueCreate.issue;
   }
 
+  // Linear accepts the shorthand identifier ("JOB-123") wherever an issue is
+  // addressed by a top-level `id` argument, but CommentCreateInput.issueId is an
+  // input field and wants the UUID. IssueLink stores the identifier (it is what
+  // we show the owner), so resolve it here rather than storing both.
+  private async issueUuid(idOrIdentifier: string): Promise<string> {
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(idOrIdentifier)) {
+      return idOrIdentifier;
+    }
+    const data = await this.gql<{ issue: { id: string } | null }>(
+      `query($id:String!){ issue(id:$id){ id } }`,
+      { id: idOrIdentifier },
+    );
+    if (!data.issue) throw new Error(`Linear: issue ${idOrIdentifier} not found`);
+    return data.issue.id;
+  }
+
   async addComment(issueId: string, body: string): Promise<void> {
     const data = await this.gql<{ commentCreate: { success: boolean } }>(
       `mutation($input:CommentCreateInput!){ commentCreate(input:$input){ success } }`,
-      { input: { issueId, body } },
+      { input: { issueId: await this.issueUuid(issueId), body } },
     );
     if (!data.commentCreate.success) throw new Error("Linear commentCreate returned success=false");
   }

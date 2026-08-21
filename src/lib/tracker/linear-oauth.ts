@@ -4,6 +4,8 @@
 // POST https://api.linear.app/oauth/token (form-urlencoded). Actor=Application
 // is set in the Linear app settings so tickets are created by the integration.
 
+import { linearAuthHeader } from "./linear-auth";
+
 const AUTHORIZE_URL = "https://linear.app/oauth/authorize";
 const TOKEN_URL = "https://api.linear.app/oauth/token";
 const GRAPHQL_URL = "https://api.linear.app/graphql";
@@ -75,7 +77,7 @@ export async function fetchTeams(
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${accessToken}`,
+      Authorization: linearAuthHeader(accessToken),
     },
     body: JSON.stringify({ query: "{ teams(first: 250) { nodes { id name } } }" }),
   });

@@ -1,0 +1,173 @@
+// Filing one Finding into the owner's tracker (CHE-50).
+//
+// Two callers share this: the verdict page's "Create ticket" button
+// (src/app/api/findings/[id]/ticket/route.ts) and the agent's auto-file pass on
+// a Watch run (src/agent/autofile.ts). Both must produce the SAME ticket for the
+// same finding and share one dedup namespace, so the draft shape and the dedup
+// key live here rather than being written twice.
+//
+// Deliberately free of Next / server-only imports: this compiles into the agent
+// worker (tsconfig.agent.json, workerd) as well as the web app.
+
+import { buildTicketDraft } from "./ticket";
+import { decideTicketAction } from "./decision";
+import type { Tracker, TicketDraft } from "./types";
+import { dedupKey } from "@/lib/dedup";
+import { parseJson } from "@/lib/json";
+import type { FindingDetail } from "@/lib/types";
+import type { PrismaClient } from "@/generated/prisma/client";
+
+// The Finding columns a ticket is built from — a structural subset so either
+// caller can pass its own query result.
+export interface TicketFinding {
+  runId: string;
+  number: number;
+  title: string;
+  category: string;
+  severity: string;
+  detail: string | null;
+  evidence: { storageUrl: string }[];
+}
+
+export interface TicketRun {
+  runNumber: number;
+  publicId: string;
+  startedAt: Date;
+  appSlug: string;
+}
+
+// TicketPolicy columns. Null = owner never configured one; every field then
+// falls back to the schema default.
+export interface TicketPolicyFields {
+  priorityRule: string;
+  pickupLabels: string;
+  repoLabel: string | null;
+  provenanceLabel: string;
+  state: string;
+  titleFormat: string;
+  escalateAfterRuns: number;
+}
+
+// One IssueLink row per (app, regression signature). Deliberately NOT keyed by
+// run: the same broken checkout seen on ten daily watch runs must land on one
+// ticket that counts to ten, which is the whole point of comment-and-count and
+// the escalation threshold. Built from the same three fields the ticket draft
+// describes the regression with, via the CHE-32 hash.
+export function dedupKeyForFinding(
+  finding: TicketFinding,
+  run: Pick<TicketRun, "appSlug">,
+): string {
+  const detail = parseJson<FindingDetail>(finding.detail) ?? {};
+  return dedupKey({
+    journeyTitle: detail.where ?? run.appSlug,
+    stepLabel: finding.title,
+    failureSignature: `${finding.category}/${finding.severity}`,
+  });
+}
+
+export function draftForFinding(
+  finding: TicketFinding,
+  run: TicketRun,
+  policy: TicketPolicyFields | null,
+  verdictUrl: string,
+): TicketDraft {
+  const detail = parseJson<FindingDetail>(finding.detail) ?? {};
+  const urgent = parseJson<{ urgent?: string[] }>(policy?.priorityRule ?? null)?.urgent ?? [];
+  const isCritical = urgent.some((j) => finding.title.toLowerCase().includes(j.toLowerCase()));
+
+  return buildTicketDraft(
+    {
+      journeyTitle: detail.where ?? run.appSlug,
+      failingStep: finding.title,
+      failureSignature: `${finding.category}/${finding.severity}: ${finding.title}`,
+      isCriticalJourney: isCritical,
+      baselineDiff: detail.whatHappened ?? "(one-off finding, no baseline diff)",
+      repro: (detail.whatWeTried ?? []).join("\n") || "See verdict page evidence.",
+      evidenceUrls: finding.evidence.map((e) => e.storageUrl),
+    },
+    {
+      runNumber: run.runNumber,
+      runPublicId: run.publicId,
+      startedAtIso: run.startedAt.toISOString(),
+      appSlug: run.appSlug,
+      verdictUrl,
+      pickupLabels: parseJson<string[]>(policy?.pickupLabels ?? null) ?? [],
+      repoLabel: policy?.repoLabel ?? null,
+      provenanceLabel: policy?.provenanceLabel ?? "checkmyapp",
+      state: policy?.state ?? "Backlog",
+      titleFormat: policy?.titleFormat ?? "[Monitor] {verdict}",
+    },
+  );
+}
+
+export type FilingOutcome =
+  | { kind: "created"; identifier: string; url: string; title: string }
+  | { kind: "commented"; identifier: string; occurrences: number; escalated: boolean };
+
+// Draft → decide → file. Never files a second ticket for a finding that already
+// has an open one: it comments and counts, and once the recurrence count passes
+// the owner's threshold it says so on the issue, once.
+export async function fileFindingTicket(opts: {
+  db: PrismaClient;
+  tracker: Tracker;
+  appId: string;
+  finding: TicketFinding;
+  run: TicketRun;
+  policy: TicketPolicyFields | null;
+  verdictUrl: string;
+}): Promise<FilingOutcome> {
+  const { db, tracker, appId, finding, run, policy } = opts;
+  const draft = draftForFinding(finding, run, policy, opts.verdictUrl);
+  const key = dedupKeyForFinding(finding, run);
+
+  const existing = await db.issueLink.findUnique({
+    where: { appId_dedupKey: { appId, dedupKey: key } },
+  });
+  const action = decideTicketAction(
+    existing
+      ? { status: existing.status, occurrences: existing.occurrences, escalatedAt: existing.escalatedAt }
+      : null,
+    policy?.escalateAfterRuns ?? 3,
+  );
+
+  if (action.kind === "comment" && existing) {
+    const occurrences = existing.occurrences + 1;
+    const body = [
+      `Re-filed from CheckMyApp — still present in run #${run.runNumber} (${draft.title}).`,
+      action.escalate
+        ? `\nEscalating: this is occurrence ${occurrences} and the issue is still open — ` +
+          `past the ${policy?.escalateAfterRuns ?? 3}-run threshold this app was configured with.`
+        : "",
+    ]
+      .join("")
+      .trim();
+    await tracker.addComment(existing.externalIssueId, body);
+    await db.issueLink.update({
+      where: { id: existing.id },
+      data: {
+        occurrences: { increment: 1 },
+        lastSeenAt: new Date(),
+        ...(action.escalate ? { escalatedAt: new Date() } : {}),
+      },
+    });
+    return {
+      kind: "commented",
+      identifier: existing.externalIssueId,
+      occurrences,
+      escalated: action.escalate,
+    };
+  }
+
+  const issue = await tracker.createIssue(draft);
+  await db.issueLink.upsert({
+    where: { appId_dedupKey: { appId, dedupKey: key } },
+    create: {
+      appId,
+      dedupKey: key,
+      externalIssueId: issue.identifier,
+      firstSeenRunId: finding.runId,
+    },
+    update: { externalIssueId: issue.identifier, status: "open", lastSeenAt: new Date() },
+  });
+  return { kind: "created", identifier: issue.identifier, url: issue.url, title: draft.title };
+}

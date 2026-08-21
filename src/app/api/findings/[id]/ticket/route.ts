@@ -2,11 +2,9 @@ import { NextResponse } from "next/server";
 import { getDbFromContext } from "@/lib/db";
 import { getOptionalUser } from "@/lib/auth";
 import { decryptSecret } from "@/lib/crypto";
-import { parseJson } from "@/lib/json";
-import { buildTicketDraft } from "@/lib/tracker/ticket";
 import { LinearTracker } from "@/lib/tracker/linear";
 import { decideTicketAction } from "@/lib/tracker/decision";
-import type { FindingDetail } from "@/lib/types";
+import { draftForFinding, dedupKeyForFinding } from "@/lib/tracker/file";
 
 // POST /api/findings/{id}/ticket — file this finding into the owner's tracker
 // using the parameters they set at onboarding (TicketPolicy) and their Linear
@@ -46,36 +44,17 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
   }
 
   const policy = app.policy;
-  const detail = parseJson<FindingDetail>(finding.detail) ?? {};
-  const urgent = parseJson<{ urgent?: string[] }>(policy?.priorityRule ?? null)?.urgent ?? [];
-  const isCritical = urgent.some((j) => finding.title.toLowerCase().includes(j.toLowerCase()));
-
-  const draft = buildTicketDraft(
-    {
-      journeyTitle: detail.where ?? finding.run.appSlug,
-      failingStep: finding.title,
-      failureSignature: `${finding.category}/${finding.severity}: ${finding.title}`,
-      isCriticalJourney: isCritical,
-      baselineDiff: detail.whatHappened ?? "(one-off finding, no baseline diff)",
-      repro: (detail.whatWeTried ?? []).join("\n") || "See verdict page evidence.",
-      evidenceUrls: finding.evidence.map((e) => e.storageUrl),
-    },
-    {
-      runNumber: finding.run.runNumber,
-      runPublicId: finding.run.publicId,
-      startedAtIso: finding.run.startedAt.toISOString(),
-      appSlug: finding.run.appSlug,
-      verdictUrl: `${new URL(_req.url).origin}/verdict/${finding.run.publicId}`,
-      pickupLabels: parseJson<string[]>(policy?.pickupLabels ?? null) ?? [],
-      repoLabel: policy?.repoLabel ?? null,
-      provenanceLabel: policy?.provenanceLabel ?? "checkmyapp",
-      state: policy?.state ?? "Backlog",
-      titleFormat: policy?.titleFormat ?? "[Monitor] {verdict}",
-    },
+  // Same draft the agent's auto-file pass builds (CHE-50) — one ticket shape,
+  // one dedup namespace, whether the owner clicked or the Watch found it.
+  const draft = draftForFinding(
+    finding,
+    finding.run,
+    policy,
+    `${new URL(_req.url).origin}/verdict/${finding.run.publicId}`,
   );
 
   const tracker = new LinearTracker(decryptSecret(app.tracker.accessTokenEnc), app.tracker.teamId);
-  const dedupKey = `finding:${finding.runId}:${finding.number}`;
+  const dedupKey = dedupKeyForFinding(finding, finding.run);
 
   try {
     const existing = await prisma.issueLink.findUnique({

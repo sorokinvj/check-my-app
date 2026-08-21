@@ -17,6 +17,7 @@ import { launchAgentBrowser, surfaceScan } from "./browser";
 import { discoverApp, type RunInput } from "./discovery";
 import { walkOneJourney, type WalkRun } from "./execution";
 import { synthesizeVerdict, type SynthesizedFinding } from "./synthesis";
+import { autoFileFindings } from "./autofile";
 import { sendVerdictReady } from "@/lib/email";
 import type { TranscriptEntry } from "./core";
 
@@ -243,6 +244,26 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
         });
         return checked.verdict;
       });
+
+      // Auto-file tracker tickets (CHE-50). Watch runs only, and only when the
+      // owner connected a tracker — autoFileFindings decides both. Non-fatal by
+      // construction: a tracker outage leaves warn events on a completed run.
+      if (run.watchId) {
+        await step.do("autofile", async () => {
+          try {
+            for (const note of await autoFileFindings(env, runId)) {
+              await appendEvent(env, runId, "writing", note);
+            }
+          } catch (err) {
+            const text = err instanceof Error ? err.message : String(err);
+            console.warn(`[autofile] ticket filing failed: ${text}`);
+            await appendEvent(env, runId, "writing", {
+              icon: "warn",
+              text: `Couldn't file tracker tickets: ${text}`,
+            });
+          }
+        });
+      }
 
       // Verdict-ready email (CHE: the /check form promises it). Non-fatal: a
       // notification failure must never fail a completed run. Watch runs arrive
