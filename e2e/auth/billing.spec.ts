@@ -25,6 +25,12 @@ test("signed-in owner gets a Stripe Checkout session for Starter", async ({ page
   expect(url).toContain("checkout.stripe.com");
 });
 
+// Hosted Checkout renders noticeably slower (and sometimes with extra fields)
+// on CI's headless linux chromium than locally — give this spec retries and a
+// longer completion window instead of letting nightly flake (first nightly run
+// timed out at 45s exactly here).
+test.describe.configure({ retries: 2 });
+
 test("owner completes Stripe test-card checkout and returns upgraded", async ({ page }) => {
   await signIn(page);
   const res = await page.request.post(`${BASE}/api/billing/checkout`, {
@@ -43,6 +49,6 @@ test("owner completes Stripe test-card checkout and returns upgraded", async ({ 
   if (await postal.isVisible().catch(() => false)) await postal.fill("10001");
 
   await page.getByTestId("hosted-payment-submit-button").click();
-  await page.waitForURL(/dashboard\?upgraded=1/, { timeout: 45_000 });
+  await page.waitForURL(/dashboard\?upgraded=1/, { timeout: 90_000 });
   await expect(page).toHaveURL(/upgraded=1/);
 });

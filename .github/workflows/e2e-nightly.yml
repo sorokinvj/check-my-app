@@ -41,3 +41,10 @@ jobs:
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - run: npx playwright test --config playwright.auth.config.ts
+      # Failure screenshots + error context — first nightly failed blind.
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-failure-artifacts
+          path: test-results/
+          retention-days: 7
