@@ -1,0 +1,43 @@
+# Nightly dogfood E2E against prod (CHE-55). Runs the auth suite —
+# sign-in, billing (hosted Checkout with the Stripe test card), downgrade
+# (cancels the test sub via the Stripe TEST API), quotas — against
+# https://checkmyapp.dev. On failure the workflow just fails (notifications
+# come later).
+#
+# Required repo secrets (exact names; the Clerk pair already exists for builds
+# via WEB_BUILD_DOTENV, but this workflow reads them as individual secrets):
+#   NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY — Clerk publishable key (pk_test_…)
+#   CLERK_SECRET_KEY                  — Clerk secret key (sk_test_…)
+#   E2E_CLERK_USER_EMAIL              — dogfood test user (…+clerk_test@…)
+#   E2E_CLERK_USER_PASSWORD           — dogfood test user password
+#   STRIPE_SECRET_KEY                 — Stripe TEST secret key (sk_test_…),
+#                                       same one the server uses; the downgrade
+#                                       spec skips without it.
+
+name: E2E Nightly (prod)
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TARGET_URL: https://checkmyapp.dev
+      NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+      CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+      E2E_CLERK_USER_EMAIL: ${{ secrets.E2E_CLERK_USER_EMAIL }}
+      E2E_CLERK_USER_PASSWORD: ${{ secrets.E2E_CLERK_USER_PASSWORD }}
+      STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npx playwright test --config playwright.auth.config.ts
