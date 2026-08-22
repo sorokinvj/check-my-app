@@ -133,17 +133,19 @@ proxied through the web worker; verdict permalinks are unguessable.
 
 `mcp/server.ts` is a stdio MCP server exposing CheckMyApp to any MCP client
 (Claude Code first). Tools: `start_check` (url + focus notes → run id),
-`get_check_status` (poll), `get_verdict` (structured verdict: journeys,
-findings, cost — decide pass/fail).
+`wait_for_run` (block until the verdict — built for post-deploy hooks),
+`get_check_status` (poll), `get_verdict` (structured verdict by run id or
+domain: journeys, findings, cost — decide pass/fail).
 
 ```bash
 claude mcp add checkmyapp -- npx tsx mcp/server.ts
 # CHECKMYAPP_URL=https://checkmyapp.dev is the default target
+# CHECKMYAPP_API_KEY=cma_… runs as the owner (dashboard → API keys)
 ```
 
 The canonical post-merge loop: CI deploys → your agent calls
 `start_check{url, notes: "PR #123 touched checkout — verify it first"}` →
-polls `get_check_status` → on `needs_attention`/`broken` verdict files the
+`wait_for_run` → on `needs_attention`/`broken` verdict files the
 findings (or blocks the release). The same API is curl-able without MCP:
 `POST /api/checks`, `GET /api/runs/{id}`, `GET /api/runs/{id}/verdict`.
 
@@ -204,3 +206,5 @@ an "Open verdict" button. No signing — the Slack URL itself is the secret.
 Poll-side counterpart: `GET /api/status/{slug}` (owner session; API-key auth
 lands with CHE-52) returns the latest completed run:
 `{ app, verdict, runNumber, completedAt, verdictUrl }`.
+`POST /api/checks` (Bearer `cma_…` for owner runs), `GET /api/runs/{id}`,
+`GET /api/runs/{id}/verdict`. Full docs + hook recipe: [mcp/README.md](mcp/README.md).

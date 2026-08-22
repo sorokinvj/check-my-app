@@ -1,12 +1,15 @@
 import { NextResponse } from "next/server";
 import { getDbFromContext } from "@/lib/db";
+import { getOwnerFromRequest } from "@/lib/auth";
 import { appSlugFromUrl } from "@/lib/utils";
 import { normalizeTargetUrl } from "@/lib/validation";
 
 // GET /api/checks/lookup?url=… — domain-keyed result cache (CHE-39).
 // Returns the latest completed run for the URL's domain so /check can prefill
 // "we already checked this app". Anonymous runs are public by design (owner
-// decision 2026-08-16); owner-scoped runs stay private to their owner.
+// decision 2026-08-16); owner-scoped runs stay private to their owner — but an
+// authenticated caller (Clerk session or API key, CHE-52) does see their own,
+// so the MCP get_verdict(domain) flow resolves key-attributed runs too.
 export async function GET(req: Request) {
   const url = new URL(req.url).searchParams.get("url") ?? "";
   if (!url.trim()) {
@@ -19,7 +22,12 @@ export async function GET(req: Request) {
   }
 
   const prisma = await getDbFromContext();
-  const where = { appSlug, ownerId: null, status: "completed" };
+  const owner = (await getOwnerFromRequest(prisma, req))?.user ?? null;
+  const where = {
+    appSlug,
+    status: "completed",
+    OR: [{ ownerId: null }, ...(owner ? [{ ownerId: owner.id }] : [])],
+  };
   const [latest, count, watch] = await Promise.all([
     prisma.run.findFirst({
       where,

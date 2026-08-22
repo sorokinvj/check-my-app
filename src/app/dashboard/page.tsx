@@ -6,6 +6,7 @@ import { TeamSelect } from "@/components/team-select";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { setIntegrationEndpoints } from "./actions";
+import { ApiKeys } from "@/components/api-keys";
 
 // Owner home (protected). Lists the apps this owner has under daily QA.
 export default async function DashboardPage() {
@@ -19,6 +20,11 @@ export default async function DashboardPage() {
       runs: { orderBy: { createdAt: "desc" }, take: 1 },
     },
     orderBy: { createdAt: "desc" },
+  });
+  const apiKeys = await db.apiKey.findMany({
+    where: { ownerId: user.id },
+    orderBy: { createdAt: "desc" },
+    select: { id: true, name: true, lastUsedAt: true, createdAt: true },
   });
 
   // For connected apps, pull the workspace teams so the owner can pick which one
@@ -154,6 +160,15 @@ export default async function DashboardPage() {
           })}
         </ul>
       )}
+
+      <ApiKeys
+        keys={apiKeys.map((k) => ({
+          id: k.id,
+          name: k.name,
+          lastUsedAt: k.lastUsedAt?.toISOString() ?? null,
+          createdAt: k.createdAt.toISOString(),
+        }))}
+      />
     </main>
   );
 }
