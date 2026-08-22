@@ -32,6 +32,7 @@ test("signed-in owner gets a Stripe Checkout session for Starter", async ({ page
 test.describe.configure({ retries: 2 });
 
 test("owner completes Stripe test-card checkout and returns upgraded", async ({ page }) => {
+  test.setTimeout(120_000); // the config's 60s default fired before the 90s redirect wait
   await signIn(page);
   const res = await page.request.post(`${BASE}/api/billing/checkout`, {
     data: { plan: "starter" },
@@ -47,6 +48,12 @@ test("owner completes Stripe test-card checkout and returns upgraded", async ({ 
   await page.getByPlaceholder(/full name/i).fill("CheckMyApp E2E");
   const postal = page.getByPlaceholder(/zip|postal/i).first();
   if (await postal.isVisible().catch(() => false)) await postal.fill("10001");
+
+  // On CI runners Stripe pre-checks the Link "Save my information" box, which
+  // reveals a REQUIRED phone field and blocks submit (nightly failed 3/3 on
+  // exactly this). Opt out of Link — we're testing our checkout, not Link.
+  const linkSave = page.getByRole("checkbox", { name: /save my information/i });
+  if (await linkSave.isChecked().catch(() => false)) await linkSave.uncheck();
 
   await page.getByTestId("hosted-payment-submit-button").click();
   await page.waitForURL(/dashboard\?upgraded=1/, { timeout: 90_000 });
