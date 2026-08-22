@@ -64,6 +64,9 @@ export async function POST(req: Request) {
       scopeHints: input.scopeHints || null,
       userNotes: input.userNotes || null,
       notifyEmail: input.notifyEmail || null,
+      // Deploy identity (CHE-56) — set by CI so the verdict names a build.
+      deploySha: input.deploy?.sha ?? null,
+      deployEnv: input.deploy?.env || null,
       ownerId: owner?.id ?? null,
       anonKeyHash,
       status: "queued",

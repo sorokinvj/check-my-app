@@ -15,11 +15,19 @@ export interface WebhookFinding {
   severity: string;
 }
 
+export interface DeployIdentity {
+  sha: string;
+  env: string | null;
+}
+
 export interface RunCompletedPayload {
   event: "run.completed";
   app: string; // appSlug
   runNumber: number;
   verdict: string | null;
+  // Which build this run verified (CHE-56), or null when the run wasn't tied to
+  // a deploy — a watch run, or a submission that named no sha.
+  deploy: DeployIdentity | null;
   // Verdict of the baseline run this one was diffed against (null on first run).
   previousVerdict: string | null;
   changed: boolean;

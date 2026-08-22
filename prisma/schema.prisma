@@ -70,6 +70,13 @@ model Run {
   currentAction      String?
   liveScreenshotUrl  String?
 
+  // Deploy identity (CHE-56): which build this run verified. Set by CI through
+  // the API/MCP; null for browser submissions and scheduler runs, which are not
+  // tied to a deploy. Free text — the sha is whatever the caller's VCS calls a
+  // revision, and createCheckSchema is the only gate on its shape.
+  deploySha String?
+  deployEnv String? // "production", "staging", … caller's own naming
+
   errorMessage String?
   // Audit artifact: file URL of the agent-loop transcript (tool calls + results).
   transcriptUrl String?

@@ -572,6 +572,8 @@ async function notifyIntegrations(
       bottomLine: true,
       baselineRunId: true,
       completedAt: true,
+      deploySha: true,
+      deployEnv: true,
     },
   });
   if (!run?.appId) return [];
@@ -607,6 +609,7 @@ async function notifyIntegrations(
     app: run.appSlug,
     runNumber: run.runNumber,
     verdict,
+    deploy: run.deploySha ? { sha: run.deploySha, env: run.deployEnv } : null,
     previousVerdict,
     changed: previousVerdict !== verdict,
     bottomLine: run.bottomLine,

@@ -110,6 +110,10 @@ export default async function VerdictPage({ params }: { params: Promise<{ id: st
               }) ?? "—"}
               {duration && ` · ${duration}`} · Run #{run.runNumber}
               {run.costUsd != null && ` · $${run.costUsd.toFixed(2)}`}
+              {/* Deploy identity (CHE-56) — short sha, the form CI logs and
+                  humans recognise; the full sha stays in the API payload. */}
+              {run.deploySha &&
+                ` · deploy ${run.deploySha.slice(0, 7)}${run.deployEnv ? ` (${run.deployEnv})` : ""}`}
             </p>
             {totalTokens > 0 && (
               <p className="mt-0.5 font-mono text-xs text-fg-faint">

@@ -29,6 +29,9 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     app: run.appSlug,
     status: run.status,
     verdict: run.verdict,
+    // Deploy identity (CHE-56): null when the run wasn't tied to a build, so a
+    // CI gate can tell "not a deploy check" from "a deploy check that passed".
+    deploy: run.deploySha ? { sha: run.deploySha, env: run.deployEnv } : null,
     bottom_line: run.bottomLine,
     journeys: run.journeys,
     findings: run.findings,

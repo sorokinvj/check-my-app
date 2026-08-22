@@ -40,6 +40,8 @@ interface VerdictPayload {
   verdict: string | null;
   bottom_line?: string | null;
   findings?: Array<{ title: string; category: string; severity: string }>;
+  // Deploy identity (CHE-56); absent on deployments older than that API.
+  deploy?: { sha: string; env: string | null } | null;
   [key: string]: unknown;
 }
 
@@ -66,7 +68,7 @@ async function resolveRunId(domainOrRunId: string): Promise<string> {
 
 const TERMINAL = ["completed", "partial", "failed"];
 
-const server = new McpServer({ name: "checkmyapp", version: "1.1.0" });
+const server = new McpServer({ name: "checkmyapp", version: "1.2.0" });
 
 server.tool(
   "start_check",
@@ -75,7 +77,9 @@ server.tool(
     "wait_for_run (blocking) or poll get_check_status. Use notes to focus the " +
     "agent on what just shipped (e.g. 'PR #123 changed checkout — verify it first'). " +
     "With CHECKMYAPP_API_KEY set the run is attributed to the key's owner and " +
-    "follows their plan quota; anonymous callers get 1 free run per 24h.",
+    "follows their plan quota; anonymous callers get 1 free run per 24h. Pass " +
+    "deploy_sha (and deploy_env) in CI so the verdict names the exact build it " +
+    "checked — that is what makes the result safe to gate a release on.",
   {
     url: z.string().url().describe("Deployed app URL to check, e.g. https://your-app.com"),
     notes: z
@@ -87,8 +91,16 @@ server.tool(
       .optional()
       .describe("Hard limits, e.g. 'Do not touch /admin. Do not delete anything.'"),
     notify_email: z.string().email().optional().describe("Email for the verdict-ready notice"),
+    deploy_sha: z
+      .string()
+      .optional()
+      .describe("Commit/build id this deploy shipped, e.g. $GITHUB_SHA — binds the verdict to it"),
+    deploy_env: z
+      .string()
+      .optional()
+      .describe("Environment the deploy landed in, e.g. production or staging"),
   },
-  async ({ url, notes, scope_hints, notify_email }) => {
+  async ({ url, notes, scope_hints, notify_email, deploy_sha, deploy_env }) => {
     const res = await api(`/api/checks`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -97,6 +109,8 @@ server.tool(
         userNotes: notes,
         scopeHints: scope_hints,
         notifyEmail: notify_email,
+        // Omitted entirely without a sha: `env` alone identifies no build.
+        deploy: deploy_sha ? { sha: deploy_sha, env: deploy_env } : undefined,
       }),
     });
     if (!res.ok) {
@@ -110,6 +124,7 @@ server.tool(
           type: "text",
           text: JSON.stringify({
             run_id: id,
+            deploy: deploy_sha ? { sha: deploy_sha, env: deploy_env ?? null } : null,
             live_url: `${BASE}/run/${id}`,
             verdict_url: `${BASE}/verdict/${id}`,
             hint: "Call wait_for_run to block until the verdict, or poll get_check_status.",
@@ -196,6 +211,9 @@ server.tool(
           text: JSON.stringify({
             status: run.status,
             verdict: verdict.verdict ?? run.verdict,
+            // Which build this verdict is about — null when the run named none,
+            // so a CI gate can refuse to pass on someone else's run.
+            deploy: verdict.deploy ?? null,
             bottom_line: verdict.bottom_line ?? null,
             findings_by_severity: bySeverity,
             findings: findings.map((f) => `[${f.severity}/${f.category}] ${f.title}`),
@@ -211,7 +229,8 @@ server.tool(
 server.tool(
   "get_verdict",
   "Full verdict of a completed run: bottom line, per-journey outcomes, findings " +
-    "(title/category/severity), and cost. Accepts a run id OR a domain/URL — a " +
+    "(title/category/severity), cost, and the deploy identity the run was bound " +
+    "to (`deploy: {sha, env}`, null if none). Accepts a run id OR a domain/URL — a " +
     "domain resolves to its latest completed run. Use this to decide whether the " +
     "deploy is healthy (all_good / mostly_ok) or needs action (needs_attention / " +
     "broken). A verdict of `unverified` means the check walked nothing — no " +

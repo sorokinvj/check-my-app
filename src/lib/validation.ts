@@ -30,6 +30,25 @@ export const createCheckSchema = z.object({
   scopeHints: z.string().max(2000).optional().or(z.literal("")),
   userNotes: z.string().max(2000).optional().or(z.literal("")),
   notifyEmail: z.string().email("Enter a valid email").optional().or(z.literal("")),
+  // Deploy identity (CHE-56) — an API-key/CI feature: name the build this check
+  // verifies so the verdict can gate that specific release. The browser form
+  // never sends it; an anonymous caller passing it is harmless, just unattributed.
+  //
+  // `sha` is deliberately not `/^[0-9a-f]{40}$/`: a caller may send a short sha,
+  // a merge-commit sha, or a non-git build id, and rejecting those would only
+  // break the CI job we're trying to serve. The bounds exist so the column can't
+  // become a scratchpad; the charset keeps it a single opaque token.
+  deploy: z
+    .object({
+      sha: z
+        .string()
+        .trim()
+        .min(7, "Deploy sha looks too short")
+        .max(64, "Deploy sha looks too long")
+        .regex(/^[A-Za-z0-9._-]+$/, "Deploy sha may only contain letters, digits, . _ -"),
+      env: z.string().trim().max(40).optional().or(z.literal("")),
+    })
+    .optional(),
 });
 
 export type CreateCheckInput = z.infer<typeof createCheckSchema>;
