@@ -63,7 +63,7 @@ export const BROWSER_TOOLS: Anthropic.Tool[] = [
   {
     name: "read_page",
     description:
-      "Read a structured digest of the current page: title, headings, links, buttons, form fields, landmarks. NOTE: navigate and click already append the fresh digest to their own result (as 'PAGE NOW:'), so you do NOT need to call read_page after them — only call this to re-inspect the page without acting. Prefer this over screenshots for deciding what to do next.",
+      "Read a structured digest of the current page: title, headings, links, buttons, form fields, landmarks. Call after navigation or any action that changes the page. Prefer this over screenshots for deciding what to do next.",
     input_schema: { type: "object", properties: {} },
   },
   {
@@ -149,17 +149,12 @@ export async function executeTool(
 ): Promise<string> {
   try {
     switch (name) {
-      // navigate/click change the page, and the model almost always followed
-      // them with a read_page just to see the result — ~40% of walking calls
-      // were those follow-up reads (CHE-58). Fold the fresh digest into the
-      // action's own result so that round-trip disappears. fill is excluded:
-      // it's usually followed by another fill, not a read.
       case "navigate":
-        return withDigest(env, await navigate(env, String(input.url)));
+        return await navigate(env, String(input.url));
       case "read_page":
         return await readPage(env.page);
       case "click":
-        return withDigest(env, await click(env, input));
+        return await click(env, input);
       case "fill":
         return await fill(env, input);
       case "screenshot":
@@ -187,13 +182,6 @@ export async function executeTool(
   } catch (err) {
     return `Error: ${err instanceof Error ? err.message : String(err)}`;
   }
-}
-
-// Append the current page digest to an action result so the model sees the new
-// state without a separate read_page call (CHE-58 call-reduction).
-async function withDigest(env: ToolEnv, actionResult: string): Promise<string> {
-  const digest = await readPage(env.page).catch(() => "");
-  return digest ? `${actionResult}\n\nPAGE NOW:\n${digest}` : actionResult;
 }
 
 async function navigate(env: ToolEnv, url: string): Promise<string> {

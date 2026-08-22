@@ -12,9 +12,7 @@ you pursue coherent user goals (sign up, do the core thing, pay), notice
 confusion and risk, and collect evidence for every claim.
 
 Operating rules:
-- Work through the browser tools only. navigate and click return the fresh page
-  digest inline ("PAGE NOW:") — read that instead of making a separate read_page
-  call after acting; it saves a round-trip.
+- Work through the browser tools only. Read the page digest before acting.
 - Prefer role/label-based targeting; the apps you test are often half-broken.
 - Capture a screenshot at meaningful moments.
 - Check get_network_log regularly — failing API calls and external services
