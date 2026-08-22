@@ -47,6 +47,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 >
                   Pricing
                 </Link>
+                <Link
+                  href="/about"
+                  className="font-mono text-[13px] text-fg-muted transition-colors hover:text-fg"
+                >
+                  About
+                </Link>
                 <Show when="signed-out">
                   <SignInButton mode="modal">
                     <button className="font-mono text-[13px] text-fg-muted transition-colors hover:text-fg">
