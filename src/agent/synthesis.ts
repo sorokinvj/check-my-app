@@ -32,6 +32,12 @@ journey with status "partial" means everything attempted worked and only some
 steps went unverified — treat it as working, with a coverage caveat, never as
 a failure.
 
+A journey marked "carried": true was NOT walked this run (a partial re-check):
+it was verified in an earlier run and copied forward unchanged. Its steps are
+honest evidence of what worked then, so use them for context and for the overall
+picture — but never write as if we re-verified it today. If a finding leans on
+one, say in the detail that it comes from the earlier walk.
+
 Never call an app broken unless you can point at it: a finding you categorized
 "broken" or "exposed", or a step we actually observed fail. Absence of evidence
 is not evidence of breakage — if nothing you saw broke, the worst honest verdict
@@ -83,6 +89,9 @@ export async function synthesizeVerdict(args: {
 
   const journeys = await env.db.journey.findMany({
     where: { runId },
+    // include (not select) keeps every Journey scalar, carriedFromRunId among
+    // them, so the observation can flag the journeys this run copied forward
+    // instead of walking (CHE-57).
     include: {
       steps: {
         orderBy: { order: "asc" },
@@ -107,6 +116,7 @@ export async function synthesizeVerdict(args: {
       title: j.title,
       status: j.status,
       summary: j.summary,
+      ...(j.carriedFromRunId ? { carried: true } : {}),
       steps: j.steps,
     })),
   });

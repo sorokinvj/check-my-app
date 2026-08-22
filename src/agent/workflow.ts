@@ -6,19 +6,26 @@
 // per journey) → anatomy → writing (LLM synthesis + findings). Browser sessions
 // are per-phase. Transcript (secret-free) → R2; cost rolled into Run.costUsd.
 //
-// Watch runs get a phase 0 in front of that: a free smoke check (CHE-51) that
-// can complete the run before a single token is spent. See ./replay.ts for what
-// it does and does not prove.
+// Watch runs get a mode ladder in front of that, cheapest rung first:
+//   1. SMOKE (CHE-51, ./replay.ts) — a free pre-check that can complete the run
+//      before a single token is spent. See that file for what it does and does
+//      not prove.
+//   2. PARTIAL (CHE-57, ./partial.ts) — re-walk only the journeys that were bad
+//      last time, carry the healthy ones forward. Skips discovery and reuses the
+//      baseline anatomy; unlike smoke it does NOT skip synthesis, because it
+//      produces fresh evidence that has to be adjudicated.
+//   3. FULL — the six phases below.
 
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import type { AppAnatomy } from "@/lib/types";
 import type { Verdict } from "@/lib/enums";
 import { normalizeAnatomy } from "@/lib/anatomy";
+import { parseJson } from "@/lib/json";
 import type { RunEvent, RunPhase } from "@/lib/types";
 import { makeAgentEnv, putText, type AgentBindings, type AgentEnv } from "./env";
 import { makeLlm, type UsageTotals } from "./llm";
 import { launchAgentBrowser, surfaceScan } from "./browser";
-import { discoverApp, type RunInput } from "./discovery";
+import { discoverApp, type ProposedJourney, type RunInput } from "./discovery";
 import { walkOneJourney, type WalkRun } from "./execution";
 import { synthesizeVerdict, type SynthesizedFinding } from "./synthesis";
 import { autoFileFindings } from "./autofile";
@@ -28,6 +35,12 @@ import { deliverSlack } from "@/lib/notify/slack";
 import { decryptSecret } from "@/lib/crypto";
 import type { TranscriptEntry } from "./core";
 import { shortLabel, smokeReplay, SMOKE_COST_USD, type SmokeReport } from "./replay";
+import {
+  carryJourney,
+  partialBottomLine,
+  planPartialRun,
+  type PartialDecision,
+} from "./partial";
 
 export interface CheckRunParams {
   runId: string;
@@ -68,7 +81,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
       // Phase 0 — Replay-first (CHE-51). Before spending ~$0.53 of tokens on a
       // recurring watch run, re-check the pages we already know for free. A green
       // smoke pass ends the run right here carrying the baseline verdict forward;
-      // anything else falls through to the full six phases below. Errors inside
+      // anything else falls through to the next rung of the ladder. Errors inside
       // the check are swallowed on purpose: a Browser Rendering hiccup during a
       // cheap pre-check must cost a full run, never the run itself.
       const smoke = await step.do("replay", async () => {
@@ -81,9 +94,28 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
         }
       });
 
+      // Phase 0b — Partial mode (CHE-57), the middle rung of the ladder. Only
+      // reachable when the smoke check did NOT run: a green smoke ends the run
+      // above, and a red one is app-wide trouble that deserves a full walk. Same
+      // swallow-and-fall-through contract as the smoke check — a planning error
+      // costs a full run, never the run itself.
+      const plan = await step.do("partial-plan", async (): Promise<PartialDecision> => {
+        if (!run.watchId) return { taken: false, reason: "one-off check" };
+        if (smoke.taken) {
+          return { taken: false, reason: "the smoke check found trouble — re-walking every journey" };
+        }
+        try {
+          return await planPartialRun(env, run);
+        } catch (err) {
+          const text = err instanceof Error ? err.message : String(err);
+          console.warn(`[partial] planning errored: ${text}`);
+          return { taken: false, reason: `partial planning errored (${text})` };
+        }
+      });
+
       if (run.watchId) {
         await step.do("replay-log", async () => {
-          for (const event of smokeEvents(smoke, run.targetUrl)) {
+          for (const event of modeEvents(smoke, plan, run.targetUrl)) {
             await appendEvent(env, runId, "replay", event);
           }
         });
@@ -189,8 +221,24 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
         }
       });
 
-      // Phase 3 — Discovery (LLM).
-      const discovery = await step.do("discovery", async () => {
+      // Phase 3 — Discovery (LLM), or its partial-mode stand-in. A partial run
+      // already knows this app's map: re-mapping it would spend Sonnet tokens to
+      // rediscover journeys we are about to re-walk by name anyway.
+      if (plan.taken) {
+        await step.do("reuse-map", async () => {
+          await transition(env, runId, "discovery", {
+            icon: "info",
+            text: `Reusing Run #${plan.baselineRunNumber}'s map — no discovery needed`,
+          });
+          await appendEvent(env, runId, "discovery", {
+            icon: "ok",
+            text:
+              `Carrying forward ${plan.carry.length} healthy journey` +
+              `${plan.carry.length === 1 ? "" : "s"}: ${plan.carry.map((c) => c.title).join(" · ")}`,
+          });
+        });
+      }
+      const discovery = plan.taken ? null : await step.do("discovery", async () => {
         await transition(env, runId, "discovery", { icon: "info", text: "Mapping your app" });
         const browser = await launchAgentBrowser(env);
         try {
@@ -224,16 +272,39 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
       // so a CPU-limit/retry only re-does that journey, never the whole walk;
       // walkOneJourney is idempotent on (runId, order). A fresh browser per
       // journey keeps each step's session within Browser Rendering limits.
+      // A partial run walks its bad journeys under the SAME (runId, order) slots
+      // they had in the baseline, with the carried ones filling the rest — so
+      // journey order, dedupKeys (CHE-50) and synthesis stepRefs all line up with
+      // the picture the owner already knows.
+      const walkList: Array<{ order: number; proposed: ProposedJourney }> = plan.taken
+        ? plan.rewalk.map((r) => ({ order: r.order, proposed: { title: r.title, steps: r.steps } }))
+        : (discovery?.journeys ?? []).map((proposed, i) => ({ order: i, proposed }));
+
       await step.do("walking-start", async () => {
         await transition(env, runId, "walking", {
           icon: "info",
-          text: `Walking ${discovery.journeys.length} discovered journeys`,
+          text: plan.taken
+            ? `Re-walking ${plan.rewalk.length} journey` +
+              `${plan.rewalk.length === 1 ? "" : "s"} that had trouble in Run ` +
+              `#${plan.baselineRunNumber}: ` +
+              plan.rewalk.map((r) => `"${r.title}" (was ${r.previousStatus})`).join(" · ")
+            : `Walking ${walkList.length} discovered journeys`,
         });
       });
+
+      // Copy the healthy journeys across before walking anything: if a re-walk
+      // burns its retries, the run still carries the coverage it was promised.
+      if (plan.taken) {
+        await step.do("carry-journeys", async () => {
+          for (const entry of plan.carry) {
+            await carryJourney(env, runId, entry);
+          }
+        });
+      }
+
       let walkCost = 0;
-      for (let i = 0; i < discovery.journeys.length; i++) {
-        const proposed = discovery.journeys[i];
-        const jcost = await step.do(`walk-${i}`, async () => {
+      for (const { order, proposed } of walkList) {
+        const jcost = await step.do(`walk-${order}`, async () => {
           const browser = await launchAgentBrowser(env);
           try {
             const r = await walkOneJourney({
@@ -242,12 +313,12 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
               browser,
               run: walkRun,
               proposed,
-              index: i,
+              index: order,
               onLiveScreenshot: (url) => setLive(env, runId, { liveScreenshotUrl: url }),
               onProgress: (note) => setLive(env, runId, { currentAction: note }),
             });
             const journey = await env.db.journey.findFirst({
-              where: { runId, order: i },
+              where: { runId, order },
               select: { id: true },
             });
             await recordUsage(env, runId, "walking", llm.navModel, r.usage, journey?.id ?? null);
@@ -260,9 +331,19 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
       }
 
       // Phase 5 — Anatomy (merge deterministic scan signals into the LLM map).
+      // A partial run reuses the baseline's anatomy: nothing re-mapped the app
+      // this run, so writing a fresh-looking map would be an invention.
       const anatomy: AppAnatomy = await step.do("anatomy", async () => {
-        await transition(env, runId, "anatomy", { icon: "info", text: "Assembling app anatomy" });
-        const safe = normalizeAnatomy(discovery.anatomy) ?? {
+        await transition(env, runId, "anatomy", {
+          icon: "info",
+          text: plan.taken
+            ? `Reusing Run #${plan.baselineRunNumber}'s app anatomy`
+            : "Assembling app anatomy",
+        });
+        const mapped = plan.taken
+          ? normalizeAnatomy(parseJson<unknown>(plan.anatomy))
+          : normalizeAnatomy(discovery?.anatomy);
+        const safe = mapped ?? {
           pages: [],
           actions: [],
           services: [],
@@ -293,7 +374,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
           await appendEvent(env, runId, "writing", { icon: "warn", text: checked.note });
         }
 
-        const transcript: TranscriptEntry[] = discovery.transcript;
+        const transcript: TranscriptEntry[] = discovery?.transcript ?? [];
         let transcriptUrl: string | null = null;
         if (transcript.length) {
           transcriptUrl = await putText(
@@ -303,13 +384,27 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
           );
         }
 
-        const costUsd = discovery.costUsd + walkCost + synth.costUsd;
+        // Coverage before opinion: a partial run's pill covers journeys nobody
+        // walked today, so the bottom line says which is which before it says
+        // anything else. The re-walk count comes from the rows that landed, so
+        // an aborted walk shrinks the claim instead of inflating it.
+        const bottomLine = plan.taken
+          ? partialBottomLine(
+              plan,
+              checked.bottomLine,
+              await env.db.journey.count({
+                where: { runId, carriedFromRunId: null, status: { not: "skipped" } },
+              }),
+            )
+          : checked.bottomLine;
+
+        const costUsd = (discovery?.costUsd ?? 0) + walkCost + synth.costUsd;
         await env.db.run.update({
           where: { id: runId },
           data: {
             status: "completed",
             verdict: checked.verdict,
-            bottomLine: checked.bottomLine,
+            bottomLine,
             appLens: JSON.stringify(synth.appLens),
             transcriptUrl,
             costUsd,
@@ -389,34 +484,54 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
   }
 }
 
-// ─── Replay-first event trail (CHE-51) ───────────────────────────────────────
+// ─── Mode-ladder event trail (CHE-51 + CHE-57) ───────────────────────────────
 // The feed is the only place an owner can see why a day cost $0.01 instead of
-// $0.53 — or why the smoke check sent us into a full run anyway. Every branch
-// says what it saw, in the same voice as the rest of the run.
+// $0.53 — or why the cheap modes handed over to a full run anyway. Every rung
+// says what it saw, in the same voice as the rest of the run, and the mode the
+// run actually took is always stated out loud.
 
-function smokeEvents(
+function modeEvents(
   smoke: { taken: false; reason: string } | SmokeReport,
+  plan: PartialDecision,
   targetUrl: string,
 ): Array<Omit<RunEvent, "at" | "phase">> {
-  if (!smoke.taken) {
-    return [{ icon: "info", text: `Running the full check — ${smoke.reason}` }];
-  }
-  const pages = smoke.probes.map((p) => shortLabel(p.url, targetUrl)).join(" · ");
-  const events: Array<Omit<RunEvent, "at" | "phase">> = [
-    { icon: "info", text: `Smoke check: re-visiting ${smoke.probes.length} known pages — ${pages}` },
-  ];
-  if (smoke.ok) {
+  const events: Array<Omit<RunEvent, "at" | "phase">> = [];
+
+  if (smoke.taken) {
+    const pages = smoke.probes.map((p) => shortLabel(p.url, targetUrl)).join(" · ");
     events.push({
-      icon: "ok",
-      text:
-        `All ${smoke.probes.length} pages healthy, no uncaught errors — carrying Run ` +
-        `#${smoke.baselineRunNumber}'s verdict forward and skipping the full agent check`,
+      icon: "info",
+      text: `Smoke check: re-visiting ${smoke.probes.length} known pages — ${pages}`,
     });
+    events.push(
+      smoke.ok
+        ? {
+            icon: "ok",
+            text:
+              `All ${smoke.probes.length} pages healthy, no uncaught errors — carrying Run ` +
+              `#${smoke.baselineRunNumber}'s verdict forward and skipping the full agent check`,
+          }
+        : {
+            icon: "warn",
+            text: `Smoke found trouble: ${smoke.failures.join("; ")} — running the full check`,
+          },
+    );
   } else {
+    events.push({ icon: "info", text: `No smoke check — ${smoke.reason}` });
+  }
+
+  if (plan.taken) {
     events.push({
-      icon: "warn",
-      text: `Smoke found trouble: ${smoke.failures.join("; ")} — running the full check`,
+      icon: "info",
+      text:
+        `Partial run: re-walking ${plan.rewalk.length} of ` +
+        `${plan.rewalk.length + plan.carry.length} journeys ` +
+        `(${plan.carry.length} carried from #${plan.baselineRunNumber})`,
     });
+  } else if (!smoke.taken) {
+    // When the smoke check ran and went red it already said "running the full
+    // check"; repeating the partial mode's reason there would just be noise.
+    events.push({ icon: "info", text: `Running the full check — ${plan.reason}` });
   }
   return events;
 }

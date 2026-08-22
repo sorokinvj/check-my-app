@@ -41,7 +41,10 @@ export const SMOKE_COST_USD = 0.01;
 
 // Drift can't hide behind green smoke forever: once the last real walk is this
 // old, the next watch run is a full one no matter how healthy the pages look.
-const FULL_RUN_MAX_AGE_DAYS = 7;
+// Shared with the partial mode (CHE-57), which carries journeys forward off the
+// same evidence and must expire on the same clock — one drift bound for the
+// whole mode ladder, not two that can disagree.
+export const FULL_RUN_MAX_AGE_DAYS = 7;
 // How far back to look for that last real walk. Comfortably more than
 // FULL_RUN_MAX_AGE_DAYS of daily runs, so the search never ends early on a
 // watch that is behaving normally.
@@ -134,26 +137,7 @@ export async function smokeReplay(
     };
   }
 
-  // The verdict chain runs through smoke passes, so "the previous run" is not
-  // necessarily the last time anyone walked this app. Journeys are the tell: a
-  // smoke run writes none. Walked backwards with a count() per candidate rather
-  // than a `journeys: { some: {} }` relation filter — every query shape here is
-  // one this codebase already runs in production. The window is generous
-  // (FULL_RUN_MAX_AGE_DAYS of daily runs fits inside it) and running off the end
-  // just means a full run, which is the safe direction.
-  const recent = await env.db.run.findMany({
-    where: { watchId: run.watchId, status: "completed" },
-    orderBy: { completedAt: "desc" },
-    take: FULL_RUN_LOOKBACK,
-    select: { id: true, runNumber: true, completedAt: true, appLens: true, anatomy: true },
-  });
-  let full: (typeof recent)[number] | null = null;
-  for (const candidate of recent) {
-    if ((await env.db.journey.count({ where: { runId: candidate.id } })) > 0) {
-      full = candidate;
-      break;
-    }
-  }
+  const full = await findLastWalkedRun(env, run.watchId);
   if (!full?.completedAt) {
     return { taken: false, reason: "no recent full agent check to carry forward" };
   }
@@ -201,6 +185,44 @@ export async function smokeReplay(
     anatomy: full.anatomy,
     ...outcome,
   };
+}
+
+// ─── "When did anyone last actually walk this app?" ──────────────────────────
+
+export interface WalkedRun {
+  id: string;
+  runNumber: number;
+  completedAt: Date | null;
+  appLens: string | null;
+  anatomy: string | null;
+}
+
+// The verdict chain runs through smoke passes, so "the previous run" is not
+// necessarily the last time anyone walked this app. Journeys are the tell: a
+// smoke run writes none. Walked backwards with a count() per candidate rather
+// than a `journeys: { some: {} }` relation filter — every query shape here is one
+// this codebase already runs in production. The window is generous
+// (FULL_RUN_MAX_AGE_DAYS of daily runs fits inside it) and running off the end
+// just means a full run, which is the safe direction.
+//
+// Both cheap modes hang off this: smoke carries its verdict forward, partial
+// (CHE-57) carries its healthy journeys forward.
+export async function findLastWalkedRun(
+  env: AgentEnv,
+  watchId: string,
+): Promise<WalkedRun | null> {
+  const recent = await env.db.run.findMany({
+    where: { watchId, status: "completed" },
+    orderBy: { completedAt: "desc" },
+    take: FULL_RUN_LOOKBACK,
+    select: { id: true, runNumber: true, completedAt: true, appLens: true, anatomy: true },
+  });
+  for (const candidate of recent) {
+    if ((await env.db.journey.count({ where: { runId: candidate.id } })) > 0) {
+      return candidate;
+    }
+  }
+  return null;
 }
 
 // ─── Target extraction ───────────────────────────────────────────────────────

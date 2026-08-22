@@ -127,6 +127,13 @@ model Journey {
   status  String // StepStatus — worst-case roll-up of its steps
   summary String? // "What we found: signup fails on Safari mobile (~18% of traffic)"
   videoUrl String? // recording of the agent walking this journey
+  // Partial watch runs (CHE-57) copy healthy journeys forward instead of
+  // re-walking them. This names the run that ACTUALLY walked it — the
+  // provenance root, not the run it was copied from — so the verdict page can
+  // say "carried · Run #42" and never imply we re-verified it today. NULL means
+  // this run walked it itself. A plain id, not a relation: the source run may be
+  // pruned one day and losing provenance must not cascade-delete the journey.
+  carriedFromRunId String?
 
   steps   Step[]
 

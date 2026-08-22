@@ -13,12 +13,16 @@ type JourneyWithSteps = Journey & { steps: Step[] };
 export function JourneyStrips({
   journeys,
   emptyNote,
+  carriedRunNumbers,
 }: {
   journeys: JourneyWithSteps[];
   // Why there are no strips, when the run knows. A green verdict next to a bare
   // "no journeys" reads as a contradiction — a replay-first smoke pass (CHE-51)
   // says here that it carried the verdict forward without re-walking.
   emptyNote?: string;
+  // Journey.carriedFromRunId → that run's number, for the "carried · Run #N"
+  // chip on a partial run's carried journeys (CHE-57).
+  carriedRunNumbers?: Record<string, number>;
 }) {
   if (journeys.length === 0) {
     return (
@@ -30,6 +34,7 @@ export function JourneyStrips({
       </section>
     );
   }
+  const carried = journeys.filter((j) => j.carriedFromRunId).length;
   return (
     <section className="space-y-5">
       <div>
@@ -37,11 +42,26 @@ export function JourneyStrips({
         <p className="mt-1 text-sm text-fg-muted">
           We discovered {journeys.length} main user journey{journeys.length > 1 ? "s" : ""}.
           Here&apos;s how each one went.
+          {carried > 0 && (
+            <>
+              {" "}
+              {journeys.length - carried} {journeys.length - carried === 1 ? "was" : "were"} walked
+              again this run; {carried} {carried === 1 ? "is" : "are"} carried forward from an
+              earlier run and marked as such.
+            </>
+          )}
         </p>
       </div>
 
       {journeys.map((journey, i) => (
-        <JourneyCard key={journey.id} journey={journey} collapsedByDefault={i >= 2} />
+        <JourneyCard
+          key={journey.id}
+          journey={journey}
+          collapsedByDefault={i >= 2}
+          carriedRunNumber={
+            journey.carriedFromRunId ? carriedRunNumbers?.[journey.carriedFromRunId] : undefined
+          }
+        />
       ))}
     </section>
   );
@@ -50,9 +70,11 @@ export function JourneyStrips({
 function JourneyCard({
   journey,
   collapsedByDefault,
+  carriedRunNumber,
 }: {
   journey: JourneyWithSteps;
   collapsedByDefault: boolean;
+  carriedRunNumber?: number;
 }) {
   const [open, setOpen] = useState(!collapsedByDefault);
   const [selected, setSelected] = useState<Step | null>(null);
@@ -70,11 +92,22 @@ function JourneyCard({
           </span>
           {journey.order + 1}. {journey.title}
         </h3>
-        <span
-          className={`rounded-full border px-2.5 py-1 font-mono text-xs ${meta.className} border-current/30 bg-current/10`}
-          style={{ borderColor: "color-mix(in srgb, currentColor 30%, transparent)" }}
-        >
-          {meta.emoji} {meta.label}
+        <span className="flex shrink-0 items-center gap-2">
+          {/* CHE-57: this journey was not walked this run — it was copied
+              forward from the run that did walk it. The status pill next to it
+              is therefore a statement about that run, and this chip is the only
+              thing on the page that says so. */}
+          {journey.carriedFromRunId && (
+            <span className="rounded-full border border-ink-600 px-2.5 py-1 font-mono text-xs text-fg-faint">
+              carried{carriedRunNumber ? ` · Run #${carriedRunNumber}` : ""}
+            </span>
+          )}
+          <span
+            className={`rounded-full border px-2.5 py-1 font-mono text-xs ${meta.className} border-current/30 bg-current/10`}
+            style={{ borderColor: "color-mix(in srgb, currentColor 30%, transparent)" }}
+          >
+            {meta.emoji} {meta.label}
+          </span>
         </span>
       </button>
 

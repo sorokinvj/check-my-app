@@ -74,6 +74,22 @@ export default async function VerdictPage({ params }: { params: Promise<{ id: st
   const events = parseJson<RunEvent[]>(run.events) ?? [];
   const smokePass =
     run.journeys.length === 0 && events[events.length - 1]?.phase === "replay";
+  // Carried journeys (CHE-57) name the run that actually walked them by id; the
+  // chip shows its number. One query for the handful of distinct source runs —
+  // usually exactly one, and none at all on a full run.
+  const carriedRunIds = [
+    ...new Set(run.journeys.map((j) => j.carriedFromRunId).filter((id): id is string => Boolean(id))),
+  ];
+  const carriedRunNumbers = Object.fromEntries(
+    carriedRunIds.length
+      ? (
+          await prisma.run.findMany({
+            where: { id: { in: carriedRunIds } },
+            select: { id: true, runNumber: true },
+          })
+        ).map((r) => [r.id, r.runNumber])
+      : [],
+  );
   const newerRun = await prisma.run.findFirst({
     where: { baselineRunId: run.id, status: { in: ["completed", "partial"] } },
     orderBy: { createdAt: "desc" },
@@ -149,6 +165,7 @@ export default async function VerdictPage({ params }: { params: Promise<{ id: st
         />
         <JourneyStrips
           journeys={run.journeys}
+          carriedRunNumbers={carriedRunNumbers}
           emptyNote={
             smokePass
               ? "Not re-walked this run — the smoke check confirmed your known pages still load, " +
