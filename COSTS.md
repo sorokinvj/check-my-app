@@ -94,6 +94,15 @@ to Haiku for the act/observe steps. A discovery-only run (0 journeys) is ~$0.45.
 
 ---
 
+## Cost-reduction initiative (CHE-58, started 2026-08-23)
+
+**Metric.** North-star **¢ per walked journey** (normalizes app complexity, measures efficiency not the 3-vs-5-journey mix). Driver **model calls per walked journey** (price/model-independent). Baselines (glm-era ≥2026-08-16, from LlmUsage): **5.8¢/journey · 24 calls/journey** (~209 output tok/call); $/run avg $0.33; phase share **walking 69% · synthesis 21.7% · discovery 9.3%**. Cost is output-token-dominated; cache-hit 90.6%; vision unused (0%).
+
+**Experiments (empirical; negative results kept — they prevent bad "optimizations"):**
+- **E1 — cheaper synthesis: REJECTED.** haiku-4-5 synth is −75% ($0.105→$0.026) but over-escalates severity (analytics-401 → `high exposed`), which flips the verdict to a false Broken (the CHE-37/42 class) and slips past checkVerdictIntegrity. Synthesis stays on Opus — the 21.7% is calibration, not waste. (glm-synth untested offline: OpenRouter key is worker-only.)
+- **E2 — fold digest into navigate/click to skip read_page: REJECTED.** Same-target A/B (theins.ru): calls/journey 20.4→25.8, ¢/journey 6.0→7.1 — glm kept calling read_page and the fatter results added tokens. Reverted. Exposed a blind spot: **walking transcripts weren't persisted** (only discovery was) — fixed (transcripts/{runId}-walk-{order}.json) so future walking cost analysis is diagnosable, not blind.
+- **E3 (queued) — reduce walking `thinking` (core.ts:71 adaptive):** target the output-token side directly on the mechanical walking loop. Diagnose first from the next daily tick's now-persisted walking transcripts (free data), then A/B.
+
 ## How to measure going forward
 
 - **Per-run Anthropic $**: the agent core logs `[agent] iter N: ... in/cache/out`
