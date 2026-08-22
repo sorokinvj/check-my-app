@@ -9,6 +9,7 @@ import { auth, currentUser } from "@clerk/nextjs/server";
 import { redirect } from "next/navigation";
 import { getDbFromContext } from "./db";
 import { upsertUserFromClerk } from "./users";
+import { resolveApiKeyOwner } from "./apiKeys";
 import type { PrismaClient } from "@/generated/prisma/client";
 
 export async function requireUser(): Promise<{
@@ -63,6 +64,24 @@ export async function getOptionalUser(db: PrismaClient) {
     name,
     clerkOrgId: orgId ?? null,
   });
+}
+
+// Request-level owner resolution for API routes (CHE-52): a browser presents a
+// Clerk session, a coding agent presents `Authorization: Bearer cma_…`. Tries
+// Clerk first, then the API key; either way the caller gets the same D1 User
+// row getOptionalUser returns, so everything downstream (quota, attribution)
+// is identical. `via` tells the route how the owner authenticated — API-key
+// requests are machine-to-machine and are exempt from browser bot checks
+// (a valid key is a stronger proof than a Turnstile token).
+export async function getOwnerFromRequest(
+  db: PrismaClient,
+  req: Request,
+): Promise<{ user: NonNullable<Awaited<ReturnType<typeof getOptionalUser>>>; via: "clerk" | "api_key" } | null> {
+  const clerkUser = await getOptionalUser(db);
+  if (clerkUser) return { user: clerkUser, via: "clerk" };
+  const keyOwner = await resolveApiKeyOwner(db, req);
+  if (keyOwner) return { user: keyOwner, via: "api_key" };
+  return null;
 }
 
 // Tenant guard for resources that may be owned or anonymous (CHE-33).

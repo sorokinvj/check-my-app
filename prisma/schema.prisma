@@ -278,11 +278,28 @@ model User {
   apps    App[]
   runs    Run[]
   watches Watch[]
+  apiKeys ApiKey[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([clerkOrgId])
+}
+
+// Owner API keys (CHE-52): let a coding agent act as the owner over the public
+// HTTP API (Authorization: Bearer cma_…). Only a SHA-256 hash of the raw key is
+// stored — the raw key is shown once at creation and never again. Runs started
+// with a key are attributed to the owner and follow the owner's plan quota.
+model ApiKey {
+  id         String    @id @default(cuid())
+  owner      User      @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  ownerId    String
+  name       String // owner-facing label, e.g. "CI post-deploy hook"
+  keyHash    String    @unique // SHA-256 hex of the raw `cma_<32 hex>` key
+  lastUsedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([ownerId])
 }
 
 // One owner ↔ one target app. Holds the canonical appSlug for that owner; a URL

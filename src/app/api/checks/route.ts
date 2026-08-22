@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getDbFromContext, nextRunNumber } from "@/lib/db";
-import { getOptionalUser } from "@/lib/auth";
+import { getOwnerFromRequest } from "@/lib/auth";
 import { triggerRun } from "@/lib/trigger";
 import { encryptSecret, hashClientKey } from "@/lib/crypto";
 import { assertCanStartRun } from "@/lib/plans";
@@ -15,10 +15,21 @@ export async function POST(req: Request) {
   const json = (await req.json().catch(() => null)) as { turnstileToken?: string } | null;
   const clientIp = req.headers.get("cf-connecting-ip");
 
+  // Attribute the run to the caller (if any) so it's tenant-scoped and shows on
+  // their dashboard: a Clerk session or an owner API key (CHE-52). Anonymous
+  // free-run funnel keeps ownerId null.
+  const auth = await getOwnerFromRequest(prisma, req);
+  const owner = auth?.user ?? null;
+
   // Bot protection (enforced only when TURNSTILE_SECRET is configured).
-  const ok = await verifyTurnstile(json?.turnstileToken, clientIp ?? undefined);
-  if (!ok) {
-    return NextResponse.json({ error: "Verification failed — please retry." }, { status: 403 });
+  // API-key callers are machine-to-machine (CI hooks, MCP clients) — a valid
+  // key already proves they're a real account, and they can't run a browser
+  // Turnstile challenge, so the check applies to browser paths only.
+  if (auth?.via !== "api_key") {
+    const ok = await verifyTurnstile(json?.turnstileToken, clientIp ?? undefined);
+    if (!ok) {
+      return NextResponse.json({ error: "Verification failed — please retry." }, { status: 403 });
+    }
   }
 
   const parsed = createCheckSchema.safeParse(json);
@@ -30,10 +41,6 @@ export async function POST(req: Request) {
   }
 
   const input = parsed.data;
-
-  // Attribute the run to the signed-in owner (if any) so it's tenant-scoped and
-  // shows on their dashboard; anonymous free-run funnel keeps ownerId null.
-  const owner = await getOptionalUser(prisma);
 
   // Run quota (CHE-40). Checked after Turnstile so bot floods never burn a real
   // client's allowance, and before the insert so a rejected run is never billed.
@@ -54,6 +61,7 @@ export async function POST(req: Request) {
       appSlug: appSlugFromUrl(input.url),
       testEmail: input.testEmail || null,
       testPasswordEnc: input.testPassword ? encryptSecret(input.testPassword) : null,
+      scopeHints: input.scopeHints || null,
       userNotes: input.userNotes || null,
       notifyEmail: input.notifyEmail || null,
       ownerId: owner?.id ?? null,
