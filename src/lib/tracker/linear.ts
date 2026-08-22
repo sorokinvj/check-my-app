@@ -6,9 +6,9 @@ import { linearAuthHeader } from "./linear-auth";
 // linearAuthHeader. The token comes from the owner's TrackerIntegration
 // (decrypted at the call site) and is scoped to their workspace.
 //
-// NOTE: not yet exercised against the live API — wiring is blocked on the Linear
-// OAuth app credentials. The GraphQL shapes follow Linear's documented schema;
-// verify `team.states` vs `team.workflowStates` against the live API on first run.
+// Exercised against the live API 2026-08-22 (run #42 battle test): team
+// workflow states are `team.states`; auth accepts OAuth tokens (Bearer) and
+// personal lin_api_ keys (bare) — see linear-auth.ts.
 
 const ENDPOINT = "https://api.linear.app/graphql";
 
@@ -64,16 +64,15 @@ export class LinearTracker implements Tracker {
   }
 
   private async resolveStateId(name: string): Promise<string | undefined> {
-    // Linear's Team field is `workflowStates`, not `states`.
+    // Team workflow states live under `team.states` (verified against the live
+    // API 2026-08-22 — `workflowStates` does not exist and broke the first
+    // battle-test of auto-filing, run #42).
     const data = await this.gql<{
-      team: { workflowStates: { nodes: { id: string; name: string }[] } };
-    }>(
-      `query($id:String!){ team(id:$id){ workflowStates{ nodes{ id name } } } }`,
-      { id: this.teamId },
-    );
-    return data.team.workflowStates.nodes.find(
-      (s) => s.name.toLowerCase() === name.toLowerCase(),
-    )?.id;
+      team: { states: { nodes: { id: string; name: string }[] } };
+    }>(`query($id:String!){ team(id:$id){ states{ nodes{ id name } } } }`, {
+      id: this.teamId,
+    });
+    return data.team.states.nodes.find((s) => s.name.toLowerCase() === name.toLowerCase())?.id;
   }
 
   async createIssue(draft: TicketDraft): Promise<CreatedIssue> {
