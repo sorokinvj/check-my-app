@@ -239,6 +239,13 @@ model Watch {
   lastRunAt   DateTime?
   nextRunAt   DateTime?
 
+  // CHE-54: a watch enabled on the Free plan is a 7-day trial. NULL = not a
+  // trial (paid owner, or a legacy ownerless watch) and never expires — see
+  // shouldSkipWatch in lib/plans. trialNoticeSentAt stamps the one-time
+  // "watch paused" email so the cron can't repeat it every 15 minutes.
+  trialEndsAt       DateTime?
+  trialNoticeSentAt DateTime?
+
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 

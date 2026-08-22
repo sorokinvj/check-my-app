@@ -7,6 +7,8 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { setIntegrationEndpoints } from "./actions";
 import { ApiKeys } from "@/components/api-keys";
+import { watchTrialState } from "@/lib/plans";
+import type { UserPlan } from "@/lib/enums";
 
 // Owner home (protected). Lists the apps this owner has under daily QA.
 export default async function DashboardPage() {
@@ -68,14 +70,37 @@ export default async function DashboardPage() {
           {apps.map((app) => {
             const latest = app.runs[0];
             const labels = (JSON.parse(app.policy?.pickupLabels ?? "[]") as string[]).join(", ");
+            // CHE-54: a free-plan watch runs on a 7-day trial. The scheduler
+            // stops running an expired one, so the card must not keep claiming
+            // it's watching.
+            const trial = watchTrialState(app.watch, user.plan as UserPlan);
             return (
               <li key={app.id} className="card flex items-start justify-between p-5">
                 <div className="space-y-1">
                   <p className="font-mono text-sm text-fg">{app.appSlug}</p>
                   <p className="text-xs text-fg-faint">
-                    {app.watch?.active ? `watching · ${app.watch.frequency}` : "paused"}
+                    {!app.watch?.active
+                      ? "paused"
+                      : trial.kind === "ended"
+                        ? "paused"
+                        : `watching · ${app.watch.frequency}`}
                     {labels && ` · labels: ${labels}`}
                   </p>
+                  {trial.kind === "ended" ? (
+                    <p className="text-xs text-status-confusing">
+                      trial ended — daily watch paused ·{" "}
+                      <Link href="/pricing" className="text-accent hover:underline">
+                        Upgrade to resume →
+                      </Link>
+                    </p>
+                  ) : trial.kind === "active" ? (
+                    <p className="text-xs text-fg-faint">
+                      free trial · {trial.daysLeft} day{trial.daysLeft === 1 ? "" : "s"} left ·{" "}
+                      <Link href="/pricing" className="text-accent hover:underline">
+                        Upgrade
+                      </Link>
+                    </p>
+                  ) : null}
                   {app.tracker ? (
                     <div className="flex items-center gap-2">
                       <span className="text-xs text-status-ok">✓ Linear · team:</span>

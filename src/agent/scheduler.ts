@@ -7,8 +7,10 @@
 // Watch whose previous run is still moving is skipped entirely.
 
 import { nextRunNumber } from "@/lib/db";
-import type { WatchFrequency } from "@/lib/enums";
-import { makeAgentEnv, type AgentBindings } from "./env";
+import type { UserPlan, WatchFrequency } from "@/lib/enums";
+import { sendWatchTrialPaused } from "@/lib/email";
+import { shouldSkipWatch } from "@/lib/plans";
+import { makeAgentEnv, type AgentEnv, type AgentBindings } from "./env";
 
 // The cron fires every 15 minutes and a full run costs real money, so cap the
 // fan-out per tick rather than the number of watches we're willing to hold.
@@ -18,6 +20,14 @@ const MAX_PER_TICK = 3;
 const CANDIDATE_LIMIT = 20;
 
 const INTERVAL_HOURS: Record<WatchFrequency, number> = { daily: 24, every_6h: 6, manual: 0 };
+
+// How long a watch paused by an expired free trial waits before the scheduler
+// looks at it again (CHE-54). It is NOT a claim — no run happens — it just keeps
+// the paused row from sitting permanently at the head of the due queue, which is
+// ordered by nextRunAt and only CANDIDATE_LIMIT deep: a handful of never-upgraded
+// trials would otherwise starve every paying watch behind them. The cost is that
+// an owner who upgrades waits up to an hour, not a full daily cycle.
+const TRIAL_RECHECK_HOURS = 1;
 
 // A run in any other status is still moving; its Watch must not fire again yet.
 const TERMINAL_STATUSES = ["completed", "partial", "failed"];
@@ -52,6 +62,11 @@ export async function runDueWatches(
       testPasswordEnc: true,
       appId: true,
       ownerId: true,
+      // Free-trial gate (CHE-54): the owner's plan is read fresh on every tick,
+      // so an upgrade resumes the watch without anything else having to update it.
+      trialEndsAt: true,
+      trialNoticeSentAt: true,
+      owner: { select: { plan: true } },
       // Owner-configured scope/notes live on the App; watch runs must carry
       // them (run #19 self-check submitted a real paid check because the
       // "don't press the button" scope hint never reached the agent).
@@ -66,6 +81,16 @@ export async function runDueWatches(
     if (started.length >= MAX_PER_TICK) break;
 
     try {
+      if (shouldSkipWatch(watch, (watch.owner?.plan ?? null) as UserPlan | null, now)) {
+        skipped++;
+        console.log(
+          `[scheduler] watch ${watch.id} (${watch.appSlug}) skipped — free trial ended ` +
+            `${watch.trialEndsAt?.toISOString()}, owner still on free`,
+        );
+        await pauseExpiredTrial(env, bindings, watch, now);
+        continue;
+      }
+
       const inFlight = await env.db.run.count({
         where: { watchId: watch.id, status: { notIn: TERMINAL_STATUSES } },
       });
@@ -122,4 +147,48 @@ export async function runDueWatches(
   }
 
   return { started, skipped };
+}
+
+// Housekeeping for a watch the trial gate just declined to run (CHE-54). The row
+// stays active and untouched otherwise — pausing is a consequence of the plan,
+// not a state we write — so upgrading is the only thing needed to resume it.
+async function pauseExpiredTrial(
+  env: AgentEnv,
+  bindings: AgentBindings,
+  watch: {
+    id: string;
+    appSlug: string;
+    notifyEmail: string | null;
+    trialNoticeSentAt: Date | null;
+  },
+  now: Date,
+): Promise<void> {
+  // Move it out of the head of the due queue first (see TRIAL_RECHECK_HOURS);
+  // this has to happen even if the mail below fails.
+  await env.db.watch.update({
+    where: { id: watch.id },
+    data: { nextRunAt: new Date(now.getTime() + TRIAL_RECHECK_HOURS * 60 * 60 * 1000) },
+  });
+
+  if (watch.trialNoticeSentAt || !watch.notifyEmail) return;
+
+  try {
+    await sendWatchTrialPaused({
+      to: watch.notifyEmail,
+      appSlug: watch.appSlug,
+      apiKey: bindings.EMAIL_API_KEY,
+      from: bindings.EMAIL_FROM,
+      baseUrl: bindings.APP_URL,
+    });
+    // Stamped only after a successful send, so a transient Resend failure costs
+    // a retry on the next tick rather than the notice itself.
+    await env.db.watch.update({
+      where: { id: watch.id },
+      data: { trialNoticeSentAt: now },
+    });
+  } catch (err) {
+    console.warn(
+      `[scheduler] trial-paused email for watch ${watch.id} failed: ${err instanceof Error ? err.message : err}`,
+    );
+  }
 }

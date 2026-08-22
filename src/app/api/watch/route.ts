@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getDbFromContext } from "@/lib/db";
 import { getOptionalUser } from "@/lib/auth";
-import { assertCanAddWatch } from "@/lib/plans";
+import { assertCanAddWatch, watchTrialEnd } from "@/lib/plans";
 import type { UserPlan } from "@/lib/enums";
 import { createWatchSchema } from "@/lib/validation";
 
@@ -89,9 +89,13 @@ export async function POST(req: Request) {
       testEmail: run.testEmail,
       testPasswordEnc: run.testPasswordEnc,
       nextRunAt: nextRunFrom(parsed.data.frequency),
+      // CHE-54: Free enables a 7-day trial watch; paid plans get null (no expiry).
+      trialEndsAt: watchTrialEnd(user.plan as UserPlan),
     },
     update: {
       active: true,
+      // trialEndsAt is deliberately absent: reconfiguring or resuming an
+      // existing watch must not restart its trial clock.
       frequency: parsed.data.frequency,
       notifyOnChangeOnly: parsed.data.notifyOnChangeOnly,
       nextRunAt: nextRunFrom(parsed.data.frequency),

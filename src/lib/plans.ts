@@ -35,6 +35,53 @@ export const PLAN_LIMITS: Record<UserPlan, PlanLimits> = {
 export const ANON_RUNS_PER_DAY = 1;
 export const FREE_RUNS_LIFETIME = 3;
 
+// Daily Watch on Free is a trial, not a tier (CHE-54): the one free watch runs
+// for this many days so an owner sees the product do its job on their own app,
+// then pauses until they subscribe.
+export const WATCH_TRIAL_DAYS = 7;
+const TRIAL_MS = WATCH_TRIAL_DAYS * 24 * 60 * 60 * 1000;
+
+// trialEndsAt to stamp on a watch the given plan is enabling. Paid plans get
+// null — no trial, no expiry.
+export function watchTrialEnd(plan: UserPlan, now: Date = new Date()): Date | null {
+  return plan === "free" ? new Date(now.getTime() + TRIAL_MS) : null;
+}
+
+// Scheduler rule for a trial watch, pure so the decision is testable without a
+// database or a clock. Two properties matter:
+//   - NULL trialEndsAt never expires (paid + legacy ownerless watches).
+//   - The owner's CURRENT plan is what's checked, so an owner who upgrades
+//     resumes on their own with no second flag to keep in sync — including
+//     plans set by hand in D1, which no Stripe webhook would have cleared.
+export function shouldSkipWatch(
+  watch: { trialEndsAt: Date | null },
+  ownerPlan: UserPlan | null,
+  now: Date = new Date(),
+): boolean {
+  if (!watch.trialEndsAt) return false;
+  if (ownerPlan !== "free") return false;
+  return watch.trialEndsAt.getTime() <= now.getTime();
+}
+
+export type TrialState =
+  | { kind: "none" }
+  | { kind: "active"; daysLeft: number }
+  | { kind: "ended" };
+
+// What the dashboard should say about a watch's trial. Mirrors shouldSkipWatch
+// — a state other than "ended" means the scheduler will still run it.
+export function watchTrialState(
+  watch: { trialEndsAt: Date | null } | null | undefined,
+  ownerPlan: UserPlan | null,
+  now: Date = new Date(),
+): TrialState {
+  if (!watch?.trialEndsAt || ownerPlan !== "free") return { kind: "none" };
+  const left = watch.trialEndsAt.getTime() - now.getTime();
+  if (left <= 0) return { kind: "ended" };
+  // Round up: with 20 hours to go the owner has "1 day left", not zero.
+  return { kind: "active", daysLeft: Math.ceil(left / (24 * 60 * 60 * 1000)) };
+}
+
 const FREQ_RANK: Record<WatchFrequency, number> = { manual: 0, daily: 1, every_6h: 2 };
 
 export function canUseFrequency(plan: UserPlan, freq: WatchFrequency): boolean {
@@ -43,6 +90,21 @@ export function canUseFrequency(plan: UserPlan, freq: WatchFrequency): boolean {
 }
 
 export type WatchGate = { ok: true } | { ok: false; reason: string };
+
+// Pure half of assertCanAddWatch: the cap decision given how many active
+// watches the owner already has. Split out so the rule can be asserted without
+// a database, and so the Free copy says what Free actually is — one app, on a
+// trial — instead of a bare number.
+export function watchCapReason(plan: UserPlan, activeWatches: number): string | null {
+  const limits = PLAN_LIMITS[plan];
+  if (limits.maxWatches === 0) {
+    return "Daily Watch isn't available on the Free plan — upgrade to enable it.";
+  }
+  if (activeWatches < limits.maxWatches) return null;
+  return plan === "free"
+    ? `Free covers one app, on a ${WATCH_TRIAL_DAYS}-day trial. Upgrade to Starter to watch this one too.`
+    : `Plan limit reached: ${limits.maxWatches} watched app(s).`;
+}
 
 // Gate for enabling/configuring a Daily Watch. existingWatchId set → it's an
 // update of an existing watch, so it doesn't count against the per-plan cap.
@@ -55,18 +117,16 @@ export async function assertCanAddWatch(
     existingWatchId?: string | null;
   },
 ): Promise<WatchGate> {
-  const limits = PLAN_LIMITS[opts.plan];
-  if (limits.maxWatches === 0) {
-    return { ok: false, reason: "Daily Watch isn't available on the Free plan — upgrade to enable it." };
+  if (PLAN_LIMITS[opts.plan].maxWatches === 0) {
+    return { ok: false, reason: watchCapReason(opts.plan, 0)! };
   }
   if (!canUseFrequency(opts.plan, opts.frequency)) {
     return { ok: false, reason: `Your plan doesn't allow ${opts.frequency} checks.` };
   }
   if (!opts.existingWatchId) {
     const count = await db.watch.count({ where: { ownerId: opts.ownerId, active: true } });
-    if (count >= limits.maxWatches) {
-      return { ok: false, reason: `Plan limit reached: ${limits.maxWatches} watched app(s).` };
-    }
+    const reason = watchCapReason(opts.plan, count);
+    if (reason) return { ok: false, reason };
   }
   return { ok: true };
 }
