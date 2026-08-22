@@ -322,6 +322,16 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
               select: { id: true },
             });
             await recordUsage(env, runId, "walking", llm.navModel, r.usage, journey?.id ?? null);
+            // Persist the walking transcript per journey (CHE-58): the run-level
+            // transcript only kept discovery, so walking — 90% of the calls and
+            // the most useful audit + cost-analysis artifact — was invisible.
+            if (r.transcript.length) {
+              await putText(
+                env,
+                `transcripts/${runId}-walk-${order}.json`,
+                JSON.stringify(r.transcript, null, 2),
+              );
+            }
             return r.costUsd;
           } finally {
             await browser.close();
