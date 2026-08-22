@@ -40,30 +40,46 @@ export async function POST(req: Request) {
   if (!priceId) return NextResponse.json(BILLING_UNCONFIGURED, { status: 503 });
 
   // Reuse the Stripe customer across upgrades; create one on first checkout.
-  let customerId = user.stripeCustomerId;
-  if (!customerId) {
+  // A stored id can also be stale — customers created in TEST mode don't exist
+  // once the account runs LIVE keys (the 2026-08-22 switch broke checkout for
+  // every pre-switch user this way) — so a missing customer is recreated, not
+  // an error.
+  const createCustomer = async () => {
     const customer = await stripe.customers.create({
       email: user.email || undefined,
       name: user.name ?? undefined,
       metadata: { userId: user.id },
     });
-    customerId = customer.id;
     await db.user.update({
       where: { id: user.id },
-      data: { stripeCustomerId: customerId },
+      data: { stripeCustomerId: customer.id },
     });
-  }
+    return customer.id;
+  };
+  let customerId = user.stripeCustomerId ?? (await createCustomer());
 
-  const session = await stripe.checkout.sessions.create({
-    mode: "subscription",
-    customer: customerId,
-    line_items: [{ price: priceId, quantity: 1 }],
-    // Both id carriers on purpose: the webhook resolves the user from either.
-    client_reference_id: user.id,
-    metadata: { userId: user.id },
-    success_url: `${APP_URL}/dashboard?upgraded=1`,
-    cancel_url: `${APP_URL}/pricing`,
-  });
+  const createSession = (customer: string) =>
+    stripe.checkout.sessions.create({
+      mode: "subscription",
+      customer,
+      line_items: [{ price: priceId, quantity: 1 }],
+      // Both id carriers on purpose: the webhook resolves the user from either.
+      client_reference_id: user.id,
+      metadata: { userId: user.id },
+      success_url: `${APP_URL}/dashboard?upgraded=1`,
+      cancel_url: `${APP_URL}/pricing`,
+    });
+
+  let session;
+  try {
+    session = await createSession(customerId);
+  } catch (err) {
+    const missing =
+      typeof err === "object" && err !== null && "code" in err && err.code === "resource_missing";
+    if (!missing) throw err;
+    customerId = await createCustomer();
+    session = await createSession(customerId);
+  }
 
   if (!session.url) {
     return NextResponse.json({ error: "Stripe returned no checkout URL" }, { status: 502 });
