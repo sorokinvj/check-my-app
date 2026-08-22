@@ -5,6 +5,10 @@
 // connecting → surface_scan (deterministic) → discovery (LLM) → walking (LLM,
 // per journey) → anatomy → writing (LLM synthesis + findings). Browser sessions
 // are per-phase. Transcript (secret-free) → R2; cost rolled into Run.costUsd.
+//
+// Watch runs get a phase 0 in front of that: a free smoke check (CHE-51) that
+// can complete the run before a single token is spent. See ./replay.ts for what
+// it does and does not prove.
 
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import type { AppAnatomy } from "@/lib/types";
@@ -20,6 +24,7 @@ import { synthesizeVerdict, type SynthesizedFinding } from "./synthesis";
 import { autoFileFindings } from "./autofile";
 import { sendVerdictReady } from "@/lib/email";
 import type { TranscriptEntry } from "./core";
+import { shortLabel, smokeReplay, SMOKE_COST_USD, type SmokeReport } from "./replay";
 
 export interface CheckRunParams {
   runId: string;
@@ -52,35 +57,101 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
       return r;
     });
 
-    // Loop C: findings the owner marked "watch" on earlier runs of this app are
-    // verified FIRST — they become a priority block in the client instructions.
-    const watched = await step.do("load-watched-findings", async () => {
-      const rows = await env.db.finding.findMany({
-        where: { mark: "watch", run: { appSlug: run.appSlug, id: { not: run.id } } },
-        orderBy: { createdAt: "desc" },
-        take: 10,
-        select: { title: true },
-      });
-      return rows.map((f) => f.title);
-    });
-    const watchNotes = watched.length
-      ? `PRIORITY — the owner flagged these earlier findings to verify first thing this run:\n${watched
-          .map((t) => `- ${t}`)
-          .join("\n")}`
-      : null;
-    const userNotes = [run.userNotes, watchNotes].filter(Boolean).join("\n\n") || null;
-
-    const walkRun: WalkRun = {
-      id: run.id,
-      appSlug: run.appSlug,
-      targetUrl: run.targetUrl,
-      testEmail: run.testEmail,
-      testPasswordEnc: run.testPasswordEnc,
-      scopeHints: run.scopeHints,
-      userNotes,
-    };
-
+    // Everything below is inside the failure handler: a run left in a
+    // non-terminal status is worse than a failed one — the scheduler treats it
+    // as still in flight and never fires that Watch again.
     try {
+      // Phase 0 — Replay-first (CHE-51). Before spending ~$0.53 of tokens on a
+      // recurring watch run, re-check the pages we already know for free. A green
+      // smoke pass ends the run right here carrying the baseline verdict forward;
+      // anything else falls through to the full six phases below. Errors inside
+      // the check are swallowed on purpose: a Browser Rendering hiccup during a
+      // cheap pre-check must cost a full run, never the run itself.
+      const smoke = await step.do("replay", async () => {
+        try {
+          return await smokeReplay(env, run);
+        } catch (err) {
+          const text = err instanceof Error ? err.message : String(err);
+          console.warn(`[replay] smoke check errored: ${text}`);
+          return { taken: false as const, reason: `smoke check errored (${text})` };
+        }
+      });
+
+      if (run.watchId) {
+        await step.do("replay-log", async () => {
+          for (const event of smokeEvents(smoke, run.targetUrl)) {
+            await appendEvent(env, runId, "replay", event);
+          }
+        });
+      }
+
+      if (smoke.taken && smoke.ok) {
+        // Deliberately NOT routed through synthesis or checkVerdictIntegrity: a
+        // smoke run walks zero journeys, so the zero-coverage guard would rewrite
+        // this to "unverified". The guard is right about LLM runs and wrong here —
+        // coverage came from the baseline, and the bottom line says so out loud.
+        await step.do("replay-complete", async () => {
+          await env.db.run.update({
+            where: { id: runId },
+            data: {
+              status: "completed",
+              verdict: smoke.verdict,
+              bottomLine:
+                `Daily smoke pass: ${smoke.probes.length} page${smoke.probes.length === 1 ? "" : "s"} ` +
+                `healthy, nothing changed since Run #${smoke.fullRunNumber} — full agent check ` +
+                `skipped (replay-first). This confirms your app is up and its known pages still ` +
+                `serve; it does not re-verify the journeys.`,
+              // Carried from the last full run so the verdict page still describes
+              // the app instead of rendering a near-empty shell.
+              appLens: smoke.appLens,
+              anatomy: smoke.anatomy,
+              ...(smoke.screenshotUrl ? { liveScreenshotUrl: smoke.screenshotUrl } : {}),
+              costUsd: SMOKE_COST_USD,
+              currentAction: null,
+              completedAt: new Date(),
+            },
+          });
+        });
+
+        // Same notification contract as a full run: a notifyOnChangeOnly watch
+        // stays quiet, because the verdict we just carried forward is by
+        // definition the baseline's.
+        if (run.notifyEmail) {
+          await step.do("replay-notify", () => notifyVerdictReady(env, this.env, run, smoke.verdict));
+        }
+        // No credential cleanup: a smoke pass only happens on watch runs, and a
+        // Watch retains its credentials for the next one.
+        return;
+      }
+
+      // Loop C: findings the owner marked "watch" on earlier runs of this app are
+      // verified FIRST — they become a priority block in the client instructions.
+      const watched = await step.do("load-watched-findings", async () => {
+        const rows = await env.db.finding.findMany({
+          where: { mark: "watch", run: { appSlug: run.appSlug, id: { not: run.id } } },
+          orderBy: { createdAt: "desc" },
+          take: 10,
+          select: { title: true },
+        });
+        return rows.map((f) => f.title);
+      });
+      const watchNotes = watched.length
+        ? `PRIORITY — the owner flagged these earlier findings to verify first thing this run:\n${watched
+            .map((t) => `- ${t}`)
+            .join("\n")}`
+        : null;
+      const userNotes = [run.userNotes, watchNotes].filter(Boolean).join("\n\n") || null;
+
+      const walkRun: WalkRun = {
+        id: run.id,
+        appSlug: run.appSlug,
+        targetUrl: run.targetUrl,
+        testEmail: run.testEmail,
+        testPasswordEnc: run.testPasswordEnc,
+        scopeHints: run.scopeHints,
+        userNotes,
+      };
+
       await step.do("connecting", async () => {
         await transition(env, runId, "connecting", { icon: "info", text: "Spinning up agent" });
       });
@@ -270,24 +341,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
       // here too — the scheduler copies notifyEmail onto the run — but a
       // notifyOnChangeOnly watch stays quiet while the verdict holds steady.
       if (run.notifyEmail) {
-        await step.do("notify", async () => {
-          if (run.watchId && !(await watchWantsNotice(env, run.watchId, run.baselineRunId, verdict))) {
-            return;
-          }
-          await sendVerdictReady({
-            to: run.notifyEmail!,
-            appSlug: run.appSlug,
-            publicId: run.publicId,
-            verdict,
-            recurring: Boolean(run.watchId),
-            apiKey: this.env.EMAIL_API_KEY,
-            from: this.env.EMAIL_FROM,
-            baseUrl: this.env.APP_URL,
-          }).catch((err) => {
-            // eslint-disable-next-line no-console
-            console.warn(`[notify] verdict email failed: ${err instanceof Error ? err.message : err}`);
-          });
-        });
+        await step.do("notify", () => notifyVerdictReady(env, this.env, run, verdict));
       }
 
       // Privacy: clear test credentials after a terminal completion, unless a
@@ -307,6 +361,72 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
       throw err;
     }
   }
+}
+
+// ─── Replay-first event trail (CHE-51) ───────────────────────────────────────
+// The feed is the only place an owner can see why a day cost $0.01 instead of
+// $0.53 — or why the smoke check sent us into a full run anyway. Every branch
+// says what it saw, in the same voice as the rest of the run.
+
+function smokeEvents(
+  smoke: { taken: false; reason: string } | SmokeReport,
+  targetUrl: string,
+): Array<Omit<RunEvent, "at" | "phase">> {
+  if (!smoke.taken) {
+    return [{ icon: "info", text: `Running the full check — ${smoke.reason}` }];
+  }
+  const pages = smoke.probes.map((p) => shortLabel(p.url, targetUrl)).join(" · ");
+  const events: Array<Omit<RunEvent, "at" | "phase">> = [
+    { icon: "info", text: `Smoke check: re-visiting ${smoke.probes.length} known pages — ${pages}` },
+  ];
+  if (smoke.ok) {
+    events.push({
+      icon: "ok",
+      text:
+        `All ${smoke.probes.length} pages healthy, no uncaught errors — carrying Run ` +
+        `#${smoke.baselineRunNumber}'s verdict forward and skipping the full agent check`,
+    });
+  } else {
+    events.push({
+      icon: "warn",
+      text: `Smoke found trouble: ${smoke.failures.join("; ")} — running the full check`,
+    });
+  }
+  return events;
+}
+
+// ─── Verdict-ready notification ──────────────────────────────────────────────
+// Shared by the full run and the replay-first pass. Non-fatal by construction:
+// a notification failure must never fail a completed run.
+
+async function notifyVerdictReady(
+  env: AgentEnv,
+  bindings: AgentBindings,
+  run: {
+    publicId: string;
+    appSlug: string;
+    notifyEmail: string | null;
+    watchId: string | null;
+    baselineRunId: string | null;
+  },
+  verdict: Verdict | null,
+): Promise<void> {
+  if (!run.notifyEmail) return;
+  if (run.watchId && !(await watchWantsNotice(env, run.watchId, run.baselineRunId, verdict))) {
+    return;
+  }
+  await sendVerdictReady({
+    to: run.notifyEmail,
+    appSlug: run.appSlug,
+    publicId: run.publicId,
+    verdict,
+    recurring: Boolean(run.watchId),
+    apiKey: bindings.EMAIL_API_KEY,
+    from: bindings.EMAIL_FROM,
+    baseUrl: bindings.APP_URL,
+  }).catch((err) => {
+    console.warn(`[notify] verdict email failed: ${err instanceof Error ? err.message : err}`);
+  });
 }
 
 // ─── Verdict integrity (CHE-42) ──────────────────────────────────────────────

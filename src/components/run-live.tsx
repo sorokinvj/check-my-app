@@ -22,6 +22,7 @@ const ICON: Record<RunEvent["icon"], { glyph: string; className: string }> = {
 };
 
 const PHASE_BLURB: Record<RunPhase, string> = {
+  replay: "Re-checking the pages we already know, before spending on a full check…",
   connecting: "Booting the agent and checking we can reach your app…",
   surface_scan: "Loading the homepage, detecting your stack…",
   walking: "Walking each discovered journey end-to-end…",

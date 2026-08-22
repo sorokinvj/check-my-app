@@ -2,6 +2,7 @@
 // mostly the shapes of JSON columns and the queue payload.
 
 export type RunPhase =
+  | "replay" // 🔁 cheap smoke pre-check on a watch run (CHE-51), may end the run
   | "connecting" // 🔌 agent boot, ownership check
   | "surface_scan" // 🌐 homepage load, stack detection
   | "discovery" // 🔍 login, mapping nav, finding journeys
@@ -9,6 +10,9 @@ export type RunPhase =
   | "anatomy" // 🧩 assembling pages/actions/services/tech
   | "writing"; // 📋 LLM synthesizes the verdict
 
+// The six phases of a full check. "replay" is deliberately absent: it runs
+// before them, only on watch runs, and is not a step on the way to a verdict —
+// it either ends the run early or hands over to "connecting".
 export const PHASE_ORDER: RunPhase[] = [
   "connecting",
   "surface_scan",
@@ -19,6 +23,7 @@ export const PHASE_ORDER: RunPhase[] = [
 ];
 
 export const PHASE_LABELS: Record<RunPhase, string> = {
+  replay: "🔁 Smoke check",
   connecting: "🔌 Connecting",
   surface_scan: "🌐 Surface scan",
   discovery: "🔍 Discovery",

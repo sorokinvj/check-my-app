@@ -10,12 +10,23 @@ type JourneyWithSteps = Journey & { steps: Step[] };
 // journey, each step a card with screenshot + label + status. Click a step to
 // see what the agent tried, what happened, and the evidence. This is the
 // screenshot people share — keep it beautiful.
-export function JourneyStrips({ journeys }: { journeys: JourneyWithSteps[] }) {
+export function JourneyStrips({
+  journeys,
+  emptyNote,
+}: {
+  journeys: JourneyWithSteps[];
+  // Why there are no strips, when the run knows. A green verdict next to a bare
+  // "no journeys" reads as a contradiction — a replay-first smoke pass (CHE-51)
+  // says here that it carried the verdict forward without re-walking.
+  emptyNote?: string;
+}) {
   if (journeys.length === 0) {
     return (
       <section>
         <h2 className="section-label">What your users do</h2>
-        <p className="mt-2 text-sm text-fg-faint">No journeys discovered yet.</p>
+        <p className="mt-2 text-sm text-fg-faint">
+          {emptyNote ?? "No journeys discovered yet."}
+        </p>
       </section>
     );
   }

@@ -11,7 +11,7 @@ import { FindingsList } from "@/components/findings-list";
 import { EnableWatchButton, RecheckButton } from "@/components/verdict-actions";
 import { ExportSpecs } from "@/components/export-specs";
 import { getOptionalUser } from "@/lib/auth";
-import type { AppLens } from "@/lib/types";
+import type { AppLens, RunEvent } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -68,6 +68,12 @@ export default async function VerdictPage({ params }: { params: Promise<{ id: st
         include: { repo: { select: { repoFullName: true } } },
       })
     : null;
+  // A replay-first smoke pass (CHE-51) finishes inside the "replay" phase and
+  // never walks a journey — so the run's last event is a replay one. Any run
+  // that fell through to the full check has later phases after it.
+  const events = parseJson<RunEvent[]>(run.events) ?? [];
+  const smokePass =
+    run.journeys.length === 0 && events[events.length - 1]?.phase === "replay";
   const newerRun = await prisma.run.findFirst({
     where: { baselineRunId: run.id, status: { in: ["completed", "partial"] } },
     orderBy: { createdAt: "desc" },
@@ -137,7 +143,15 @@ export default async function VerdictPage({ params }: { params: Promise<{ id: st
           lens={parseJson<AppLens>(run.appLens)}
           feedback={run.lensFeedback}
         />
-        <JourneyStrips journeys={run.journeys} />
+        <JourneyStrips
+          journeys={run.journeys}
+          emptyNote={
+            smokePass
+              ? "Not re-walked this run — the smoke check confirmed your known pages still load, " +
+                "so we carried the previous verdict forward. The next full check walks them again."
+              : undefined
+          }
+        />
         <AppAnatomySection anatomy={normalizeAnatomy(parseJson<unknown>(run.anatomy))} />
         <FindingsList findings={run.findings} />
 

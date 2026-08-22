@@ -72,6 +72,18 @@ would be ~$4–5, over the $1.50 target. Cerebras is an inference host (speed),
 not a cost/quality lever; our runs are async so speed isn't the bottleneck.
 Revisit = one spike run with `ANTHROPIC_NAV_MODEL=moonshotai/kimi-k3`.
 
+**Replay-first daily checks (CHE-51, shipped 2026-08-22):** a Watch run no longer
+starts with tokens. `src/agent/replay.ts` runs a free smoke check first — one
+Browser Rendering session that re-visits the homepage plus up to 6 URLs extracted
+from the app's recorded Playwright specs and baseline anatomy, and requires every
+one to answer below HTTP 500 with no uncaught JS errors. Green ⇒ the run
+completes at **$0.01** (browser time only, no `LlmUsage` row) carrying the
+baseline verdict forward; red or ineligible ⇒ the full ~$0.53 run as before.
+A full run is forced anyway when the last real walk is ≥ 7 days old, when the
+baseline verdict was worse than `mostly_ok`, or when the app has no recorded
+specs. Expected steady state for a healthy daily watch: **6 smoke days + 1 full
+day per week ≈ $0.61/week** vs $3.71 — but only for apps that stay green.
+
 **Cost model — corrected with real data:** the earlier "well under $1.50" estimate
 was wrong for a rich authenticated app. A full joblander-class run (5 journeys
 walked end-to-end, each its own agent loop + browser session) costs **~$2.25** on
