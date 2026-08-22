@@ -3,6 +3,9 @@ import { requireUser } from "@/lib/auth";
 import { decryptSecret } from "@/lib/crypto";
 import { fetchTeams } from "@/lib/tracker/linear-oauth";
 import { TeamSelect } from "@/components/team-select";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { setIntegrationEndpoints } from "./actions";
 
 // Owner home (protected). Lists the apps this owner has under daily QA.
 export default async function DashboardPage() {
@@ -60,7 +63,7 @@ export default async function DashboardPage() {
             const latest = app.runs[0];
             const labels = (JSON.parse(app.policy?.pickupLabels ?? "[]") as string[]).join(", ");
             return (
-              <li key={app.id} className="card flex items-center justify-between p-5">
+              <li key={app.id} className="card flex items-start justify-between p-5">
                 <div className="space-y-1">
                   <p className="font-mono text-sm text-fg">{app.appSlug}</p>
                   <p className="text-xs text-fg-faint">
@@ -90,6 +93,51 @@ export default async function DashboardPage() {
                       Connect Linear →
                     </a>
                   )}
+                  {/* Outbound webhooks (CHE-53): generic endpoint + Slack preset,
+                      POSTed after every completed watch run. */}
+                  <details className="pt-1">
+                    <summary className="cursor-pointer text-xs text-fg-faint hover:text-fg-muted">
+                      {app.webhookUrl || app.slackWebhookUrl ? "✓ Webhooks" : "Webhooks"} — plug
+                      into your monitoring
+                    </summary>
+                    <form
+                      action={setIntegrationEndpoints.bind(null, app.id)}
+                      className="mt-2 max-w-md space-y-2"
+                    >
+                      <label className="block space-y-1">
+                        <span className="text-xs text-fg-muted">Webhook URL</span>
+                        <Input
+                          name="webhookUrl"
+                          type="url"
+                          placeholder="https://your-stack.example.com/hooks/checkmyapp"
+                          defaultValue={app.webhookUrl ?? ""}
+                        />
+                      </label>
+                      <label className="block space-y-1">
+                        <span className="text-xs text-fg-muted">
+                          Signing secret (optional, write-only — blank keeps the current one)
+                        </span>
+                        <Input
+                          name="webhookSecret"
+                          type="password"
+                          placeholder="••••••••"
+                          autoComplete="new-password"
+                        />
+                      </label>
+                      <label className="block space-y-1">
+                        <span className="text-xs text-fg-muted">Slack incoming webhook URL</span>
+                        <Input
+                          name="slackWebhookUrl"
+                          type="url"
+                          placeholder="https://hooks.slack.com/services/…"
+                          defaultValue={app.slackWebhookUrl ?? ""}
+                        />
+                      </label>
+                      <Button type="submit" variant="outline" className="px-3 py-1.5 text-xs">
+                        Save webhooks
+                      </Button>
+                    </form>
+                  </details>
                 </div>
                 {latest ? (
                   <Link

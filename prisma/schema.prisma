@@ -302,6 +302,14 @@ model App {
   scopeHints      String?
   userNotes       String?
 
+  // Outbound integrations (CHE-53). A generic webhook POSTed after EVERY
+  // completed watch run (consumers filter — that's the observability contract),
+  // optionally HMAC-signed with the encrypted secret; plus a Slack incoming
+  // webhook that gets a Blocks-formatted version of the same event.
+  webhookUrl       String?
+  webhookSecretEnc String? // encrypted blob (src/lib/crypto), never logged
+  slackWebhookUrl  String?
+
   watch   Watch?
   tracker TrackerIntegration?
   repo    RepoIntegration?

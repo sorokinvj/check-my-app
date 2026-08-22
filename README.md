@@ -146,3 +146,61 @@ The canonical post-merge loop: CI deploys → your agent calls
 polls `get_check_status` → on `needs_attention`/`broken` verdict files the
 findings (or blocks the release). The same API is curl-able without MCP:
 `POST /api/checks`, `GET /api/runs/{id}`, `GET /api/runs/{id}/verdict`.
+
+## Webhooks — plug into any monitoring stack
+
+Per-app outbound integrations (CHE-53), configured on the dashboard app card:
+a generic webhook and/or a Slack incoming webhook. Both fire after **every**
+completed watch run — not just on change — because a monitoring feed that
+skips quiet runs is indistinguishable from a dead one. Consumers filter on
+`changed`. Delivery is best-effort (10s timeout, one retry on network error);
+outcomes land in the run's event feed.
+
+Payload (`POST`, `Content-Type: application/json`):
+
+```json
+{
+  "event": "run.completed",
+  "app": "joblander.app",
+  "runNumber": 42,
+  "verdict": "needs_attention",
+  "previousVerdict": "all_good",
+  "changed": true,
+  "bottomLine": "Login works, but checkout 500s on mobile Safari.",
+  "findings": [
+    { "title": "Checkout 500s on mobile Safari", "category": "broken", "severity": "high" }
+  ],
+  "verdictUrl": "https://checkmyapp.dev/verdict/cmf1abc…",
+  "completedAt": "2026-08-22T09:15:00.000Z"
+}
+```
+
+`findings` is capped at the 10 worst (severity-first). If you set a signing
+secret, each request carries `X-CheckMyApp-Signature: sha256=<hex>` — the
+HMAC-SHA256 of the raw body. Verify it:
+
+```js
+// Node
+const crypto = require("node:crypto");
+const expected = "sha256=" + crypto.createHmac("sha256", secret).update(rawBody).digest("hex");
+const ok = crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
+```
+
+```js
+// Cloudflare Workers / anything with Web Crypto
+const key = await crypto.subtle.importKey(
+  "raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
+const hex = signature.replace(/^sha256=/, "");
+const sig = new Uint8Array(hex.match(/../g).map((b) => parseInt(b, 16)));
+const ok = await crypto.subtle.verify("HMAC", key, sig, new TextEncoder().encode(rawBody));
+```
+
+Slack setup: create an app at api.slack.com → enable **Incoming Webhooks** →
+add a webhook to the channel you want → paste the
+`https://hooks.slack.com/services/…` URL into the app card's Slack field. Posts
+arrive as Blocks: verdict header, run context, bottom line, top findings, and
+an "Open verdict" button. No signing — the Slack URL itself is the secret.
+
+Poll-side counterpart: `GET /api/status/{slug}` (owner session; API-key auth
+lands with CHE-52) returns the latest completed run:
+`{ app, verdict, runNumber, completedAt, verdictUrl }`.

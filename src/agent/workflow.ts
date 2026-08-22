@@ -19,6 +19,9 @@ import { walkOneJourney, type WalkRun } from "./execution";
 import { synthesizeVerdict, type SynthesizedFinding } from "./synthesis";
 import { autoFileFindings } from "./autofile";
 import { sendVerdictReady } from "@/lib/email";
+import { deliverWebhook, type RunCompletedPayload } from "@/lib/notify/webhook";
+import { deliverSlack } from "@/lib/notify/slack";
+import { decryptSecret } from "@/lib/crypto";
 import type { TranscriptEntry } from "./core";
 
 export interface CheckRunParams {
@@ -46,6 +49,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
           notifyEmail: true,
           watchId: true,
           baselineRunId: true,
+          appId: true,
         },
       });
       if (!r) throw new Error(`run ${runId} not found`);
@@ -265,6 +269,28 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
         });
       }
 
+      // Outbound integrations (CHE-53): generic webhook + Slack preset. Watch
+      // runs only, and they fire on EVERY completed run — no notifyOnChangeOnly
+      // here, because a monitoring feed that skips quiet runs can't be told
+      // apart from one that died (consumers filter on `changed` themselves).
+      // Non-fatal like autofile: delivery failures leave warn events, never throw.
+      if (run.watchId && run.appId) {
+        await step.do("notify-integrations", async () => {
+          try {
+            for (const note of await notifyIntegrations(env, runId, verdict)) {
+              await appendEvent(env, runId, "writing", note);
+            }
+          } catch (err) {
+            const text = err instanceof Error ? err.message : String(err);
+            console.warn(`[notify-integrations] dispatch failed: ${text}`);
+            await appendEvent(env, runId, "writing", {
+              icon: "warn",
+              text: `Couldn't deliver webhooks: ${text}`,
+            });
+          }
+        });
+      }
+
       // Verdict-ready email (CHE: the /check form promises it). Non-fatal: a
       // notification failure must never fail a completed run. Watch runs arrive
       // here too — the scheduler copies notifyEmail onto the run — but a
@@ -401,6 +427,99 @@ async function watchWantsNotice(
     select: { verdict: true },
   });
   return !baseline || baseline.verdict !== verdict;
+}
+
+// ─── Outbound integrations (CHE-53) ──────────────────────────────────────────
+// Build one run.completed payload and deliver it to whichever endpoints the
+// app has configured: generic webhook (HMAC-signed if a secret is set) and/or
+// the Slack preset. Both deliveries are best-effort and report run events.
+
+// Worst first, so the payload's 10-finding cap keeps breakage over polish.
+const FINDING_SEVERITY_RANK: Record<string, number> = { high: 0, medium: 1, low: 2 };
+
+async function notifyIntegrations(
+  env: AgentEnv,
+  runId: string,
+  verdict: Verdict,
+): Promise<{ icon: "ok" | "warn"; text: string }[]> {
+  const run = await env.db.run.findUnique({
+    where: { id: runId },
+    select: {
+      appId: true,
+      appSlug: true,
+      runNumber: true,
+      publicId: true,
+      bottomLine: true,
+      baselineRunId: true,
+      completedAt: true,
+    },
+  });
+  if (!run?.appId) return [];
+
+  const app = await env.db.app.findUnique({
+    where: { id: run.appId },
+    select: { webhookUrl: true, slackWebhookUrl: true, webhookSecretEnc: true },
+  });
+  if (!app || (!app.webhookUrl && !app.slackWebhookUrl)) return [];
+
+  const baseline = run.baselineRunId
+    ? await env.db.run.findUnique({
+        where: { id: run.baselineRunId },
+        select: { verdict: true },
+      })
+    : null;
+  const previousVerdict = baseline?.verdict ?? null;
+
+  const findings = await env.db.finding.findMany({
+    where: { runId },
+    select: { title: true, category: true, severity: true },
+    orderBy: { number: "asc" },
+  });
+  const top = findings
+    .sort(
+      (a, b) => (FINDING_SEVERITY_RANK[a.severity] ?? 3) - (FINDING_SEVERITY_RANK[b.severity] ?? 3),
+    )
+    .slice(0, 10);
+
+  const baseUrl = env.bindings.APP_URL ?? "https://checkmyapp.dev";
+  const payload: RunCompletedPayload = {
+    event: "run.completed",
+    app: run.appSlug,
+    runNumber: run.runNumber,
+    verdict,
+    previousVerdict,
+    changed: previousVerdict !== verdict,
+    bottomLine: run.bottomLine,
+    findings: top,
+    verdictUrl: `${baseUrl}/verdict/${run.publicId}`,
+    completedAt: (run.completedAt ?? new Date()).toISOString(),
+  };
+
+  const notes: { icon: "ok" | "warn"; text: string }[] = [];
+  if (app.webhookUrl) {
+    const secret = app.webhookSecretEnc ? decryptSecret(app.webhookSecretEnc) : null;
+    const r = await deliverWebhook(app.webhookUrl, payload, secret);
+    notes.push(
+      r.ok
+        ? { icon: "ok", text: `Webhook delivered (${r.status})` }
+        : {
+            icon: "warn",
+            text: `Webhook delivery failed${r.status ? ` (HTTP ${r.status})` : `: ${r.error}`}`,
+          },
+    );
+  }
+  if (app.slackWebhookUrl) {
+    const r = await deliverSlack(app.slackWebhookUrl, payload);
+    notes.push(
+      r.ok
+        ? { icon: "ok", text: "Slack notification delivered" }
+        : {
+            icon: "warn",
+            text: `Slack delivery failed${r.status ? ` (HTTP ${r.status})` : `: ${r.error}`}`,
+          },
+    );
+  }
+  return notes;
 }
 
 // ─── LLM usage ledger ────────────────────────────────────────────────────────
