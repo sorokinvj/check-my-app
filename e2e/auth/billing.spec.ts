@@ -39,6 +39,12 @@ test("owner completes Stripe test-card checkout and returns upgraded", async ({ 
   });
   if (res.status() === 503) test.skip(true, "billing not configured on this target");
   const { url } = (await res.json()) as { url: string };
+  // Live mode (prod bills real cards now): the 4242 test card can't complete a
+  // cs_live_ session. Session creation above is still the asserted contract;
+  // full completion only runs where the target is in test mode.
+  if (url.includes("cs_live")) {
+    test.skip(true, "target is in Stripe live mode — test card can't complete checkout");
+  }
 
   await page.goto(url);
   // Stripe's hosted Checkout. Test card per Stripe docs; nothing real is charged.
