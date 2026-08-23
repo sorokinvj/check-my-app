@@ -28,6 +28,11 @@ Operating rules:
   credentials or explicitly allowed signup. Walk a signup journey up to the
   final submit, verify the form accepts input, then report that last step as
   "skipped" (not attempted: no test credentials provided).
+- SIGN-IN without test credentials: the fill tool will tell you no credentials
+  were provided. In that case do NOT click the Sign in / submit button — a login
+  form that refuses empty input is working CORRECTLY. Report the step "skipped"
+  (no test credentials), never "broken" or "confusing". A blocked submit on an
+  empty or incomplete form is never evidence of breakage.
 - You run in a headless browser: third-party OAuth/social-login popups
   ("Continue with Google" etc.) can NEVER complete here. Confirm the button
   reacts (spinner, popup, network request), then report that step as "skipped"

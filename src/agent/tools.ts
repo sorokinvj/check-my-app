@@ -368,6 +368,19 @@ async function fill(env: ToolEnv, input: Record<string, unknown>): Promise<strin
       return "Refused: cannot determine the current origin for credential entry.";
     }
   }
+  // No test credentials provided → the placeholders resolve to empty, which
+  // used to fill the field with "" and let the model click submit on an
+  // effectively empty form. Validation then (correctly) blocks the submit, and
+  // the model misread that no-op as "Sign in doesn't respond" — the #1
+  // false-positive on credential journeys (CHE-37; e.g. JOB-904). Refuse
+  // instead, and tell the model to skip, not submit.
+  if (usedSecret) {
+    const haveEmail = value.includes("{{TEST_EMAIL}}") ? Boolean(env.testEmail) : true;
+    const havePwd = value.includes("{{TEST_PASSWORD}}") ? Boolean(env.testPassword) : true;
+    if (!haveEmail || !havePwd) {
+      return "No test credentials were provided for this run, so this field cannot be filled. Do NOT click the login/submit button on an empty form — a form that refuses empty input is working correctly. Report this step as \"skipped\" (no test credentials), never \"broken\" or \"confusing\".";
+    }
+  }
   value = value
     .replaceAll("{{TEST_EMAIL}}", env.testEmail ?? "")
     .replaceAll("{{TEST_PASSWORD}}", env.testPassword ?? "");
