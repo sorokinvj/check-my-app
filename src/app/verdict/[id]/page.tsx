@@ -23,8 +23,9 @@ function formatDuration(start: Date, end: Date | null): string | null {
 }
 
 // Screen 3 — Verdict · /verdict/{id} — the main artifact. Private permalink.
-// Order is deliberate: Lens (mirror) → Journeys (centerpiece) → Anatomy →
-// Findings (QA fallout) → Daily Watch footer.
+// Order is deliberate: Findings first (the owner opens a verdict to learn what's
+// wrong — 2026-08-23) → Lens (mirror) → Journeys (centerpiece) → Anatomy →
+// Daily Watch footer.
 export default async function VerdictPage({ params }: { params: Promise<{ id: string }> }) {
   const prisma = await getDbFromContext();
   const run = await prisma.run.findUnique({
@@ -113,50 +114,70 @@ export default async function VerdictPage({ params }: { params: Promise<{ id: st
       )}
 
       <div className="stagger space-y-6">
-        <header className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <h1 className="mono text-xl text-fg">{run.appSlug}</h1>
-            <p className="mt-1 font-mono text-xs text-fg-faint">
-              Checked{" "}
-              {run.completedAt?.toLocaleString([], {
-                month: "short",
-                day: "numeric",
-                hour: "2-digit",
-                minute: "2-digit",
-              }) ?? "—"}
-              {duration && ` · ${duration}`} · Run #{run.runNumber}
-              {run.costUsd != null && ` · $${run.costUsd.toFixed(2)}`}
-              {/* Deploy identity (CHE-56) — short sha, the form CI logs and
-                  humans recognise; the full sha stays in the API payload. */}
-              {run.deploySha &&
-                ` · deploy ${run.deploySha.slice(0, 7)}${run.deployEnv ? ` (${run.deployEnv})` : ""}`}
-            </p>
-            {totalTokens > 0 && (
-              <p className="mt-0.5 font-mono text-xs text-fg-faint">
-                {fmtTok(totalTokens)} tokens
-                {byModel.map((m) => ` · ${m.model} $${m.costUsd.toFixed(2)}`).join("")}
+        <header className="space-y-4">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="min-w-0">
+              <h1 className="mono text-xl text-fg">{run.appSlug}</h1>
+              <p className="mt-1 font-mono text-xs text-fg-faint">
+                Checked{" "}
+                {run.completedAt?.toLocaleString([], {
+                  month: "short",
+                  day: "numeric",
+                  hour: "2-digit",
+                  minute: "2-digit",
+                }) ?? "—"}
+                {duration && ` · ${duration}`} · Run #{run.runNumber}
+                {run.costUsd != null && ` · $${run.costUsd.toFixed(2)}`}
+                {/* Deploy identity (CHE-56) — short sha, the form CI logs and
+                    humans recognise; the full sha stays in the API payload. */}
+                {run.deploySha &&
+                  ` · deploy ${run.deploySha.slice(0, 7)}${run.deployEnv ? ` (${run.deployEnv})` : ""}`}
               </p>
-            )}
-            {run.bottomLine && <p className="mt-2 text-sm text-fg-muted">{run.bottomLine}</p>}
+              {totalTokens > 0 && (
+                <p className="mt-0.5 font-mono text-xs text-fg-faint">
+                  {fmtTok(totalTokens)} tokens
+                  {byModel.map((m) => ` · ${m.model} $${m.costUsd.toFixed(2)}`).join("")}
+                </p>
+              )}
+            </div>
+            <div className="flex shrink-0 items-center gap-2.5">
+              <RecheckButton runId={run.publicId} />
+              <EnableWatchButton
+                runId={run.publicId}
+                hasWatch={hasWatch}
+                appSlug={run.appSlug}
+                variant="outline"
+              />
+            </div>
           </div>
-          <div className="flex items-center gap-2.5">
-            {verdictMeta && (
-              <span
-                className={`rounded-full border px-3 py-1.5 font-mono text-sm font-medium ${verdictMeta.pillClassName}`}
-              >
-                {verdictMeta.emoji} {verdictMeta.label}
-              </span>
-            )}
-            <RecheckButton runId={run.publicId} />
-            <EnableWatchButton
-              runId={run.publicId}
-              hasWatch={hasWatch}
-              appSlug={run.appSlug}
-              variant="outline"
-            />
-          </div>
+
+          {/* The verdict and its reason are ONE unit: pill first, and the
+              bottom line hangs off it as the labeled explanation (same visual
+              language as the journey "why" callout). An unlabeled grey
+              paragraph floating above the pill read as "о чем это описание?"
+              — owner, 2026-08-23. */}
+          {(verdictMeta || run.bottomLine) && (
+            <div>
+              {verdictMeta && (
+                <span
+                  className={`inline-block rounded-full border px-3 py-1.5 font-mono text-sm font-medium ${verdictMeta.pillClassName}`}
+                >
+                  {verdictMeta.emoji} {verdictMeta.label}
+                </span>
+              )}
+              {run.bottomLine && (
+                <p
+                  className={`mt-2.5 rounded-r-md border-l-2 border-current/50 bg-ink-800/40 py-2 pl-3 pr-3 text-sm ${verdictMeta?.textClassName ?? "text-fg-muted"}`}
+                >
+                  <span className="font-medium">Bottom line:</span>{" "}
+                  <span className="text-fg-muted">{run.bottomLine}</span>
+                </p>
+              )}
+            </div>
+          )}
         </header>
 
+        <FindingsList findings={run.findings} />
         <AppLensSection
           runId={run.publicId}
           appSlug={run.appSlug}
@@ -174,7 +195,6 @@ export default async function VerdictPage({ params }: { params: Promise<{ id: st
           }
         />
         <AppAnatomySection anatomy={normalizeAnatomy(parseJson<unknown>(run.anatomy))} />
-        <FindingsList findings={run.findings} />
 
         <footer className="card flex flex-wrap items-center justify-between gap-4 p-6">
           <div>
@@ -194,6 +214,15 @@ export default async function VerdictPage({ params }: { params: Promise<{ id: st
             <p className="mt-1 text-sm text-fg-muted">
               The agent formalized this check as executable tests — take them into your own CI.
             </p>
+            {/* Dozens of specs accumulate across runs; a flat list of them was
+                the longest thing on the page (70+ rows on joblander.app by run
+                #50) — collapsed by default, the count tells the story. */}
+            {generatedTests.length > 0 && (
+            <details className="mt-3">
+              <summary className="flex cursor-pointer select-none items-center gap-2 text-sm font-medium text-fg">
+                <span className="chevron inline-block text-fg-faint">›</span>
+                {generatedTests.length} Playwright spec{generatedTests.length === 1 ? "" : "s"}
+              </summary>
             <ul className="mt-3 space-y-2">
               {generatedTests.map((t) => (
                 <li key={t.id} className="flex flex-wrap items-center gap-3 text-sm">
@@ -220,17 +249,19 @@ export default async function VerdictPage({ params }: { params: Promise<{ id: st
                   </span>
                 </li>
               ))}
-              {run.transcriptUrl && (
-                <li className="text-sm">
-                  <a
-                    href={run.transcriptUrl}
-                    className="font-mono text-xs text-fg-muted underline-offset-2 hover:text-fg hover:underline"
-                  >
-                    📋 agent transcript (audit log, .json)
-                  </a>
-                </li>
-              )}
             </ul>
+            </details>
+            )}
+            {run.transcriptUrl && (
+              <p className="mt-3 text-sm">
+                <a
+                  href={run.transcriptUrl}
+                  className="font-mono text-xs text-fg-muted underline-offset-2 hover:text-fg hover:underline"
+                >
+                  📋 agent transcript (audit log, .json)
+                </a>
+              </p>
+            )}
             {generatedTests.length > 0 && (
               <ExportSpecs
                 runId={run.publicId}

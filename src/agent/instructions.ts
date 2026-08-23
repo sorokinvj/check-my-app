@@ -107,5 +107,7 @@ Make interactions hydration-robust: wrap interact-then-assert pairs in
 Locator choice must match the page digest exactly: getByLabel only for fields
 with label="...", getByPlaceholder for placeholder="..." fields.
 
-Finish with a 1-2 sentence summary of what you found (plain text).${clientInstructionBlock(run)}`;
+Finish with a 1-2 sentence summary of what you found (plain text). If anything
+was not ok, the FIRST sentence names the problem — the summary's job is "what's
+wrong", never a recap of what works.${clientInstructionBlock(run)}`;
 }

@@ -67,6 +67,10 @@ export function JourneyStrips({
   );
 }
 
+// A step that dragged the journey's status down. "skipped" is absence of
+// evidence, not a problem — the strip already dims it.
+const PROBLEM_STATUSES = new Set(["risky", "confusing", "broken", "exposed"]);
+
 function JourneyCard({
   journey,
   collapsedByDefault,
@@ -79,6 +83,7 @@ function JourneyCard({
   const [open, setOpen] = useState(!collapsedByDefault);
   const [selected, setSelected] = useState<Step | null>(null);
   const meta = STEP_STATUS_META[journey.status];
+  const problems = journey.steps.filter((s) => PROBLEM_STATUSES.has(s.status));
 
   return (
     <div className="card overflow-hidden">
@@ -113,6 +118,36 @@ function JourneyCard({
 
       {open && (
         <div className="border-t border-ink-700 px-5 py-4">
+          {/* Answer the status pill FIRST (owner call, 2026-08-23: "when I
+              click Confusing I must immediately see what is confusing").
+              Deterministic — built from the steps that dragged the status
+              down, each line naming the step and quoting what happened. */}
+          {problems.length > 0 && (
+            <div
+              className={`mb-3 rounded-r-md border-l-2 border-current/50 bg-ink-800/40 py-2 pl-3 pr-3 ${meta.className}`}
+            >
+              <p className="text-sm font-medium">
+                Why this journey is “{meta.label}”:
+              </p>
+              <ul className="mt-1 space-y-1">
+                {problems.map((p) => {
+                  const s = STEP_STATUS_META[p.status];
+                  return (
+                    <li key={p.id} className="text-sm text-fg-muted">
+                      <button
+                        onClick={() => setSelected(selected?.id === p.id ? null : p)}
+                        className={`font-medium underline-offset-2 hover:underline ${s.className}`}
+                      >
+                        {s.emoji} {p.label}
+                      </button>
+                      {p.observed && <> — {p.observed}</>}
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          )}
+
           {/* Storyboard discipline (NN/g, Playwright trace viewer): equal
               fixed-size cells top-aligned, caption in a fixed-height box below
               the frame, arrows on the thumbnail axis — caption length can

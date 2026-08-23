@@ -1,4 +1,4 @@
-import type { Tracker, TicketDraft, CreatedIssue } from "./types";
+import type { Tracker, TicketDraft, CreatedIssue, IssueOutcome } from "./types";
 import { linearAuthHeader } from "./linear-auth";
 
 // Linear adapter over the GraphQL API (CHE-31). Multi-tenant SaaS auth = OAuth2
@@ -113,6 +113,23 @@ export class LinearTracker implements Tracker {
     );
     if (!data.issue) throw new Error(`Linear: issue ${idOrIdentifier} not found`);
     return data.issue.id;
+  }
+
+  // Reverse sync (CHE-61): the ticket's workflow state carries the fixer's
+  // verdict. Keyed on state TYPE, which Linear keeps canonical across custom
+  // workflows (verified against the live workspace 2026-08-23: JOB-902 Done →
+  // "completed", JOB-904 Canceled → "canceled"). `issue(id:)` accepts the
+  // shorthand identifier IssueLink stores — same as issueUuid above.
+  async getIssueOutcome(issueId: string): Promise<IssueOutcome> {
+    const data = await this.gql<{ issue: { state: { type: string } } | null }>(
+      `query($id:String!){ issue(id:$id){ state { type } } }`,
+      { id: issueId },
+    );
+    if (!data.issue) return "missing";
+    const type = data.issue.state.type;
+    if (type === "completed") return "done";
+    if (type === "canceled") return "canceled";
+    return "open";
   }
 
   async addComment(issueId: string, body: string): Promise<void> {

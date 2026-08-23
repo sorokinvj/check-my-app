@@ -29,6 +29,7 @@ import { discoverApp, type ProposedJourney, type RunInput } from "./discovery";
 import { walkOneJourney, type WalkRun } from "./execution";
 import { synthesizeVerdict, type SynthesizedFinding } from "./synthesis";
 import { autoFileFindings } from "./autofile";
+import { reconcileIssueLinks, reverifyInstructions, verifyFixedLinks } from "./reconcile";
 import { sendVerdictReady } from "@/lib/email";
 import { deliverWebhook, type RunCompletedPayload } from "@/lib/notify/webhook";
 import { deliverSlack } from "@/lib/notify/slack";
@@ -78,6 +79,26 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
     // non-terminal status is worse than a failed one — the scheduler treats it
     // as still in flight and never fires that Watch again.
     try {
+      // Reverse sync (CHE-61): fold the tracker's verdicts back in before any
+      // mode decision. Done tickets queue a targeted re-verification (and veto
+      // the smoke shortcut below — a smoke pass can't confirm a fix); Canceled
+      // tickets suppress their signatures for good. Same swallow contract as
+      // the other pre-flight rungs: a tracker outage costs reverse sync, never
+      // the run.
+      const reconciled = await step.do("reconcile", async () => {
+        try {
+          const r = await reconcileIssueLinks(env, run);
+          for (const note of r.notes) {
+            await appendEvent(env, runId, "replay", note);
+          }
+          return r;
+        } catch (err) {
+          const text = err instanceof Error ? err.message : String(err);
+          console.warn(`[reconcile] tracker sync failed: ${text}`);
+          return { notes: [], reverify: [] };
+        }
+      });
+
       // Phase 0 — Replay-first (CHE-51). Before spending ~$0.53 of tokens on a
       // recurring watch run, re-check the pages we already know for free. A green
       // smoke pass ends the run right here carrying the baseline verdict forward;
@@ -85,6 +106,15 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
       // the check are swallowed on purpose: a Browser Rendering hiccup during a
       // cheap pre-check must cost a full run, never the run itself.
       const smoke = await step.do("replay", async () => {
+        // A pending fix verification needs a real walk of the journey the
+        // ticket came from; "the pages still serve" cannot confirm a fix.
+        if (reconciled.reverify.length > 0) {
+          const n = reconciled.reverify.length;
+          return {
+            taken: false as const,
+            reason: `${n} fixed ticket${n === 1 ? "" : "s"} to re-verify — a smoke pass can't confirm a fix`,
+          };
+        }
         try {
           return await smokeReplay(env, run);
         } catch (err) {
@@ -176,7 +206,10 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
             .map((t) => `- ${t}`)
             .join("\n")}`
         : null;
-      const userNotes = [run.userNotes, watchNotes].filter(Boolean).join("\n\n") || null;
+      // Reverse sync (CHE-61): fixes claimed Done in the tracker ride the same
+      // priority channel, so the walker chases them specifically.
+      const reverifyBlock = reverifyInstructions(reconciled.reverify);
+      const userNotes = [run.userNotes, reverifyBlock, watchNotes].filter(Boolean).join("\n\n") || null;
 
       const walkRun: WalkRun = {
         id: run.id,
@@ -440,6 +473,28 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
             await appendEvent(env, runId, "writing", {
               icon: "warn",
               text: `Couldn't file tracker tickets: ${text}`,
+            });
+          }
+        });
+      }
+
+      // Reverse sync, closing half (CHE-61): after autofile, so a reappeared
+      // signature has already been refiled (flipping its link back to "open")
+      // and can never be mistaken for a verified fix. Links still "fixed" whose
+      // signature stayed away — in a walk that actually covered their journey —
+      // get the "verified fixed in prod" comment and status "resolved".
+      if (run.watchId) {
+        await step.do("reconcile-verify", async () => {
+          try {
+            for (const note of await verifyFixedLinks(env, runId)) {
+              await appendEvent(env, runId, "writing", note);
+            }
+          } catch (err) {
+            const text = err instanceof Error ? err.message : String(err);
+            console.warn(`[reconcile] fix verification failed: ${text}`);
+            await appendEvent(env, runId, "writing", {
+              icon: "warn",
+              text: `Couldn't verify fixed tickets: ${text}`,
             });
           }
         });
