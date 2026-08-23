@@ -11,7 +11,12 @@ import { watchTrialState, PLAN_LIMITS } from "@/lib/plans";
 import type { UserPlan } from "@/lib/enums";
 
 // Owner home (protected). Lists the apps this owner has under daily QA.
-export default async function DashboardPage() {
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ integration?: string }>;
+}) {
+  const { integration } = await searchParams;
   const { user, db } = await requireUser();
   const apps = await db.app.findMany({
     where: { ownerId: user.id },
@@ -45,8 +50,30 @@ export default async function DashboardPage() {
     }),
   );
 
+  // CHE-67: the Connect Linear flow bounces back here with a hint when the
+  // integration isn't set up yet or the OAuth handshake failed — surface it as
+  // a small inline notice instead of the old raw JSON error page.
+  const integrationNotice =
+    integration === "linear_unconfigured"
+      ? "Linear isn't connected yet — the integration is being set up."
+      : integration === "linear_failed"
+        ? "Couldn't connect Linear — please try again."
+        : null;
+
   return (
     <main className="mx-auto w-full max-w-3xl px-4 py-12">
+      {integrationNotice && (
+        <div className="card mb-6 flex items-start justify-between gap-4 p-4">
+          <div>
+            <p className="section-label">integration</p>
+            <p className="text-sm text-status-confusing">{integrationNotice}</p>
+          </div>
+          <Link href="/dashboard" className="text-xs text-fg-muted hover:text-fg" aria-label="Dismiss">
+            Dismiss ✕
+          </Link>
+        </div>
+      )}
+
       <div className="mb-8 flex items-center justify-between">
         <div>
           <p className="section-label">your apps</p>

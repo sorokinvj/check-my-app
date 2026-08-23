@@ -11,30 +11,36 @@ function back(req: NextRequest, status: string) {
   return NextResponse.redirect(new URL(`/dashboard?linear=${status}`, req.nextUrl.origin));
 }
 
+// Any error along the OAuth callback lands the user on a friendly dashboard
+// notice (CHE-67) rather than a raw JSON error or an opaque status code.
+function fail(req: NextRequest) {
+  return NextResponse.redirect(new URL("/dashboard?integration=linear_failed", req.nextUrl.origin));
+}
+
 export async function GET(req: NextRequest) {
   const code = req.nextUrl.searchParams.get("code");
   const state = req.nextUrl.searchParams.get("state");
-  if (!code || !state) return back(req, "error");
+  if (!code || !state) return fail(req);
 
   let appId: string;
   let nonce: string;
   try {
     ({ appId, nonce } = JSON.parse(Buffer.from(state, "base64url").toString()));
   } catch {
-    return back(req, "error");
+    return fail(req);
   }
 
   const jar = await cookies();
-  if (jar.get("linear_oauth_nonce")?.value !== nonce) return back(req, "csrf");
+  if (jar.get("linear_oauth_nonce")?.value !== nonce) return fail(req);
   jar.delete("linear_oauth_nonce");
 
   const { user, db } = await requireUser();
   const app = await db.app.findFirst({ where: { id: appId, ownerId: user.id } });
-  if (!app) return back(req, "error");
+  if (!app) return fail(req);
 
   const { env } = getCloudflareContext();
   const e = env as Record<string, string | undefined>;
-  if (!e.LINEAR_CLIENT_ID || !e.LINEAR_CLIENT_SECRET) return back(req, "error");
+  if (!e.LINEAR_CLIENT_ID || !e.LINEAR_CLIENT_SECRET) return fail(req);
 
   let token;
   try {
@@ -45,7 +51,7 @@ export async function GET(req: NextRequest) {
       clientSecret: e.LINEAR_CLIENT_SECRET,
     });
   } catch {
-    return back(req, "exchange_failed");
+    return fail(req);
   }
 
   const team = await fetchFirstTeam(token.access_token);

@@ -22,7 +22,9 @@ export async function GET(req: NextRequest) {
   const { env } = getCloudflareContext();
   const clientId = (env as Record<string, string | undefined>).LINEAR_CLIENT_ID;
   if (!clientId) {
-    return NextResponse.json({ error: "Linear OAuth not configured" }, { status: 503 });
+    // OAuth env not set yet (owner step). Send the user who clicked "Connect
+    // Linear" back to a friendly dashboard notice instead of a raw JSON 503.
+    return NextResponse.redirect(new URL("/dashboard?integration=linear_unconfigured", req.url));
   }
 
   // CSRF: random nonce in an httpOnly cookie; appId travels in the signed-ish state.
