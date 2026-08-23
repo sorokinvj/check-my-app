@@ -4,6 +4,8 @@ import { revalidatePath } from "next/cache";
 import { requireUser } from "@/lib/auth";
 import { encryptSecret } from "@/lib/crypto";
 import { generateApiKey, hashApiKey } from "@/lib/apiKeys";
+import { PLAN_LIMITS } from "@/lib/plans";
+import type { UserPlan } from "@/lib/enums";
 
 // Re-point an app's tracker to a different team (CHE-31 team picker). The default
 // at connect time is the first team; JobLander must target the JobLander team,
@@ -59,6 +61,9 @@ export async function createApiKey(
   name: string,
 ): Promise<{ id: string; name: string; rawKey: string }> {
   const { user, db } = await requireUser();
+  if (!PLAN_LIMITS[user.plan as UserPlan].apiAccess) {
+    throw new Error("API access is available on the Business plan.");
+  }
   const rawKey = generateApiKey();
   const key = await db.apiKey.create({
     data: {
