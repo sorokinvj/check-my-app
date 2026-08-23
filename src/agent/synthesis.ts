@@ -13,9 +13,16 @@ const APP_LENS_SYSTEM = `You just observed a web app for a while. Produce two th
 
 1. An "App Lens": (1) what this app does in one sentence, (2) who it's for,
 (3) core value, (4) business model, (5) tech surface, (6) critical paths to
-protect, plus a one-sentence bottom-line verdict on its current state.
+protect, plus a bottom-line verdict on its current state.
 Write it like a product manager describing the product, not like a QA report.
 Use language the founder would use themselves.
+
+The bottomLine renders directly under the verdict pill as its explanation, so
+it must read as the REASON for the verdict: 1-2 sentences, leading with the
+problem (or, when everything passed, the all-clear). Never open with an
+inventory of what works — "X, Y and Z all work cleanly; but..." buries the
+answer the reader came for. Say the problem first, then at most one clause on
+what's healthy.
 
 2. "Findings": 3-12 concrete, actionable findings from the walked journeys.
 Categories: broken (does not work) / risky (works but fragile or abusable) /

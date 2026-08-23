@@ -114,51 +114,67 @@ export default async function VerdictPage({ params }: { params: Promise<{ id: st
       )}
 
       <div className="stagger space-y-6">
-        <header className="flex flex-wrap items-start justify-between gap-4">
-          {/* min-w-0 + flex-1: a long bottom line must squeeze, not shove the
-              verdict pill below the fold-line — the pill is the one thing the
-              page must answer at a glance. */}
-          <div className="min-w-0 flex-1 basis-96">
-            <h1 className="mono text-xl text-fg">{run.appSlug}</h1>
-            <p className="mt-1 font-mono text-xs text-fg-faint">
-              Checked{" "}
-              {run.completedAt?.toLocaleString([], {
-                month: "short",
-                day: "numeric",
-                hour: "2-digit",
-                minute: "2-digit",
-              }) ?? "—"}
-              {duration && ` · ${duration}`} · Run #{run.runNumber}
-              {run.costUsd != null && ` · $${run.costUsd.toFixed(2)}`}
-              {/* Deploy identity (CHE-56) — short sha, the form CI logs and
-                  humans recognise; the full sha stays in the API payload. */}
-              {run.deploySha &&
-                ` · deploy ${run.deploySha.slice(0, 7)}${run.deployEnv ? ` (${run.deployEnv})` : ""}`}
-            </p>
-            {totalTokens > 0 && (
-              <p className="mt-0.5 font-mono text-xs text-fg-faint">
-                {fmtTok(totalTokens)} tokens
-                {byModel.map((m) => ` · ${m.model} $${m.costUsd.toFixed(2)}`).join("")}
+        <header className="space-y-4">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="min-w-0">
+              <h1 className="mono text-xl text-fg">{run.appSlug}</h1>
+              <p className="mt-1 font-mono text-xs text-fg-faint">
+                Checked{" "}
+                {run.completedAt?.toLocaleString([], {
+                  month: "short",
+                  day: "numeric",
+                  hour: "2-digit",
+                  minute: "2-digit",
+                }) ?? "—"}
+                {duration && ` · ${duration}`} · Run #{run.runNumber}
+                {run.costUsd != null && ` · $${run.costUsd.toFixed(2)}`}
+                {/* Deploy identity (CHE-56) — short sha, the form CI logs and
+                    humans recognise; the full sha stays in the API payload. */}
+                {run.deploySha &&
+                  ` · deploy ${run.deploySha.slice(0, 7)}${run.deployEnv ? ` (${run.deployEnv})` : ""}`}
               </p>
-            )}
-            {run.bottomLine && <p className="mt-2 text-sm text-fg-muted">{run.bottomLine}</p>}
+              {totalTokens > 0 && (
+                <p className="mt-0.5 font-mono text-xs text-fg-faint">
+                  {fmtTok(totalTokens)} tokens
+                  {byModel.map((m) => ` · ${m.model} $${m.costUsd.toFixed(2)}`).join("")}
+                </p>
+              )}
+            </div>
+            <div className="flex shrink-0 items-center gap-2.5">
+              <RecheckButton runId={run.publicId} />
+              <EnableWatchButton
+                runId={run.publicId}
+                hasWatch={hasWatch}
+                appSlug={run.appSlug}
+                variant="outline"
+              />
+            </div>
           </div>
-          <div className="flex shrink-0 items-center gap-2.5">
-            {verdictMeta && (
-              <span
-                className={`rounded-full border px-3 py-1.5 font-mono text-sm font-medium ${verdictMeta.pillClassName}`}
-              >
-                {verdictMeta.emoji} {verdictMeta.label}
-              </span>
-            )}
-            <RecheckButton runId={run.publicId} />
-            <EnableWatchButton
-              runId={run.publicId}
-              hasWatch={hasWatch}
-              appSlug={run.appSlug}
-              variant="outline"
-            />
-          </div>
+
+          {/* The verdict and its reason are ONE unit: pill first, and the
+              bottom line hangs off it as the labeled explanation (same visual
+              language as the journey "why" callout). An unlabeled grey
+              paragraph floating above the pill read as "о чем это описание?"
+              — owner, 2026-08-23. */}
+          {(verdictMeta || run.bottomLine) && (
+            <div>
+              {verdictMeta && (
+                <span
+                  className={`inline-block rounded-full border px-3 py-1.5 font-mono text-sm font-medium ${verdictMeta.pillClassName}`}
+                >
+                  {verdictMeta.emoji} {verdictMeta.label}
+                </span>
+              )}
+              {run.bottomLine && (
+                <p
+                  className={`mt-2.5 rounded-r-md border-l-2 border-current/50 bg-ink-800/40 py-2 pl-3 pr-3 text-sm ${verdictMeta?.textClassName ?? "text-fg-muted"}`}
+                >
+                  <span className="font-medium">Bottom line:</span>{" "}
+                  <span className="text-fg-muted">{run.bottomLine}</span>
+                </p>
+              )}
+            </div>
+          )}
         </header>
 
         <FindingsList findings={run.findings} />
