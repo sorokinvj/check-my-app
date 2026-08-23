@@ -88,6 +88,13 @@ export async function autoFileFindings(env: AgentEnv, runId: string): Promise<Au
       });
       if (outcome.kind === "created") {
         notes.push({ icon: "ok", text: `Filed ${outcome.identifier}: ${outcome.title}` });
+      } else if (outcome.kind === "suppressed") {
+        // Ruled not-a-bug via the canceled ticket (CHE-61) — said once per run
+        // so the feed explains why no ticket appeared for a visible finding.
+        notes.push({
+          icon: "ok",
+          text: `Skipped "${finding.title}" — ruled not-a-bug in ${outcome.identifier}`,
+        });
       } else {
         notes.push({
           icon: "ok",

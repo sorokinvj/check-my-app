@@ -427,7 +427,9 @@ model IssueLink {
   appId           String
   dedupKey        String   // hash(journey + step + failure signature)
   externalIssueId String   // tracker issue id/identifier
-  status          String   @default("open") // open | resolved
+  // open | fixed (tracker Done, awaiting outside re-verify — CHE-61)
+  //      | resolved (fix verified by a walk) | suppressed (Canceled = not-a-bug, never auto-refile)
+  status          String   @default("open")
   occurrences     Int      @default(1)
   escalatedAt     DateTime?
   firstSeenRunId  String?
