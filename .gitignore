@@ -52,3 +52,6 @@ src/generated/prisma/
 # OpenNext build output (contains baked env — never commit)
 .open-next/
 .wrangler/
+
+# clerk configuration (can include secrets)
+/.clerk/
