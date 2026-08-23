@@ -77,7 +77,15 @@ export default async function DashboardPage() {
             return (
               <li key={app.id} className="card flex items-start justify-between p-5">
                 <div className="space-y-1">
-                  <p className="font-mono text-sm text-fg">{app.appSlug}</p>
+                  <div className="flex items-center gap-2">
+                    <p className="font-mono text-sm text-fg">{app.appSlug}</p>
+                    <Link
+                      href={`/dashboard/${app.id}`}
+                      className="text-xs text-fg-faint hover:underline"
+                    >
+                      Settings
+                    </Link>
+                  </div>
                   <p className="text-xs text-fg-faint">
                     {!app.watch?.active
                       ? "paused"
