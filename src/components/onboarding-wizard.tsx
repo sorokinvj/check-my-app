@@ -8,8 +8,15 @@ import { createApp } from "@/app/onboarding/actions";
 // Owner onboarding. One sectioned form (resumable multi-step is a later refinement)
 // that captures everything the agent needs for recurring QA + the ticket contract,
 // then persists an App + Watch + TicketPolicy via the createApp server action.
-export function OnboardingWizard({ prefillUrl }: { prefillUrl: string }) {
+export function OnboardingWizard({
+  prefillUrl,
+  defaultEmail = "",
+}: {
+  prefillUrl: string;
+  defaultEmail?: string;
+}) {
   const [submitting, setSubmitting] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
 
   return (
     <form
@@ -24,6 +31,10 @@ export function OnboardingWizard({ prefillUrl }: { prefillUrl: string }) {
         <h1 className="text-3xl font-semibold tracking-tight">Add your app</h1>
         <p className="text-sm text-fg-muted">
           We&apos;ll check it every day and file one ticket per new regression into your tracker.
+        </p>
+        <p className="text-xs text-fg-faint">
+          6 quick sections — only the site URL is required. Everything else is optional or has a
+          sensible default.
         </p>
       </div>
 
@@ -45,12 +56,24 @@ export function OnboardingWizard({ prefillUrl }: { prefillUrl: string }) {
           2 · Test login <span className="font-normal text-fg-faint">(recommended)</span>
         </p>
         <Input name="testEmail" type="email" placeholder="test@your-app.com" autoComplete="off" />
-        <Input
-          name="testPassword"
-          type="password"
-          placeholder="••••••••"
-          autoComplete="new-password"
-        />
+        <div className="relative">
+          <Input
+            name="testPassword"
+            type={showPassword ? "text" : "password"}
+            placeholder="••••••••"
+            autoComplete="new-password"
+            className="pr-11"
+          />
+          <button
+            type="button"
+            onClick={() => setShowPassword((v) => !v)}
+            aria-label={showPassword ? "Hide password" : "Show password"}
+            aria-pressed={showPassword}
+            className="absolute inset-y-0 right-0 flex items-center px-3 text-fg-faint transition-colors hover:text-fg"
+          >
+            {showPassword ? <EyeOffIcon /> : <EyeIcon />}
+          </button>
+        </div>
         <p className="text-xs text-fg-faint">
           Encrypted at rest, never logged, never in evidence. Google-OAuth logins aren&apos;t
           auto-walkable yet — use an email/password test user.
@@ -62,14 +85,17 @@ export function OnboardingWizard({ prefillUrl }: { prefillUrl: string }) {
         <p className="text-sm font-medium text-fg">3 · Connect your tracker</p>
         <p className="text-xs text-fg-faint">
           After you save, connect Linear from your dashboard (one-click OAuth) — we&apos;ll file
-          tickets into the team you authorize. Set the pickup parameters below so your self-healing
-          automation picks them up.
+          tickets into the team you authorize. The ticket parameters below take effect once that
+          connection is live; set them now so your self-healing automation picks the tickets up.
         </p>
       </section>
 
       {/* 4 — Ticket parameters */}
       <section className="card space-y-3 p-5">
-        <p className="text-sm font-medium text-fg">4 · Ticket parameters</p>
+        <p className="text-sm font-medium text-fg">
+          4 · Ticket parameters{" "}
+          <span className="font-normal text-fg-faint">(applied after you connect)</span>
+        </p>
         <label className="block space-y-1">
           <span className="text-xs text-fg-muted">Pickup labels (comma-separated)</span>
           <Input name="pickupLabels" placeholder="monitor" defaultValue="monitor" />
@@ -92,7 +118,9 @@ export function OnboardingWizard({ prefillUrl }: { prefillUrl: string }) {
 
       {/* 5 — Scope & notes */}
       <section className="card space-y-3 p-5">
-        <p className="text-sm font-medium text-fg">5 · Scope &amp; notes</p>
+        <p className="text-sm font-medium text-fg">
+          5 · Scope &amp; notes <span className="font-normal text-fg-faint">(optional)</span>
+        </p>
         <Input name="scopeHints" placeholder="Don't touch /admin" />
         <Input name="userNotes" placeholder="Don't delete the test account. OK to create sessions." />
       </section>
@@ -114,7 +142,12 @@ export function OnboardingWizard({ prefillUrl }: { prefillUrl: string }) {
         </label>
         <label className="block space-y-1">
           <span className="text-xs text-fg-muted">Escalation email</span>
-          <Input name="notifyEmail" type="email" placeholder="you@email.com" />
+          <Input
+            name="notifyEmail"
+            type="email"
+            placeholder="you@email.com"
+            defaultValue={defaultEmail}
+          />
         </label>
       </section>
 
@@ -122,5 +155,45 @@ export function OnboardingWizard({ prefillUrl }: { prefillUrl: string }) {
         {submitting ? "Saving…" : "Save & start watching"}
       </Button>
     </form>
+  );
+}
+
+function EyeIcon() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  );
+}
+
+function EyeOffIcon() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c6.5 0 10 7 10 7a13.2 13.2 0 0 1-1.67 2.68" />
+      <path d="M6.61 6.61A13.5 13.5 0 0 0 2 12s3.5 7 10 7a9.1 9.1 0 0 0 5.39-1.61" />
+      <path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" />
+      <path d="m2 2 20 20" />
+    </svg>
   );
 }

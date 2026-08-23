@@ -8,11 +8,11 @@ export default async function OnboardingPage({
 }: {
   searchParams: Promise<{ url?: string }>;
 }) {
-  await requireUser();
+  const { user } = await requireUser();
   const { url } = await searchParams;
   return (
     <main className="mx-auto w-full max-w-2xl px-4 py-12">
-      <OnboardingWizard prefillUrl={url ?? ""} />
+      <OnboardingWizard prefillUrl={url ?? ""} defaultEmail={user.email ?? ""} />
     </main>
   );
 }
