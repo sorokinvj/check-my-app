@@ -48,6 +48,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                   Pricing
                 </Link>
                 <Link
+                  href="/faq"
+                  className="font-mono text-[13px] text-fg-muted transition-colors hover:text-fg"
+                >
+                  FAQ
+                </Link>
+                <Link
                   href="/about"
                   className="font-mono text-[13px] text-fg-muted transition-colors hover:text-fg"
                 >
