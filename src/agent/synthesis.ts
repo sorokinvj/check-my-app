@@ -32,6 +32,12 @@ journey with status "partial" means everything attempted worked and only some
 steps went unverified — treat it as working, with a coverage caveat, never as
 a failure.
 
+If any step was skipped because no test credentials were provided (sign-in /
+authenticated journeys), the run could not verify anything behind the login. Say
+so plainly in bottomLine and ask for what's missing, e.g.: "To check your signed-in
+experience, add test-account credentials in your dashboard." Frame it as a next
+step for the owner, not a defect in their app.
+
 A journey marked "carried": true was NOT walked this run (a partial re-check):
 it was verified in an earlier run and copied forward unchanged. Its steps are
 honest evidence of what worked then, so use them for context and for the overall
