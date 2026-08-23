@@ -23,8 +23,9 @@ function formatDuration(start: Date, end: Date | null): string | null {
 }
 
 // Screen 3 — Verdict · /verdict/{id} — the main artifact. Private permalink.
-// Order is deliberate: Lens (mirror) → Journeys (centerpiece) → Anatomy →
-// Findings (QA fallout) → Daily Watch footer.
+// Order is deliberate: Findings first (the owner opens a verdict to learn what's
+// wrong — 2026-08-23) → Lens (mirror) → Journeys (centerpiece) → Anatomy →
+// Daily Watch footer.
 export default async function VerdictPage({ params }: { params: Promise<{ id: string }> }) {
   const prisma = await getDbFromContext();
   const run = await prisma.run.findUnique({
@@ -157,6 +158,7 @@ export default async function VerdictPage({ params }: { params: Promise<{ id: st
           </div>
         </header>
 
+        <FindingsList findings={run.findings} />
         <AppLensSection
           runId={run.publicId}
           appSlug={run.appSlug}
@@ -174,7 +176,6 @@ export default async function VerdictPage({ params }: { params: Promise<{ id: st
           }
         />
         <AppAnatomySection anatomy={normalizeAnatomy(parseJson<unknown>(run.anatomy))} />
-        <FindingsList findings={run.findings} />
 
         <footer className="card flex flex-wrap items-center justify-between gap-4 p-6">
           <div>
