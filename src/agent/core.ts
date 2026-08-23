@@ -15,6 +15,10 @@ export interface AgentLoopArgs {
   env: ToolEnv;
   llm: LlmConfig;
   maxIterations?: number;
+  // Extended-thinking mode for this loop (CHE-58 E3). Walking is mechanical
+  // (act/observe) and pays for adaptive thinking on every one of its ~24 calls;
+  // discovery/synthesis keep adaptive. Default adaptive to preserve behavior.
+  thinking?: "adaptive" | "off";
   // Called after each iteration with a short progress note (for the live feed).
   onProgress?: (note: string) => Promise<void>;
 }
@@ -44,7 +48,7 @@ export interface TranscriptEntry {
 const MAX_TOOL_RESULT_CHARS = 6_000;
 
 export async function runAgentLoop(args: AgentLoopArgs): Promise<AgentLoopResult> {
-  const { system, task, env, llm, maxIterations = 40, onProgress } = args;
+  const { system, task, env, llm, maxIterations = 40, thinking = "adaptive", onProgress } = args;
   const messages: Anthropic.MessageParam[] = [{ role: "user", content: task }];
   const transcript: TranscriptEntry[] = [];
   let iterations = 0;
@@ -68,7 +72,7 @@ export async function runAgentLoop(args: AgentLoopArgs): Promise<AgentLoopResult
         // whole app map at once — 8k truncated it and silently lost journeys).
         model: llm.navModel,
         max_tokens: 16_000,
-        thinking: { type: "adaptive" },
+        ...(thinking === "adaptive" ? { thinking: { type: "adaptive" as const } } : {}),
         cache_control: { type: "ephemeral" },
         system: [{ type: "text", text: system, cache_control: { type: "ephemeral" } }],
         tools: BROWSER_TOOLS,

@@ -153,6 +153,10 @@ export async function walkOneJourney(args: {
         env: toolEnv,
         llm,
         maxIterations: 50,
+        // E3 (CHE-58): walking is act/observe, not deep reasoning — drop
+        // adaptive thinking to cut output tokens/call. Verdict calibration
+        // still happens in synthesis (Opus, thinking on).
+        thinking: "off",
         onProgress,
       });
       transcripts.push(...result.transcript);
