@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { setIntegrationEndpoints } from "./actions";
 import { ApiKeys } from "@/components/api-keys";
-import { watchTrialState } from "@/lib/plans";
+import { watchTrialState, PLAN_LIMITS } from "@/lib/plans";
 import type { UserPlan } from "@/lib/enums";
 
 // Owner home (protected). Lists the apps this owner has under daily QA.
@@ -28,6 +28,8 @@ export default async function DashboardPage() {
     orderBy: { createdAt: "desc" },
     select: { id: true, name: true, lastUsedAt: true, createdAt: true },
   });
+  // API key creation is a Business+ feature (CHE-62); mirrors the pricing page.
+  const apiAccess = PLAN_LIMITS[user.plan as UserPlan].apiAccess;
 
   // For connected apps, pull the workspace teams so the owner can pick which one
   // tickets land in (best-effort — a transient Linear error just hides the picker).
@@ -187,6 +189,7 @@ export default async function DashboardPage() {
       )}
 
       <ApiKeys
+        apiAccess={apiAccess}
         keys={apiKeys.map((k) => ({
           id: k.id,
           name: k.name,
