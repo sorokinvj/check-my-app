@@ -50,8 +50,16 @@ function cleanSummary(text: string): string | null {
     .join(" ")
     .replace(/\*\*|`|__/g, "")
     .replace(/\s+/g, " ")
-    .trim();
-  return prose.slice(0, 400) || null;
+    .trim()
+    // The UI prints its own "What we found:" lead-in; a model-written
+    // "Summary:" after it reads as stuttering boilerplate.
+    .replace(/^summary\s*[:—-]\s*/i, "");
+  if (prose.length <= 400) return prose || null;
+  // Cut at a sentence boundary instead of mid-word: a caption that ends in
+  // "the /en/login route 307-redi" reads as a bug of ours, not the app's.
+  const window = prose.slice(0, 400);
+  const lastStop = window.lastIndexOf(". ");
+  return lastStop > 150 ? window.slice(0, lastStop + 1) : `${window.trimEnd()}…`;
 }
 
 // The forced-extraction path asks for raw code, but models still wrap it in a

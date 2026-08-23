@@ -115,7 +115,10 @@ export default async function VerdictPage({ params }: { params: Promise<{ id: st
 
       <div className="stagger space-y-6">
         <header className="flex flex-wrap items-start justify-between gap-4">
-          <div>
+          {/* min-w-0 + flex-1: a long bottom line must squeeze, not shove the
+              verdict pill below the fold-line — the pill is the one thing the
+              page must answer at a glance. */}
+          <div className="min-w-0 flex-1 basis-96">
             <h1 className="mono text-xl text-fg">{run.appSlug}</h1>
             <p className="mt-1 font-mono text-xs text-fg-faint">
               Checked{" "}
@@ -140,7 +143,7 @@ export default async function VerdictPage({ params }: { params: Promise<{ id: st
             )}
             {run.bottomLine && <p className="mt-2 text-sm text-fg-muted">{run.bottomLine}</p>}
           </div>
-          <div className="flex items-center gap-2.5">
+          <div className="flex shrink-0 items-center gap-2.5">
             {verdictMeta && (
               <span
                 className={`rounded-full border px-3 py-1.5 font-mono text-sm font-medium ${verdictMeta.pillClassName}`}
@@ -195,6 +198,15 @@ export default async function VerdictPage({ params }: { params: Promise<{ id: st
             <p className="mt-1 text-sm text-fg-muted">
               The agent formalized this check as executable tests — take them into your own CI.
             </p>
+            {/* Dozens of specs accumulate across runs; a flat list of them was
+                the longest thing on the page (70+ rows on joblander.app by run
+                #50) — collapsed by default, the count tells the story. */}
+            {generatedTests.length > 0 && (
+            <details className="mt-3">
+              <summary className="flex cursor-pointer select-none items-center gap-2 text-sm font-medium text-fg">
+                <span className="chevron inline-block text-fg-faint">›</span>
+                {generatedTests.length} Playwright spec{generatedTests.length === 1 ? "" : "s"}
+              </summary>
             <ul className="mt-3 space-y-2">
               {generatedTests.map((t) => (
                 <li key={t.id} className="flex flex-wrap items-center gap-3 text-sm">
@@ -221,17 +233,19 @@ export default async function VerdictPage({ params }: { params: Promise<{ id: st
                   </span>
                 </li>
               ))}
-              {run.transcriptUrl && (
-                <li className="text-sm">
-                  <a
-                    href={run.transcriptUrl}
-                    className="font-mono text-xs text-fg-muted underline-offset-2 hover:text-fg hover:underline"
-                  >
-                    📋 agent transcript (audit log, .json)
-                  </a>
-                </li>
-              )}
             </ul>
+            </details>
+            )}
+            {run.transcriptUrl && (
+              <p className="mt-3 text-sm">
+                <a
+                  href={run.transcriptUrl}
+                  className="font-mono text-xs text-fg-muted underline-offset-2 hover:text-fg hover:underline"
+                >
+                  📋 agent transcript (audit log, .json)
+                </a>
+              </p>
+            )}
             {generatedTests.length > 0 && (
               <ExportSpecs
                 runId={run.publicId}
