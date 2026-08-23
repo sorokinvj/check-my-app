@@ -20,7 +20,15 @@ export interface CreatedIssue {
   url: string;
 }
 
+// Where a filed ticket ended up, projected onto a tracker-agnostic contract
+// (CHE-61 reverse sync): "done" = fixed and shipped, "canceled" = ruled
+// not-a-bug, "open" = anything still in flight (including triage/backlog),
+// "missing" = the ticket no longer exists. Adapters map from workflow state
+// TYPE, not state name — a custom "Deployed" column still reads as done.
+export type IssueOutcome = "open" | "done" | "canceled" | "missing";
+
 export interface Tracker {
   createIssue(draft: TicketDraft): Promise<CreatedIssue>;
   addComment(issueId: string, body: string): Promise<void>;
+  getIssueOutcome(issueId: string): Promise<IssueOutcome>;
 }

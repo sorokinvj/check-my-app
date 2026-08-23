@@ -25,9 +25,10 @@ const MARK_LABEL: Record<FindingMark, string | null> = {
   watch: "watching",
 };
 
-// Verdict §3.4 — "WHAT WE FOUND". Third on purpose: lead with the mirror, not the
-// bug list. Grouped by category; each finding expands to full detail + evidence +
-// triage actions (Loop C — marks feed the Daily Check noise filter).
+// Verdict §3.4 — "WHAT WE FOUND". First on the page (owner call, 2026-08-23:
+// a verdict is opened to learn what's wrong — the mirror follows). Grouped by
+// category; each finding expands to full detail + evidence + triage actions
+// (Loop C — marks feed the Daily Check noise filter).
 export function FindingsList({ findings }: { findings: FindingWithEvidence[] }) {
   const counts = CATEGORY_ORDER.filter(
     (c) => findings.some((f) => f.category === c),

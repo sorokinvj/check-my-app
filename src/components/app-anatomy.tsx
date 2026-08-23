@@ -25,9 +25,20 @@ export function AppAnatomySection({ anatomy }: { anatomy: AppAnatomy | null }) {
         </Block>
 
         <Block title={`🖱 Things users can do (${anatomy.actions.length})`}>
-          <p className="text-sm leading-relaxed text-fg-muted">
-            {anatomy.actions.join(" · ") || "—"}
-          </p>
+          {anatomy.actions.length === 0 ? (
+            <p className="text-sm text-fg-faint">—</p>
+          ) : (
+            // A list reads as a list: one action per line, two columns when
+            // there's room so fifteen actions don't become a wall either way.
+            <ul className="grid gap-x-6 gap-y-1.5 sm:grid-cols-2">
+              {anatomy.actions.map((a) => (
+                <li key={a} className="flex gap-2 text-sm leading-snug text-fg-muted">
+                  <span aria-hidden className="mt-[7px] h-1 w-1 shrink-0 rounded-full bg-ink-600" />
+                  {a}
+                </li>
+              ))}
+            </ul>
+          )}
         </Block>
 
         <Block title={`🔌 External services we detected (${anatomy.services.length})`} open>

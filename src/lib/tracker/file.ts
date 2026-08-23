@@ -53,8 +53,10 @@ export interface TicketPolicyFields {
 // ticket that counts to ten, which is the whole point of comment-and-count and
 // the escalation threshold. Built from the same three fields the ticket draft
 // describes the regression with, via the CHE-32 hash.
+// Param is the minimal subset the key actually hashes, so reconcile (CHE-61)
+// can re-key findings it loads without the evidence join.
 export function dedupKeyForFinding(
-  finding: TicketFinding,
+  finding: Pick<TicketFinding, "title" | "category" | "severity" | "detail">,
   run: Pick<TicketRun, "appSlug">,
 ): string {
   const detail = parseJson<FindingDetail>(finding.detail) ?? {};
@@ -102,7 +104,8 @@ export function draftForFinding(
 
 export type FilingOutcome =
   | { kind: "created"; identifier: string; url: string; title: string }
-  | { kind: "commented"; identifier: string; occurrences: number; escalated: boolean };
+  | { kind: "commented"; identifier: string; occurrences: number; escalated: boolean }
+  | { kind: "suppressed"; identifier: string };
 
 // Draft → decide → file. Never files a second ticket for a finding that already
 // has an open one: it comments and counts, and once the recurrence count passes
@@ -129,6 +132,12 @@ export async function fileFindingTicket(opts: {
       : null,
     policy?.escalateAfterRuns ?? 3,
   );
+
+  // Canceled upstream = not-a-bug (CHE-61). The signature is settled noise;
+  // the auto-filer leaves it alone forever.
+  if (action.kind === "skip" && existing) {
+    return { kind: "suppressed", identifier: existing.externalIssueId };
+  }
 
   if (action.kind === "comment" && existing) {
     const occurrences = existing.occurrences + 1;
