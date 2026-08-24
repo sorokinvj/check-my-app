@@ -107,6 +107,33 @@ export async function planPartialRun(
     };
   }
 
+  // Credentials that appeared or changed since the last real walk invalidate
+  // the carried picture: those journeys were walked without them (or as a
+  // different account), so the authenticated part of the product was never
+  // verified by anything we'd be carrying (CHE-69 / CHE-64: creds are often
+  // added via the settings screen after the first runs). Watch runs keep their
+  // credential columns after completion, so the baseline row is comparable.
+  const [currentCreds, baselineCreds] = await Promise.all([
+    env.db.run.findUnique({
+      where: { id: run.id },
+      select: { testEmail: true, testPasswordEnc: true },
+    }),
+    env.db.run.findUnique({
+      where: { id: baseline.id },
+      select: { testEmail: true, testPasswordEnc: true },
+    }),
+  ]);
+  const hasCreds = Boolean(currentCreds?.testEmail && currentCreds?.testPasswordEnc);
+  const baselineHadCreds = Boolean(baselineCreds?.testEmail && baselineCreds?.testPasswordEnc);
+  if (hasCreds && (!baselineHadCreds || currentCreds?.testEmail !== baselineCreds?.testEmail)) {
+    return {
+      taken: false,
+      reason: baselineHadCreds
+        ? "the test account changed since the last full walk — re-checking everything"
+        : "test credentials were added since the last full walk — re-checking everything",
+    };
+  }
+
   const journeys = await env.db.journey.findMany({
     where: { runId: baseline.id },
     orderBy: { order: "asc" },
