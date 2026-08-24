@@ -2,8 +2,18 @@
 // mission + the client's own instructions (scope hints, notes) compose into the
 // prompt — nothing about "what to check" is hardcoded in TypeScript.
 
-// Run shape needed here is just the instruction fields.
-type Run = { scopeHints: string | null; userNotes: string | null; targetUrl: string };
+// Run shape needed here is just the instruction fields. Credential fields are
+// presence signals only: the prompt says WHETHER a test account exists, never
+// the values — those are substituted server-side by the fill tool (CHE-69: the
+// model can't know it may sign in unless the prompt tells it, and the MISSION's
+// "no credentials → skip" rules otherwise make it stop at every login form).
+type Run = {
+  scopeHints: string | null;
+  userNotes: string | null;
+  targetUrl: string;
+  testEmail?: string | null;
+  testPasswordEnc?: string | null;
+};
 
 const MISSION = `You are the CheckMyApp agent — a product mirror with QA fallout.
 You explore a web app the way a curious, competent first-time user would, then
@@ -52,6 +62,27 @@ Operating rules:
   demonstrably works, report the step as "confusing" and say explicitly that it
   did not respond in this test browser and needs a real-browser check.`;
 
+// Told to the model only as a fact of availability; values never enter the
+// prompt. Sign-up stays skipped — the account already exists.
+export function credentialsBlock(run: Pick<Run, "testEmail" | "testPasswordEnc">): string {
+  if (!run.testEmail || !run.testPasswordEnc) return "";
+  return `
+
+TEST CREDENTIALS ARE PROVIDED for this run: the client supplied a real test
+account for the target app. Use them — sign in and verify the authenticated
+part of the product:
+- To fill the login form, call fill with the literal placeholders {{TEST_EMAIL}}
+  and {{TEST_PASSWORD}}; the real values are substituted server-side and you
+  never see them.
+- The "no test credentials" skip rules above do NOT apply to signing in. Walk
+  the sign-in flow to completion, submit it, and confirm the logged-in area
+  actually loads.
+- Only enter these credentials on the target app's own login form, never on a
+  third-party site.
+- Sign-UP is unchanged: the account already exists, so never create a new one —
+  walk signup to the final submit and report it "skipped" as before.`;
+}
+
 export function clientInstructionBlock(run: Pick<Run, "scopeHints" | "userNotes">): string {
   const parts: string[] = [];
   if (run.scopeHints?.trim()) parts.push(`SCOPE LIMITS (authoritative):\n${run.scopeHints.trim()}`);
@@ -82,7 +113,12 @@ When done, respond with ONLY a JSON object, no prose:
 {"journeys":[{"title":"...","steps":["...", "..."]}],
  "anatomy":{"pages":["/", ...],"actions":["...", ...],
   "services":[{"name":"...","role":"..."}],
-  "tech":{"frontend":"...","hosting":"...","auth":"...","realtime":"..."}}}${clientInstructionBlock(run)}`;
+  "tech":{"frontend":"...","hosting":"...","auth":"...","realtime":"..."}}}${credentialsBlock(run)}${
+    run.testEmail && run.testPasswordEnc
+      ? "\n\nBecause test credentials are provided, one of your proposed journeys MUST be" +
+        " signing in with them and reaching the core authenticated flow."
+      : ""
+  }${clientInstructionBlock(run)}`;
 }
 
 export function walkingSystem(run: Run, journeyTitle: string, steps: string[]): string {
@@ -109,5 +145,5 @@ with label="...", getByPlaceholder for placeholder="..." fields.
 
 Finish with a 1-2 sentence summary of what you found (plain text). If anything
 was not ok, the FIRST sentence names the problem — the summary's job is "what's
-wrong", never a recap of what works.${clientInstructionBlock(run)}`;
+wrong", never a recap of what works.${credentialsBlock(run)}${clientInstructionBlock(run)}`;
 }
