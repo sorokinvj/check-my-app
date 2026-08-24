@@ -40,6 +40,15 @@ export async function hashClientKey(ip: string | null | undefined): Promise<stri
   return Buffer.from(digest).toString("base64");
 }
 
+// Irreversible fingerprint for debugging credential mismatches across the
+// save → encrypt → store → decrypt → fill chain without exposing the value:
+// sha256 prefix + length shows WHERE a string changed, and is useless for
+// recovering it. Never log the value itself.
+export function credentialFingerprint(value: string): string {
+  const h = crypto.createHash("sha256").update(value, "utf8").digest("hex").slice(0, 12);
+  return `fp=${h} len=${value.length}`;
+}
+
 export function decryptSecret(blob: string): string {
   const [ivB64, tagB64, dataB64] = blob.split(".");
   const decipher = crypto.createDecipheriv(ALGO, key(), Buffer.from(ivB64, "base64"));

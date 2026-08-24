@@ -10,6 +10,7 @@
 
 import type Anthropic from "@anthropic-ai/sdk";
 import type { Page } from "@cloudflare/playwright";
+import { credentialFingerprint } from "@/lib/crypto";
 
 export interface ToolEnv {
   page: Page;
@@ -384,6 +385,11 @@ async function fill(env: ToolEnv, input: Record<string, unknown>): Promise<strin
   value = value
     .replaceAll("{{TEST_EMAIL}}", env.testEmail ?? "")
     .replaceAll("{{TEST_PASSWORD}}", env.testPassword ?? "");
+  // Fingerprint only (sha256 prefix + length), never the value: lets a cred
+  // mismatch be localized to save vs store vs fill without exposing anything.
+  if (usedSecret && env.testPassword) {
+    console.log(`[fill] substituting test password: ${credentialFingerprint(env.testPassword)}`);
+  }
 
   const page = env.page;
   const label = input.label ? String(input.label) : undefined;

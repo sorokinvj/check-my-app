@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { requireUser } from "@/lib/auth";
-import { encryptSecret } from "@/lib/crypto";
+import { credentialFingerprint, encryptSecret } from "@/lib/crypto";
 import { generateApiKey, hashApiKey } from "@/lib/apiKeys";
 import { PLAN_LIMITS, assertCanAddWatch } from "@/lib/plans";
 import type { UserPlan, WatchFrequency } from "@/lib/enums";
@@ -125,6 +125,9 @@ export async function updateAppSettings(appId: string, formData: FormData) {
 
   // Write-only password: only re-encrypt when a non-empty value is submitted.
   const passwordUpdate = testPassword ? { testPasswordEnc: encryptSecret(testPassword) } : {};
+  if (testPassword) {
+    console.log(`[settings] test password saved for app ${app.id}: ${credentialFingerprint(testPassword)}`);
+  }
 
   // App — creds/scope/notes (source of record for test creds).
   await db.app.update({
