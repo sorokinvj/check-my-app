@@ -16,6 +16,11 @@ export interface LlmConfig {
   synthClient: Anthropic;
   navModel: string;
   synthModel: string;
+  // Structured extraction (finalizeStructured). The GLM vision variants ignore
+  // output_config json_schema (run #73: discovery extraction came back as
+  // prose), so structured calls route to the text sibling instead.
+  structClient: Anthropic;
+  structModel: string;
 }
 
 function clientFor(model: string, env: AgentBindings): Anthropic {
@@ -41,11 +46,14 @@ export function isVisionModel(model: string): boolean {
 export function makeLlm(env: AgentBindings): LlmConfig {
   const navModel = env.ANTHROPIC_NAV_MODEL ?? "claude-sonnet-4-6";
   const synthModel = env.ANTHROPIC_SYNTH_MODEL ?? "claude-opus-4-8";
+  const structModel = /glm-5v|glm-4\.[56]v/.test(navModel) ? "z-ai/glm-5.2" : navModel;
   return {
     navClient: clientFor(navModel, env),
     synthClient: clientFor(synthModel, env),
     navModel,
     synthModel,
+    structClient: clientFor(structModel, env),
+    structModel,
   };
 }
 

@@ -6,7 +6,7 @@
 // transcript. No BullMQ, no Prisma — portable to Cloudflare Workflows as-is.
 
 import Anthropic from "@anthropic-ai/sdk";
-import { addUsage, costOf, emptyUsage, type LlmConfig, type UsageTotals } from "./llm";
+import { addUsage, costOf, emptyUsage, isVisionModel, type LlmConfig, type UsageTotals } from "./llm";
 import { BROWSER_TOOLS, executeTool, type ToolEnv } from "./tools";
 
 export interface AgentLoopArgs {
@@ -215,30 +215,56 @@ export interface StructuredResult<T> {
   usage: UsageTotals;
 }
 
+// Replace image blocks with a text placeholder for text-only struct models —
+// the extraction only needs the textual trail of the exploration.
+function stripImageBlocks(messages: Anthropic.MessageParam[]): Anthropic.MessageParam[] {
+  return messages.map((m) => {
+    if (!Array.isArray(m.content)) return m;
+    return {
+      ...m,
+      content: m.content.map((block) => {
+        if (block.type === "image") return { type: "text" as const, text: "[screenshot omitted]" };
+        if (block.type === "tool_result" && Array.isArray(block.content)) {
+          return {
+            ...block,
+            content: block.content.map((c) =>
+              c.type === "image" ? { type: "text" as const, text: "[screenshot omitted]" } : c,
+            ),
+          };
+        }
+        return block;
+      }),
+    };
+  });
+}
+
 export async function finalizeStructured<T>(
   llm: LlmConfig,
   messages: Anthropic.MessageParam[],
   instruction: string,
   schema: Record<string, unknown>,
 ): Promise<StructuredResult<T>> {
+  // The struct model may be text-only while the exploration ran on a vision
+  // nav model (CHE-70) — image blocks in the transcript would error the call.
+  const safeMessages = isVisionModel(llm.structModel) ? messages : stripImageBlocks(messages);
   const response = await createWithRetry(() =>
-    llm.navClient.messages.create({
-      model: llm.navModel,
+    llm.structClient.messages.create({
+      model: llm.structModel,
       max_tokens: 16_000,
       output_config: { format: { type: "json_schema", schema } },
-      messages: appendInstruction(messages, instruction),
+      messages: appendInstruction(safeMessages, instruction),
     }),
   );
-  const costUsd = costOf(llm.navModel, response.usage);
+  const costUsd = costOf(llm.structModel, response.usage);
   const usage = emptyUsage();
-  addUsage(usage, llm.navModel, response.usage);
+  addUsage(usage, llm.structModel, response.usage);
   const nothing = (note: string): StructuredResult<T> => ({ parsed: null, note, costUsd, usage });
 
   const text = response.content.find((b) => b.type === "text");
   if (!text || text.type !== "text") {
     const u = response.usage;
     return nothing(
-      `${llm.navModel} returned no text block (stop=${response.stop_reason ?? "?"}, ` +
+      `${llm.structModel} returned no text block (stop=${response.stop_reason ?? "?"}, ` +
         `in=${u?.input_tokens ?? 0} out=${u?.output_tokens ?? 0} tokens)`,
     );
   }
@@ -246,11 +272,11 @@ export async function finalizeStructured<T>(
     return { parsed: JSON.parse(text.text) as T, note: null, costUsd, usage };
   } catch {
     const m = text.text.match(/\{[\s\S]*\}/);
-    if (!m) return nothing(`${llm.navModel} answered with prose, not JSON`);
+    if (!m) return nothing(`${llm.structModel} answered with prose, not JSON`);
     try {
       return { parsed: JSON.parse(m[0]) as T, note: null, costUsd, usage };
     } catch {
-      return nothing(`${llm.navModel} emitted unparseable JSON (${text.text.length} chars)`);
+      return nothing(`${llm.structModel} emitted unparseable JSON (${text.text.length} chars)`);
     }
   }
 }
