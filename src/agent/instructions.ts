@@ -60,7 +60,26 @@ Operating rules:
   ones, and a submit that produces zero requests here may work for real users.
   If an interaction stays inert after a retry while other JS on the page
   demonstrably works, report the step as "confusing" and say explicitly that it
-  did not respond in this test browser and needs a real-browser check.`;
+  did not respond in this test browser and needs a real-browser check.
+- Trust what the page SHOWS over what you assume about this environment. If
+  fresh on-page evidence demonstrates the outcome happened — live captions or a
+  transcript growing, a message arriving from the other side, a dashboard that
+  filled in, a timer counting — the flow IS working: report the step "ok", even
+  when some control looks inert or your prior says "this can't work headless".
+  An environment assumption must never override evidence you just collected.
+- "Start Audio" / "Start Video" / "Unmute" overlays in WebRTC apps (LiveKit
+  and similar) usually just unlock browser audio PLAYBACK (autoplay policy) —
+  they are NOT proof the session failed. If the session shows signs of life
+  (captions, incoming messages, participant tiles, a running timer), the
+  journey step worked; mention the playback unlock as an environment note, not
+  a failure.
+- HTTP 429 (rate limit) is special: your own repeated checks from one IP are
+  often what tripped it. NEVER report a step or journey "broken" on a 429
+  alone — report "risky" or "confusing" with the explicit caveat that the
+  monitor's own traffic likely triggered the limit and a fresh-IP check is
+  needed. Poor RECOVERY from a 429 (controls stuck disabled, no error shown)
+  IS a legitimate finding — file it about the recovery UX, not as "the
+  feature is broken".`;
 
 // Told to the model only as a fact of availability; values never enter the
 // prompt. Sign-up stays skipped — the account already exists.
