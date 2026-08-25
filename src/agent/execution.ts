@@ -12,7 +12,7 @@ import { agentContextOptions } from "./browser";
 import { walkingSystem } from "./instructions";
 import { putScreenshot, putText, type AgentEnv } from "./env";
 import { originOf, type ProposedJourney, type RunInput } from "./discovery";
-import { emptyUsage, mergeUsage, type LlmConfig, type UsageTotals } from "./llm";
+import { emptyUsage, isVisionModel, mergeUsage, type LlmConfig, type UsageTotals } from "./llm";
 
 export interface WalkRun extends RunInput {
   id: string;
@@ -112,6 +112,7 @@ export async function walkOneJourney(args: {
     const toolEnv: ToolEnv = {
       page,
       targetOrigin: originOf(run.targetUrl),
+      visionScreenshots: isVisionModel(llm.navModel),
       testEmail: run.testEmail ?? undefined,
       testPassword: run.testPasswordEnc ? decryptSecret(run.testPasswordEnc) : undefined,
       networkLog: [],

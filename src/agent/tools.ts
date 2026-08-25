@@ -24,6 +24,12 @@ export interface ToolEnv {
   onScreenshot?: (buffer: Buffer) => Promise<string>; // returns storage URL
   onReportStep?: (step: ReportedStep) => Promise<void>;
   onWriteTest?: (test: { title: string; content: string }) => Promise<void>;
+  // Vision (CHE-70): when true, the screenshot tool also captures a compressed
+  // JPEG and parks it here; the core loop lifts it into the tool_result as an
+  // image block so the model SEES what it photographed, then clears the slot.
+  // Off for text-only nav models — the image would be rejected.
+  visionScreenshots?: boolean;
+  pendingScreenshotJpegB64?: string;
 }
 
 // Strip any occurrence of the real test credentials from text leaving the tool
@@ -432,6 +438,15 @@ async function screenshot(env: ToolEnv): Promise<string> {
   await blurPasswordFields(env.page);
   const buffer = await env.page.screenshot({ fullPage: false });
   const url = env.onScreenshot ? await env.onScreenshot(buffer) : null;
+  if (env.visionScreenshots) {
+    // Second capture as compressed JPEG for the model's own eyes (CHE-70):
+    // evidence stays full-quality PNG, context gets ~10x smaller bytes.
+    const jpeg = await env.page.screenshot({ fullPage: false, type: "jpeg", quality: 55 });
+    env.pendingScreenshotJpegB64 = Buffer.from(jpeg).toString("base64");
+    return url
+      ? `Screenshot saved: ${url} — the image follows in this result; look at it before judging the step.`
+      : "Screenshot captured (not persisted) — the image follows in this result.";
+  }
   return url ? `Screenshot saved: ${url}` : "Screenshot captured (not persisted).";
 }
 

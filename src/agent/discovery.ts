@@ -10,7 +10,7 @@ import { prepareAgentPage, type ToolEnv } from "./tools";
 import { agentContextOptions } from "./browser";
 import { discoverySystem } from "./instructions";
 import { putScreenshot, type AgentEnv } from "./env";
-import { emptyUsage, mergeUsage, type LlmConfig, type UsageTotals } from "./llm";
+import { emptyUsage, isVisionModel, mergeUsage, type LlmConfig, type UsageTotals } from "./llm";
 
 export interface RunInput {
   targetUrl: string;
@@ -75,6 +75,7 @@ export async function discoverApp(args: {
   const toolEnv: ToolEnv = {
     page,
     targetOrigin: originOf(run.targetUrl),
+    visionScreenshots: isVisionModel(llm.navModel),
     testEmail: run.testEmail ?? undefined,
     // Decrypted only here, in-memory; the LLM only ever sees {{TEST_PASSWORD}}.
     testPassword: run.testPasswordEnc ? decryptSecret(run.testPasswordEnc) : undefined,

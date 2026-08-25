@@ -122,10 +122,22 @@ export async function runAgentLoop(args: AgentLoopArgs): Promise<AgentLoopResult
         detail: result.slice(0, 800),
       });
 
+      // Vision (CHE-70): a screenshot's JPEG rides along as an image block so
+      // the model judges what it actually photographed, not just the DOM.
+      const jpeg = env.pendingScreenshotJpegB64;
+      if (jpeg) env.pendingScreenshotJpegB64 = undefined;
       results.push({
         type: "tool_result",
         tool_use_id: tool.id,
-        content: result.slice(0, MAX_TOOL_RESULT_CHARS),
+        content: jpeg
+          ? [
+              {
+                type: "image",
+                source: { type: "base64", media_type: "image/jpeg", data: jpeg },
+              },
+              { type: "text", text: result.slice(0, MAX_TOOL_RESULT_CHARS) },
+            ]
+          : result.slice(0, MAX_TOOL_RESULT_CHARS),
       });
 
       if (tool.name === "report_step" && onProgress) {

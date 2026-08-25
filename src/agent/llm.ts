@@ -31,6 +31,13 @@ function clientFor(model: string, env: AgentBindings): Anthropic {
   return new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
 }
 
+// Which models can accept image blocks (CHE-70). Claude models all can; on
+// OpenRouter only the GLM vision variants (glm-5v-*, glm-4.6v, glm-4.5v) do —
+// sending an image to a text-only model errors the request.
+export function isVisionModel(model: string): boolean {
+  return model.startsWith("claude") || /glm-5v|glm-4\.[56]v/.test(model);
+}
+
 export function makeLlm(env: AgentBindings): LlmConfig {
   const navModel = env.ANTHROPIC_NAV_MODEL ?? "claude-sonnet-4-6";
   const synthModel = env.ANTHROPIC_SYNTH_MODEL ?? "claude-opus-4-8";
