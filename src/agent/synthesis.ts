@@ -5,7 +5,8 @@
 import type { AppLens, AppAnatomy } from "@/lib/types";
 import type { Verdict, StepStatus } from "@/lib/enums";
 import type Anthropic from "@anthropic-ai/sdk";
-import { addUsage, costOf, emptyUsage, type LlmConfig, type UsageTotals } from "./llm";
+import { addUsage, costOf, emptyUsage, mergeUsage, type LlmConfig, type UsageTotals } from "./llm";
+import { finalizeStructured } from "./core";
 import type { AgentEnv } from "./env";
 import type { ProposedJourney } from "./discovery";
 
@@ -142,10 +143,51 @@ export async function synthesizeVerdict(args: {
     messages: [{ role: "user", content: observation }],
   });
 
-  const costUsd = costOf(llm.synthModel, message.usage);
+  let costUsd = costOf(llm.synthModel, message.usage);
   const usage = emptyUsage();
   addUsage(usage, llm.synthModel, message.usage);
-  const parsed = parseAppLens(message);
+  let parsed = parseAppLens(message);
+
+  // The one-shot reply sometimes carries no parseable JSON, and the old silent
+  // fallback shipped a placeholder verdict with 0 findings (run #68). Same cure
+  // as discovery's CHE-42 ladder: force a schema-valid extraction over the
+  // same context instead of shipping the placeholder.
+  if (!parsed.bottomLine && parsed.findings.length === 0) {
+    const assistantText = message.content
+      .filter((b): b is Anthropic.TextBlock => b.type === "text")
+      .map((b) => b.text)
+      .join("\n");
+    try {
+      const forced = await finalizeStructured<
+        Partial<AppLens> & { bottomLine?: string; findings?: SynthesizedFinding[] }
+      >(
+        llm,
+        [
+          { role: "user", content: `${APP_LENS_SYSTEM}\n\nOBSERVATION:\n${observation}` },
+          { role: "assistant", content: assistantText.trim() || "(no analysis was produced)" },
+        ],
+        "Your analysis above did not include the required JSON object. Output it now — " +
+          "the App Lens fields, bottomLine, and the findings — based ONLY on the observation.",
+        SYNTH_RETRY_SCHEMA,
+      );
+      costUsd += forced.costUsd;
+      mergeUsage(usage, forced.usage);
+      if (forced.parsed) {
+        const { bottomLine, findings, ...lens } = forced.parsed;
+        parsed = {
+          appLens: { ...placeholderLens(), ...lens },
+          bottomLine: bottomLine ?? null,
+          findings: shapeFindings(findings),
+        };
+      } else {
+        console.warn(`[synthesis] structured retry produced nothing — ${forced.note}`);
+      }
+    } catch (err) {
+      console.warn(
+        `[synthesis] structured retry failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
   // Verdict rolls up BOTH observed journey-step outcomes AND synthesized
   // findings. Earlier it ignored findings, so a run with 0 journeys but several
   // high-severity findings reported "all_good" — a contradiction.
@@ -226,15 +268,7 @@ function parseAppLens(message: Anthropic.Message): {
         return {
           appLens: { ...placeholderLens(), ...lens },
           bottomLine: bottomLine ?? null,
-          findings: (findings ?? [])
-            .filter((f) => f.title)
-            .slice(0, 20)
-            .map((f) => ({
-              ...f,
-              category: VALID_CATEGORIES.includes(f.category) ? f.category : "confusing",
-              severity: VALID_SEVERITIES.includes(f.severity) ? f.severity : "low",
-              detail: f.detail ?? {},
-            })),
+          findings: shapeFindings(findings),
         };
       } catch {
         // fall through
@@ -243,6 +277,63 @@ function parseAppLens(message: Anthropic.Message): {
   }
   return { appLens: placeholderLens(), bottomLine: null, findings: [] };
 }
+
+// Validation shared by the one-shot parse and the structured retry.
+function shapeFindings(findings: SynthesizedFinding[] | undefined): SynthesizedFinding[] {
+  return (findings ?? [])
+    .filter((f) => f.title)
+    .slice(0, 20)
+    .map((f) => ({
+      ...f,
+      category: VALID_CATEGORIES.includes(f.category) ? f.category : "confusing",
+      severity: VALID_SEVERITIES.includes(f.severity) ? f.severity : "low",
+      detail: f.detail ?? {},
+    }));
+}
+
+// Schema for the forced retry (finalizeStructured → output_config json_schema).
+const SYNTH_RETRY_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  required: ["bottomLine", "findings"],
+  properties: {
+    oneLiner: { type: "string" },
+    whoFor: { type: "string" },
+    coreValue: { type: "string" },
+    businessModel: { type: "string" },
+    techSurface: { type: "string" },
+    criticalPaths: { type: "array", items: { type: "string" } },
+    ifItBreaks: { type: "string" },
+    bottomLine: { type: "string" },
+    findings: {
+      type: "array",
+      items: {
+        type: "object",
+        required: ["title", "category", "severity"],
+        properties: {
+          title: { type: "string" },
+          category: { type: "string", enum: [...VALID_CATEGORIES] },
+          severity: { type: "string", enum: [...VALID_SEVERITIES] },
+          detail: {
+            type: "object",
+            properties: {
+              where: { type: "string" },
+              whatWeTried: { type: "array", items: { type: "string" } },
+              whatHappened: { type: "string" },
+              whyItMatters: { type: "string" },
+            },
+          },
+          stepRef: {
+            type: "object",
+            properties: {
+              journeyIndex: { type: "integer" },
+              stepIndex: { type: "integer" },
+            },
+          },
+        },
+      },
+    },
+  },
+};
 
 function placeholderLens(): AppLens {
   return {
