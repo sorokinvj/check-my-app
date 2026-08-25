@@ -20,6 +20,10 @@ export interface AgentBindings {
   // Cheap-model epic: models with a provider prefix ("z-ai/glm-5.2") route
   // through OpenRouter's Anthropic-compatible endpoint with this key.
   OPENROUTER_API_KEY?: string;
+  // Linear OAuth app creds (CHE-68): freshLinearToken refreshes the owner's
+  // 24h access tokens with these. Absent = tokens die a day after connect.
+  LINEAR_CLIENT_ID?: string;
+  LINEAR_CLIENT_SECRET?: string;
   // Verdict-ready notifications (Resend). All optional — absent = log-only.
   EMAIL_API_KEY?: string;
   EMAIL_FROM?: string;

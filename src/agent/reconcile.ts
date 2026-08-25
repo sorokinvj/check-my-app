@@ -24,8 +24,8 @@
 // Failure contract matches autofile: every error becomes a warn note and is
 // swallowed — a tracker outage must never cost the owner a verdict.
 
-import { decryptSecret } from "@/lib/crypto";
 import { LinearTracker } from "@/lib/tracker/linear";
+import { freshLinearToken } from "@/lib/tracker/token";
 import { dedupKeyForFinding } from "@/lib/tracker/file";
 import type { Tracker } from "@/lib/tracker/types";
 import { parseJson } from "@/lib/json";
@@ -74,7 +74,10 @@ export async function reconcileIssueLinks(
   if (links.length === 0) return EMPTY;
 
   const tracker: Tracker = new LinearTracker(
-    decryptSecret(app.tracker.accessTokenEnc),
+    await freshLinearToken(env.db, app.tracker, {
+      clientId: env.bindings.LINEAR_CLIENT_ID,
+      clientSecret: env.bindings.LINEAR_CLIENT_SECRET,
+    }),
     app.tracker.teamId,
   );
 
@@ -221,7 +224,10 @@ export async function verifyFixedLinks(env: AgentEnv, runId: string): Promise<Re
   const presentKeys = new Set(findings.map((f) => dedupKeyForFinding(f, run)));
 
   const tracker: Tracker = new LinearTracker(
-    decryptSecret(app.tracker.accessTokenEnc),
+    await freshLinearToken(env.db, app.tracker, {
+      clientId: env.bindings.LINEAR_CLIENT_ID,
+      clientSecret: env.bindings.LINEAR_CLIENT_SECRET,
+    }),
     app.tracker.teamId,
   );
   const baseUrl = env.bindings.APP_URL ?? "https://checkmyapp.dev";

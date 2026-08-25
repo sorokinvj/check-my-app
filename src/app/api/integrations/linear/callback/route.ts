@@ -57,6 +57,9 @@ export async function GET(req: NextRequest) {
   const team = await fetchFirstTeam(token.access_token);
   const expiresAt = token.expires_in ? new Date(Date.now() + token.expires_in * 1000) : null;
   const accessTokenEnc = encryptSecret(token.access_token);
+  // Without the refresh token the integration dies when the 24h access token
+  // does (CHE-68) — freshLinearToken needs it to renew silently.
+  const refreshTokenEnc = token.refresh_token ? encryptSecret(token.refresh_token) : null;
 
   await db.trackerIntegration.upsert({
     where: { appId },
@@ -64,12 +67,14 @@ export async function GET(req: NextRequest) {
       appId,
       type: "linear",
       accessTokenEnc,
+      refreshTokenEnc,
       teamId: team?.id ?? null,
       externalOrg: team?.name ?? null,
       tokenExpiresAt: expiresAt,
     },
     update: {
       accessTokenEnc,
+      refreshTokenEnc,
       teamId: team?.id ?? null,
       externalOrg: team?.name ?? null,
       tokenExpiresAt: expiresAt,

@@ -15,9 +15,9 @@
 // Every failure here is reported as a run event and swallowed: a tracker outage
 // must never fail a run whose verdict is already written.
 
-import { decryptSecret } from "@/lib/crypto";
 import { LinearTracker } from "@/lib/tracker/linear";
 import { fileFindingTicket } from "@/lib/tracker/file";
+import { freshLinearToken } from "@/lib/tracker/token";
 import type { AgentEnv } from "./env";
 
 const MAX_TICKETS_PER_RUN = 5;
@@ -72,7 +72,13 @@ export async function autoFileFindings(env: AgentEnv, runId: string): Promise<Au
   const notes: AutoFileNote[] = [];
   const selected = qualifying.slice(0, MAX_TICKETS_PER_RUN);
 
-  const tracker = new LinearTracker(decryptSecret(app.tracker.accessTokenEnc), app.tracker.teamId);
+  const tracker = new LinearTracker(
+    await freshLinearToken(env.db, app.tracker, {
+      clientId: env.bindings.LINEAR_CLIENT_ID,
+      clientSecret: env.bindings.LINEAR_CLIENT_SECRET,
+    }),
+    app.tracker.teamId,
+  );
   const baseUrl = env.bindings.APP_URL ?? "https://checkmyapp.dev";
 
   for (const finding of selected) {

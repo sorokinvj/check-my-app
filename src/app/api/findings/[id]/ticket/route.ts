@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 import { getDbFromContext } from "@/lib/db";
+import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { getOptionalUser } from "@/lib/auth";
-import { decryptSecret } from "@/lib/crypto";
 import { LinearTracker } from "@/lib/tracker/linear";
+import { freshLinearToken } from "@/lib/tracker/token";
 import { decideTicketAction } from "@/lib/tracker/decision";
 import { draftForFinding, dedupKeyForFinding } from "@/lib/tracker/file";
 
@@ -53,7 +54,14 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
     `${new URL(_req.url).origin}/verdict/${finding.run.publicId}`,
   );
 
-  const tracker = new LinearTracker(decryptSecret(app.tracker.accessTokenEnc), app.tracker.teamId);
+  const cfEnv = getCloudflareContext().env as Record<string, string | undefined>;
+  const tracker = new LinearTracker(
+    await freshLinearToken(prisma, app.tracker, {
+      clientId: cfEnv.LINEAR_CLIENT_ID,
+      clientSecret: cfEnv.LINEAR_CLIENT_SECRET,
+    }),
+    app.tracker.teamId,
+  );
   const dedupKey = dedupKeyForFinding(finding, finding.run);
 
   try {

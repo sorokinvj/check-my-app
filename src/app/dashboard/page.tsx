@@ -1,7 +1,8 @@
 import Link from "next/link";
+import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { requireUser } from "@/lib/auth";
-import { decryptSecret } from "@/lib/crypto";
 import { fetchTeams } from "@/lib/tracker/linear-oauth";
+import { freshLinearToken } from "@/lib/tracker/token";
 import { TeamSelect } from "@/components/team-select";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -39,11 +40,13 @@ export default async function DashboardPage({
   // For connected apps, pull the workspace teams so the owner can pick which one
   // tickets land in (best-effort — a transient Linear error just hides the picker).
   const teamsByApp: Record<string, { id: string; name: string }[]> = {};
+  const cfEnv = getCloudflareContext().env as Record<string, string | undefined>;
+  const oauthCreds = { clientId: cfEnv.LINEAR_CLIENT_ID, clientSecret: cfEnv.LINEAR_CLIENT_SECRET };
   await Promise.all(
     apps.map(async (app) => {
       if (!app.tracker) return;
       try {
-        teamsByApp[app.id] = await fetchTeams(decryptSecret(app.tracker.accessTokenEnc));
+        teamsByApp[app.id] = await fetchTeams(await freshLinearToken(db, app.tracker, oauthCreds));
       } catch {
         teamsByApp[app.id] = [];
       }

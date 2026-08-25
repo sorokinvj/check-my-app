@@ -30,6 +30,9 @@ export function buildAuthorizeUrl(opts: {
 
 export interface LinearToken {
   access_token: string;
+  // Rotating refresh token (CHE-68) — present when the OAuth app has token
+  // expiry enabled, which Linear now does for 24h access tokens.
+  refresh_token?: string;
   expires_in?: number;
   scope: string;
   token_type: string;
