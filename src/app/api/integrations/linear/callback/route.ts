@@ -54,12 +54,19 @@ export async function GET(req: NextRequest) {
     return fail(req);
   }
 
-  const team = await fetchFirstTeam(token.access_token);
   const expiresAt = token.expires_in ? new Date(Date.now() + token.expires_in * 1000) : null;
   const accessTokenEnc = encryptSecret(token.access_token);
   // Without the refresh token the integration dies when the 24h access token
   // does (CHE-68) — freshLinearToken needs it to renew silently.
   const refreshTokenEnc = token.refresh_token ? encryptSecret(token.refresh_token) : null;
+
+  // A reconnect must not clobber the owner's chosen team: the first-team
+  // default is for first connects only (resetting joblander → first workspace
+  // team on 2026-08-25 is how this line got here).
+  const existing = await db.trackerIntegration.findUnique({ where: { appId } });
+  const team = existing?.teamId
+    ? { id: existing.teamId, name: existing.externalOrg ?? undefined }
+    : await fetchFirstTeam(token.access_token);
 
   await db.trackerIntegration.upsert({
     where: { appId },
