@@ -2,7 +2,9 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { useFormStatus } from "react-dom";
 import { Button } from "@/components/ui/button";
+import { recheckRunAction } from "@/app/verdict/actions";
 
 // Verdict header/footer actions: enable Daily Watch (Loop B) and re-check now
 // (Journey 7). Kept client-side so the report page itself stays a server render.
@@ -67,28 +69,23 @@ export function EnableWatchButton({
   );
 }
 
+// A <form> around a server action, not an onClick (CHE-73): the old handler
+// attached only after hydration, so an early click was silently swallowed —
+// the exact pre-hydration failure this product flags on other people's apps.
+// A native form submit works from the first paint.
 export function RecheckButton({ runId }: { runId: string }) {
-  const router = useRouter();
-  const [busy, setBusy] = useState(false);
-
   return (
-    <Button
-      variant="outline"
-      disabled={busy}
-      onClick={async () => {
-        setBusy(true);
-        const res = await fetch(`/api/runs/${runId}/recheck`, { method: "POST" }).catch(
-          () => null,
-        );
-        if (res?.ok) {
-          const { id } = (await res.json()) as { id: string };
-          router.push(`/run/${id}`);
-        } else {
-          setBusy(false);
-        }
-      }}
-    >
-      {busy ? "Queuing…" : "Re-check now"}
+    <form action={recheckRunAction.bind(null, runId)}>
+      <RecheckSubmit />
+    </form>
+  );
+}
+
+function RecheckSubmit() {
+  const { pending } = useFormStatus();
+  return (
+    <Button type="submit" variant="outline" disabled={pending}>
+      {pending ? "Queuing…" : "Re-check now"}
     </Button>
   );
 }
