@@ -15,6 +15,7 @@ export type RecheckResult =
 export async function createRecheckRun(
   prisma: PrismaClient,
   publicId: string,
+  opts: { full?: boolean } = {},
 ): Promise<RecheckResult> {
   const prev = await prisma.run.findUnique({
     where: { publicId },
@@ -52,6 +53,8 @@ export async function createRecheckRun(
       appId: prev.appId,
       ownerId: prev.ownerId,
       baselineRunId: prev.id,
+      // CHE-74: an explicit full re-check must not be eaten by smoke/partial.
+      forceFull: opts.full ?? false,
       status: "queued",
     },
     select: { id: true, publicId: true },

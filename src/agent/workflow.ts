@@ -68,6 +68,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
           notifyEmail: true,
           watchId: true,
           baselineRunId: true,
+          forceFull: true,
           appId: true,
         },
       });
@@ -106,6 +107,11 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
       // the check are swallowed on purpose: a Browser Rendering hiccup during a
       // cheap pre-check must cost a full run, never the run itself.
       const smoke = await step.do("replay", async () => {
+        // Full re-check (CHE-74): the owner explicitly asked to walk everything
+        // — no shortcut may eat that request.
+        if (run.forceFull) {
+          return { taken: false as const, reason: "full re-check requested — walking everything" };
+        }
         // A pending fix verification needs a real walk of the journey the
         // ticket came from; "the pages still serve" cannot confirm a fix.
         if (reconciled.reverify.length > 0) {
@@ -130,6 +136,9 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
       // swallow-and-fall-through contract as the smoke check — a planning error
       // costs a full run, never the run itself.
       const plan = await step.do("partial-plan", async (): Promise<PartialDecision> => {
+        if (run.forceFull) {
+          return { taken: false, reason: "full re-check requested — walking everything" };
+        }
         if (!run.watchId) return { taken: false, reason: "one-off check" };
         if (smoke.taken) {
           return { taken: false, reason: "the smoke check found trouble — re-walking every journey" };

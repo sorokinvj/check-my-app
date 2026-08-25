@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useFormStatus } from "react-dom";
 import { Button } from "@/components/ui/button";
-import { recheckRunAction } from "@/app/verdict/actions";
+import { fullRecheckRunAction, recheckRunAction } from "@/app/verdict/actions";
 
 // Verdict header/footer actions: enable Daily Watch (Loop B) and re-check now
 // (Journey 7). Kept client-side so the report page itself stays a server render.
@@ -76,16 +76,26 @@ export function EnableWatchButton({
 export function RecheckButton({ runId }: { runId: string }) {
   return (
     <form action={recheckRunAction.bind(null, runId)}>
-      <RecheckSubmit />
+      <RecheckSubmit label="Re-check now" />
     </form>
   );
 }
 
-function RecheckSubmit() {
+// CHE-74: walk everything from scratch — carried journeys get re-verified
+// instead of riding the partial-run carry forever.
+export function FullRecheckButton({ runId }: { runId: string }) {
+  return (
+    <form action={fullRecheckRunAction.bind(null, runId)}>
+      <RecheckSubmit label="Full re-check" title="Walk every journey from scratch (slower, costs a full run)" />
+    </form>
+  );
+}
+
+function RecheckSubmit({ label, title }: { label: string; title?: string }) {
   const { pending } = useFormStatus();
   return (
-    <Button type="submit" variant="outline" disabled={pending}>
-      {pending ? "Queuing…" : "Re-check now"}
+    <Button type="submit" variant="outline" disabled={pending} title={title}>
+      {pending ? "Queuing…" : label}
     </Button>
   );
 }

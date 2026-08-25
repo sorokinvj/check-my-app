@@ -4,9 +4,11 @@ import { createRecheckRun } from "@/lib/recheck";
 
 // POST /api/runs/{publicId}/recheck — Journey 7: re-run with the same params.
 // Logic shared with the verdict page's server action (CHE-73) in lib/recheck.
-export async function POST(_req: Request, { params }: { params: Promise<{ id: string }> }) {
+export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const prisma = await getDbFromContext();
-  const result = await createRecheckRun(prisma, (await params).id);
+  // ?full=1 → CHE-74 full re-check (partial/smoke skip themselves).
+  const full = new URL(req.url).searchParams.get("full") === "1";
+  const result = await createRecheckRun(prisma, (await params).id, { full });
   if (result.kind === "not_found") {
     return NextResponse.json({ error: "Run not found" }, { status: 404 });
   }

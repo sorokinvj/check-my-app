@@ -8,7 +8,7 @@ import { AppLensSection } from "@/components/app-lens";
 import { JourneyStrips } from "@/components/journey-strip";
 import { AppAnatomySection } from "@/components/app-anatomy";
 import { FindingsList } from "@/components/findings-list";
-import { EnableWatchButton, RecheckButton } from "@/components/verdict-actions";
+import { EnableWatchButton, FullRecheckButton, RecheckButton } from "@/components/verdict-actions";
 import { ExportSpecs } from "@/components/export-specs";
 import { getOptionalUser } from "@/lib/auth";
 import type { AppLens, RunEvent } from "@/lib/types";
@@ -142,6 +142,7 @@ export default async function VerdictPage({ params }: { params: Promise<{ id: st
             </div>
             <div className="flex shrink-0 items-center gap-2.5">
               <RecheckButton runId={run.publicId} />
+              <FullRecheckButton runId={run.publicId} />
               <EnableWatchButton
                 runId={run.publicId}
                 hasWatch={hasWatch}

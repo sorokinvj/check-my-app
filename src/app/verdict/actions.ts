@@ -9,8 +9,17 @@ import { getDbFromContext } from "@/lib/db";
 import { createRecheckRun } from "@/lib/recheck";
 
 export async function recheckRunAction(publicId: string): Promise<void> {
+  return doRecheck(publicId, false);
+}
+
+// CHE-74: walk everything from scratch — partial/smoke skip themselves.
+export async function fullRecheckRunAction(publicId: string): Promise<void> {
+  return doRecheck(publicId, true);
+}
+
+async function doRecheck(publicId: string, full: boolean): Promise<void> {
   const prisma = await getDbFromContext();
-  const result = await createRecheckRun(prisma, publicId);
+  const result = await createRecheckRun(prisma, publicId, { full });
   if (result.kind === "unauthorized") {
     redirect(`/sign-in?redirect_url=${encodeURIComponent(`/verdict/${publicId}`)}`);
   }
