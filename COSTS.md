@@ -105,6 +105,32 @@ to Haiku for the act/observe steps. A discovery-only run (0 journeys) is ~$0.45.
 - **E4 — fleet ¢/journey with E3 code: the −72% did NOT generalize.** 8-run fleet (cal.com, ghost.org, joblander, linear.app, pelicanbay.pt, posthog.com, seedcast.app, tally.so; 34 journeys, all `mostly_ok`): **avg ¢/journey = 6.04 vs 5.8 baseline (flat)**, avg $/run = 0.257 vs 0.33 (−22%). The single-target theins.ru A/B (6.0→1.7) did NOT reproduce across apps — ¢/journey is dominated by per-app complexity (out-tok/call ranged 102–384) and thinking-off didn't move the fleet mean. The $/run drop is mostly from fewer journeys walked per run (4.25 vs ~5.7), not cheaper journeys. **Correction: the earlier "new working baseline ~2¢/journey" (E3, n=1) was optimistic and is retracted; steady-state ¢/journey is ~6.** E3 stays deployed (still cheaper output tokens, verdicts held honest), but it is not the win the single A/B implied.
 - **E5 (queued):** same thinking-off on discovery (exploration, less reasoning-critical).
 
+## Vision nav (CHE-70, deployed 2026-08-25)
+
+Nav model switched `z-ai/glm-5.2` → `z-ai/glm-5v-turbo` (same per-token price:
+$1.2/$4 per 1M vs $1.19/$3.74) and every screenshot now goes INTO the model
+context as a compressed JPEG (~1.5–2k tokens each) — the agent judges what it
+photographs. Measured joblander runs, 2026-08-25/26:
+
+| Run | Mode | Nav | Cost | Note |
+|-----|------|-----|------|------|
+| #67 | full walk | glm-5.2 (text) | **$0.91** | pre-vision reference |
+| #68 | partial (2 journeys) | 5v-turbo | $0.51 | first vision run |
+| #69 | partial (1) | 5v-turbo | $0.30 | |
+| #70 | partial (1) | 5v-turbo | $0.34 | |
+| #73 | full, FAILED discovery | 5v-turbo | $0.15 | glm-5v ignores output_config json_schema → 0 journeys; fixed by struct-model routing (b41d570) |
+| #74 | full walk | 5v-turbo + glm-5.2 struct | **$2.31** | all 5 journeys ok, incl. live LiveKit call |
+
+**Takeaway:** vision costs ~2.5× on FULL walks ($0.91 → $2.31 — images
+accumulate in the growing walking context and get cache-re-read each
+iteration), but partials stay $0.30–0.51 — and partials are the daily
+steady state. The quality jump paid for itself the same day (killed two
+false-broken classes: LiveKit "cannot be driven", 429 "broken widget").
+Optimization candidates if full-walk cost matters later: downscale JPEGs,
+drop image blocks from context after N turns, image-free discovery.
+Structured extraction (discovery/synthesis-retry JSON) routes to glm-5.2 —
+the GLM vision variants ignore `output_config` json_schema.
+
 ## How to measure going forward
 
 - **Per-run Anthropic $**: the agent core logs `[agent] iter N: ... in/cache/out`
