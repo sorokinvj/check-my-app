@@ -26,7 +26,15 @@ function formatDuration(start: Date, end: Date | null): string | null {
 // Order is deliberate: Findings first (the owner opens a verdict to learn what's
 // wrong — 2026-08-23) → Lens (mirror) → Journeys (centerpiece) → Anatomy →
 // Daily Watch footer.
-export default async function VerdictPage({ params }: { params: Promise<{ id: string }> }) {
+export default async function VerdictPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ id: string }>;
+  searchParams: Promise<{ watch_error?: string }>;
+}) {
+  // CHE-75: the Enable Daily Watch server action bounces gate errors back here.
+  const { watch_error: watchError } = await searchParams;
   const prisma = await getDbFromContext();
   const run = await prisma.run.findUnique({
     where: { publicId: (await params).id },
@@ -151,6 +159,12 @@ export default async function VerdictPage({ params }: { params: Promise<{ id: st
               />
             </div>
           </div>
+
+          {watchError && (
+            <p className="rounded-md border border-status-broken/40 bg-status-broken/10 px-3 py-2 text-sm text-status-broken">
+              Couldn&apos;t enable Daily Watch: {watchError}
+            </p>
+          )}
 
           {/* The verdict and its reason are ONE unit: pill first, and the
               bottom line hangs off it as the labeled explanation (same visual

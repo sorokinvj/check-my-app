@@ -1,14 +1,17 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { useFormStatus } from "react-dom";
 import { Button } from "@/components/ui/button";
-import { fullRecheckRunAction, recheckRunAction } from "@/app/verdict/actions";
+import { enableWatchAction, fullRecheckRunAction, recheckRunAction } from "@/app/verdict/actions";
 
 // Verdict header/footer actions: enable Daily Watch (Loop B) and re-check now
 // (Journey 7). Kept client-side so the report page itself stays a server render.
 
+// CHE-75: same pre-hydration treatment as RecheckButton — a form around a
+// server action, so an early click can't be silently swallowed. The action
+// redirects: to /watch/{slug} on success, to sign-in for anonymous visitors,
+// back here with ?watch_error=… when gated (the verdict page renders it).
 export function EnableWatchButton({
   runId,
   hasWatch,
@@ -20,52 +23,30 @@ export function EnableWatchButton({
   appSlug: string;
   variant?: "primary" | "outline";
 }) {
-  const router = useRouter();
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
   if (hasWatch) {
     return (
-      <Button variant="outline" onClick={() => router.push(`/watch/${appSlug}`)}>
+      <Link
+        href={`/watch/${appSlug}`}
+        className="inline-flex items-center justify-center gap-2 rounded-lg border border-ink-600 bg-ink-850 px-4 py-2.5 text-sm text-fg transition-colors hover:border-ink-700 hover:bg-ink-800"
+      >
         Watch settings
-      </Button>
+      </Link>
     );
   }
 
   return (
-    <div className="space-y-1.5">
-      <Button
-        variant={variant}
-        disabled={busy}
-        onClick={async () => {
-          setBusy(true);
-          setErr(null);
-          const res = await fetch("/api/watch", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ runId }),
-          }).catch(() => null);
-          if (res?.ok) {
-            const { slug } = (await res.json()) as { slug: string };
-            router.push(`/watch/${slug}`);
-            return;
-          }
-          // Daily Watch is an owner feature — send anonymous visitors to sign in
-          // and bring them back here to enable it.
-          if (res?.status === 401) {
-            const back = encodeURIComponent(window.location.pathname);
-            router.push(`/sign-in?redirect_url=${back}`);
-            return;
-          }
-          const body = ((await res?.json().catch(() => null)) ?? {}) as { error?: string };
-          setErr(body.error ?? "Couldn't enable Daily Watch.");
-          setBusy(false);
-        }}
-      >
-        {busy ? "Enabling…" : "Enable Daily Watch"}
-      </Button>
-      {err && <p className="text-xs text-status-broken">{err}</p>}
-    </div>
+    <form action={enableWatchAction.bind(null, runId)}>
+      <EnableWatchSubmit variant={variant} />
+    </form>
+  );
+}
+
+function EnableWatchSubmit({ variant }: { variant: "primary" | "outline" }) {
+  const { pending } = useFormStatus();
+  return (
+    <Button type="submit" variant={variant} disabled={pending}>
+      {pending ? "Enabling…" : "Enable Daily Watch"}
+    </Button>
   );
 }
 

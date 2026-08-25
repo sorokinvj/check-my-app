@@ -6,7 +6,9 @@
 
 import { redirect } from "next/navigation";
 import { getDbFromContext } from "@/lib/db";
+import { getOptionalUser } from "@/lib/auth";
 import { createRecheckRun } from "@/lib/recheck";
+import { enableWatchForRun } from "@/lib/watch-enable";
 
 export async function recheckRunAction(publicId: string): Promise<void> {
   return doRecheck(publicId, false);
@@ -15,6 +17,34 @@ export async function recheckRunAction(publicId: string): Promise<void> {
 // CHE-74: walk everything from scratch — partial/smoke skip themselves.
 export async function fullRecheckRunAction(publicId: string): Promise<void> {
   return doRecheck(publicId, true);
+}
+
+// CHE-75: Enable Daily Watch, hydration-proof. Same defaults the API route's
+// schema applies (daily, notify on change only).
+export async function enableWatchAction(publicId: string): Promise<void> {
+  const prisma = await getDbFromContext();
+  const user = await getOptionalUser(prisma);
+  const result = await enableWatchForRun(prisma, user, {
+    runPublicId: publicId,
+    frequency: "daily",
+    notifyOnChangeOnly: true,
+  });
+  switch (result.kind) {
+    case "unauthenticated":
+      redirect(`/sign-in?redirect_url=${encodeURIComponent(`/verdict/${publicId}`)}`);
+      break;
+    case "not_found":
+      redirect(`/verdict/${publicId}?watch_error=${encodeURIComponent("Run not found.")}`);
+      break;
+    case "forbidden":
+      redirect(`/verdict/${publicId}?watch_error=${encodeURIComponent("This run belongs to another owner.")}`);
+      break;
+    case "gated":
+      redirect(`/verdict/${publicId}?watch_error=${encodeURIComponent(result.reason)}`);
+      break;
+    case "ok":
+      redirect(`/watch/${result.slug}`);
+  }
 }
 
 async function doRecheck(publicId: string, full: boolean): Promise<void> {
