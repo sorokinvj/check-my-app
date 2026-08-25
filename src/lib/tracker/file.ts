@@ -12,7 +12,7 @@
 import { buildTicketDraft } from "./ticket";
 import { decideTicketAction } from "./decision";
 import type { Tracker, TicketDraft } from "./types";
-import { dedupKey } from "@/lib/dedup";
+import { dedupKey, requestSignature } from "@/lib/dedup";
 import { parseJson } from "@/lib/json";
 import type { FindingDetail } from "@/lib/types";
 import type { PrismaClient } from "@/generated/prisma/client";
@@ -60,6 +60,14 @@ export function dedupKeyForFinding(
   run: Pick<TicketRun, "appSlug">,
 ): string {
   const detail = parseJson<FindingDetail>(finding.detail) ?? {};
+  // CHE-59: machine facts first. A finding that names a failing request keys on
+  // (app, METHOD path status) — category/severity/prose all drift run-to-run,
+  // the broken endpoint doesn't. Prose key stays as the fallback for pure-UX
+  // findings with no request to point at.
+  const sig = requestSignature([detail.where, finding.title, detail.whatHappened]);
+  if (sig) {
+    return dedupKey({ journeyTitle: run.appSlug, stepLabel: sig, failureSignature: "request" });
+  }
   return dedupKey({
     journeyTitle: detail.where ?? run.appSlug,
     stepLabel: finding.title,
