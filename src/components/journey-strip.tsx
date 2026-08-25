@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Journey, Step } from "@/generated/prisma/client";
 import { STEP_STATUS_META } from "@/lib/status";
 
@@ -82,6 +82,8 @@ function JourneyCard({
 }) {
   const [open, setOpen] = useState(!collapsedByDefault);
   const [selected, setSelected] = useState<Step | null>(null);
+  // CHE-71: full-size screenshot overlay. Holds the image URL + caption.
+  const [lightbox, setLightbox] = useState<{ src: string; caption: string } | null>(null);
   const meta = STEP_STATUS_META[journey.status];
   const problems = journey.steps.filter((s) => PROBLEM_STATUSES.has(s.status));
 
@@ -166,7 +168,7 @@ function JourneyCard({
                   {i > 0 && <span className="mx-1 mt-12 shrink-0 text-fg-faint">→</span>}
                   <button
                     onClick={() => setSelected(isSelected ? null : step)}
-                    className={`w-40 shrink-0 rounded-lg border p-2 text-left transition-all ${
+                    className={`group w-40 shrink-0 rounded-lg border p-2 text-left transition-all ${
                       isSelected
                         ? "border-accent bg-ink-800 shadow-glow"
                         : "border-ink-700 bg-ink-900 hover:border-ink-600 hover:bg-ink-800"
@@ -190,6 +192,20 @@ function JourneyCard({
                           className={`absolute bottom-1 right-1 flex h-4 w-4 items-center justify-center rounded-full text-[10px] font-bold text-ink-950 ${s.dotClassName}`}
                         >
                           {s.emoji}
+                        </span>
+                        {/* CHE-71: zoom without toggling the step detail. A
+                            span with a click handler, not a nested button —
+                            buttons can't nest inside the card's button. */}
+                        <span
+                          role="button"
+                          aria-label={`View full-size screenshot: ${step.label}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setLightbox({ src: step.screenshotUrl!, caption: step.label });
+                          }}
+                          className="absolute right-1 top-1 flex h-5 w-5 cursor-zoom-in items-center justify-center rounded bg-ink-950/70 text-[11px] text-fg-muted opacity-0 transition-opacity hover:text-fg group-hover:opacity-100"
+                        >
+                          ⤢
                         </span>
                       </div>
                     ) : (
@@ -216,7 +232,7 @@ function JourneyCard({
             })}
           </div>
 
-          {selected && <StepDetail step={selected} />}
+          {selected && <StepDetail step={selected} onZoom={setLightbox} />}
 
           {journey.summary && (
             /* Takeaway zone (NN/g "insights"): full-width bar with a left
@@ -229,6 +245,8 @@ function JourneyCard({
               <span className="text-fg-muted">{journey.summary}</span>
             </p>
           )}
+
+          {lightbox && <Lightbox {...lightbox} onClose={() => setLightbox(null)} />}
 
           {journey.videoUrl && (
             <a
@@ -247,14 +265,29 @@ function JourneyCard({
 }
 
 // Inline expansion for a clicked step-card: what we tried / what happened /
-// console / network excerpts.
-function StepDetail({ step }: { step: Step }) {
+// screenshot / console / network excerpts.
+function StepDetail({
+  step,
+  onZoom,
+}: {
+  step: Step;
+  onZoom: (l: { src: string; caption: string }) => void;
+}) {
   const s = STEP_STATUS_META[step.status];
   return (
     <div className="mt-2 animate-fade-up rounded-lg border border-ink-700 bg-ink-900 p-4">
       <p className={`font-mono text-xs ${s.className}`}>
         {s.emoji} {s.label} — {step.label}
       </p>
+      {step.screenshotUrl && (
+        /* eslint-disable-next-line @next/next/no-img-element */
+        <img
+          src={step.screenshotUrl}
+          alt={step.label}
+          onClick={() => onZoom({ src: step.screenshotUrl!, caption: step.label })}
+          className="mt-3 max-h-80 w-auto cursor-zoom-in rounded border border-ink-700 object-contain transition-opacity hover:opacity-90"
+        />
+      )}
       <div className="mt-2 grid gap-3 text-sm sm:grid-cols-2">
         {step.attempted && (
           <div>
@@ -279,6 +312,52 @@ function StepDetail({ step }: { step: Step }) {
           {step.networkLog}
         </pre>
       )}
+    </div>
+  );
+}
+
+// CHE-71: full-size screenshot overlay. Click anywhere or press Escape to
+// close; the image itself stops propagation so a misclick inside doesn't
+// dismiss it.
+function Lightbox({
+  src,
+  caption,
+  onClose,
+}: {
+  src: string;
+  caption: string;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div
+      onClick={onClose}
+      className="fixed inset-0 z-50 flex cursor-zoom-out flex-col items-center justify-center gap-3 bg-ink-950/90 p-6 backdrop-blur-sm"
+      role="dialog"
+      aria-label={`Screenshot: ${caption}`}
+    >
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={src}
+        alt={caption}
+        onClick={(e) => e.stopPropagation()}
+        className="max-h-[85vh] max-w-[95vw] rounded-lg border border-ink-600 object-contain shadow-2xl"
+      />
+      <p className="max-w-2xl text-center font-mono text-xs text-fg-muted">{caption}</p>
+      <button
+        onClick={onClose}
+        className="absolute right-4 top-4 flex h-8 w-8 items-center justify-center rounded-full border border-ink-600 bg-ink-900 text-fg-muted transition-colors hover:text-fg"
+        aria-label="Close"
+      >
+        ✕
+      </button>
     </div>
   );
 }
