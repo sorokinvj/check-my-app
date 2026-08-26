@@ -42,6 +42,27 @@ export async function POST(req: Request) {
 
   const input = parsed.data;
 
+  // Anonymous same-domain reuse (CHE-80). Six anonymous example.com runs in 30
+  // minutes (2026-08-26, distributed IPs) each burned real LLM spend on a
+  // target we had just verified. Anonymous runs are public anyway (owner call,
+  // CHE-39), so an anon re-submission of a domain with a fresh completed
+  // verdict gets that verdict instead of a new run. Owners always get a real
+  // run — they may be testing a deploy that just went out.
+  if (!owner) {
+    const fresh = await prisma.run.findFirst({
+      where: {
+        appSlug: appSlugFromUrl(input.url),
+        status: "completed",
+        completedAt: { gte: new Date(Date.now() - 6 * 60 * 60 * 1000) },
+      },
+      orderBy: { completedAt: "desc" },
+      select: { publicId: true },
+    });
+    if (fresh) {
+      return NextResponse.json({ id: fresh.publicId, reused: true }, { status: 200 });
+    }
+  }
+
   // Run quota (CHE-40). Checked after Turnstile so bot floods never burn a real
   // client's allowance, and before the insert so a rejected run is never billed.
   const anonKeyHash = owner ? null : await hashClientKey(clientIp);
