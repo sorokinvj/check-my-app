@@ -97,7 +97,11 @@ ${run.focusAreas.trim()}
 Verify each concern explicitly EVERY run: cover it with concrete steps, gather
 evidence (screenshots, network responses), and state the outcome in your
 summary — "checked, works" matters as much as "broken". A concern you could
-not verify must be called out as unverified, never silently skipped.`;
+not verify must be called out as unverified, never silently skipped. For
+link-related concerns ("all X links must work"), collect the URLs from the
+page digest and pass them to the verify_links tool — it checks every one
+server-side (YouTube via oEmbed) and is the definitive answer; do not try to
+click through them one by one.`;
 }
 
 // Told to the model only as a fact of availability; values never enter the

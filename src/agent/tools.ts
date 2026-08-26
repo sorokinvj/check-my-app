@@ -113,6 +113,22 @@ export const BROWSER_TOOLS: Anthropic.Tool[] = [
     input_schema: { type: "object", properties: {} },
   },
   {
+    name: "verify_links",
+    description:
+      "Verify a batch of outbound links WITHOUT navigating: each URL is fetched " +
+      "server-side and reported as OK or BROKEN with its status. YouTube links are " +
+      "checked via the oEmbed API, which returns an error for deleted/private/" +
+      "unplayable videos — the definitive answer to 'do all these video links work'. " +
+      "Use for link-heavy pages and for owner concerns about links; up to 60 URLs per call.",
+    input_schema: {
+      type: "object",
+      properties: {
+        urls: { type: "array", items: { type: "string" }, description: "Absolute http(s) URLs" },
+      },
+      required: ["urls"],
+    },
+  },
+  {
     name: "report_step",
     description:
       "Record one completed journey step with its outcome. Call after each meaningful step while walking a journey. status: ok (works) / risky (works but fragile or abusable) / confusing (user would hesitate) / broken (does not work) / exposed (security issue) / skipped (unreachable).",
@@ -168,6 +184,8 @@ export async function executeTool(
         return await screenshot(env);
       case "get_network_log":
         return scrubSecrets(env, drainLogs(env));
+      case "verify_links":
+        return await verifyLinks(input);
       case "report_step": {
         const step = input as unknown as ReportedStep;
         // The model occasionally invents enum values — coerce to the schema.
@@ -437,6 +455,49 @@ async function resolveClickTarget(page: Page, input: Record<string, unknown>) {
     if ((await exact.count().catch(() => 0)) > 0) return exact;
   }
   return resolveLocator(page, input);
+}
+
+// Bulk outbound-link verification (CHE-81 follow-up). Run #92 inventoried 200+
+// YouTube links on meetbashar.com but could not "open" any (target=_blank in a
+// headless page) and had to punt to "spot-check in a real browser". Links are a
+// server-side fact: fetch each one. YouTube gets the oEmbed endpoint — it 4xxes
+// for deleted/private/unplayable videos, which is exactly the owner's question.
+const YOUTUBE_RE = /(?:youtube\.com\/(?:watch|shorts|embed|live)|youtu\.be\/)/i;
+
+function youtubeOembedUrl(url: string): string {
+  return `https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(url)}`;
+}
+
+async function verifyLinks(input: Record<string, unknown>): Promise<string> {
+  const raw = Array.isArray(input.urls) ? input.urls.map(String) : [];
+  const urls = [...new Set(raw)].filter((u) => /^https?:\/\//i.test(u)).slice(0, 60);
+  if (!urls.length) return "No valid http(s) URLs given.";
+
+  const checkOne = async (url: string): Promise<string> => {
+    const isYt = YOUTUBE_RE.test(url);
+    const target = isYt ? youtubeOembedUrl(url) : url;
+    try {
+      const res = await fetch(target, {
+        method: "GET",
+        redirect: "follow",
+        signal: AbortSignal.timeout(10_000),
+        headers: { "User-Agent": "Mozilla/5.0 (compatible; CheckMyApp link check)" },
+      });
+      const ok = res.status >= 200 && res.status < 400;
+      const via = isYt ? " (via YouTube oEmbed)" : "";
+      return `${ok ? "OK" : "BROKEN"} ${res.status}${via} ${url}`;
+    } catch (err) {
+      return `BROKEN fetch-error (${err instanceof Error ? err.message.slice(0, 60) : "?"}) ${url}`;
+    }
+  };
+
+  // Small batches: workerd caps concurrent outbound connections.
+  const results: string[] = [];
+  for (let i = 0; i < urls.length; i += 5) {
+    results.push(...(await Promise.all(urls.slice(i, i + 5).map(checkOne))));
+  }
+  const broken = results.filter((r) => r.startsWith("BROKEN")).length;
+  return `Checked ${results.length} links — ${broken} broken.\n${results.join("\n")}`;
 }
 
 function resolveLocator(page: Page, input: Record<string, unknown>) {
