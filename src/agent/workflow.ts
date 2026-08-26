@@ -27,6 +27,7 @@ import { makeAgentEnv, putText, type AgentBindings, type AgentEnv } from "./env"
 import { makeLlm, type UsageTotals } from "./llm";
 import { launchAgentBrowser, surfaceScan } from "./browser";
 import { LlmBudgetError } from "./core";
+import { dedupKeyForFinding } from "@/lib/tracker/file";
 import { discoverApp, type ProposedJourney, type RunInput } from "./discovery";
 import { walkOneJourney, type WalkRun } from "./execution";
 import { synthesizeVerdict, type SynthesizedFinding } from "./synthesis";
@@ -903,23 +904,52 @@ async function recordUsage(
 
 async function persistFindings(env: AgentEnv, runId: string, findings: SynthesizedFinding[]) {
   if (!findings.length) return;
+  const run = await env.db.run.findUnique({
+    where: { id: runId },
+    select: { appSlug: true },
+  });
   const journeys = await env.db.journey.findMany({
     where: { runId },
     include: { steps: { orderBy: { order: "asc" }, include: { evidence: true } } },
     orderBy: { order: "asc" },
   });
+
+  // Marks the owner set on earlier runs' findings (CHE-78: "That's fine" must
+  // survive into the next run). Keyed by the CHE-59 dedup signature, so the
+  // match tolerates prose drift; latest mark per signature wins. "watch" rides
+  // its own priority channel and "none" carries nothing.
+  const inheritedMarks = new Map<string, string>();
+  if (run) {
+    const marked = await env.db.finding.findMany({
+      where: {
+        mark: { in: ["known", "false_positive"] },
+        run: { appSlug: run.appSlug, id: { not: runId } },
+      },
+      orderBy: { createdAt: "asc" },
+      select: { title: true, category: true, severity: true, detail: true, mark: true },
+    });
+    for (const m of marked) {
+      inheritedMarks.set(dedupKeyForFinding(m, { appSlug: run.appSlug }), m.mark);
+    }
+  }
+
   let number = 1;
   for (const f of findings) {
     const step = f.stepRef ? journeys[f.stepRef.journeyIndex]?.steps[f.stepRef.stepIndex] : undefined;
     const shot = step?.evidence.find((e) => e.type === "screenshot");
+    const shaped = {
+      title: f.title.slice(0, 300),
+      category: f.category,
+      severity: f.severity,
+      detail: JSON.stringify(f.detail),
+    };
+    const mark = run ? inheritedMarks.get(dedupKeyForFinding(shaped, { appSlug: run.appSlug })) : undefined;
     await env.db.finding.create({
       data: {
         runId,
         number: number++,
-        title: f.title.slice(0, 300),
-        category: f.category,
-        severity: f.severity,
-        detail: JSON.stringify(f.detail),
+        ...shaped,
+        ...(mark ? { mark } : {}),
         evidence: shot
           ? { create: [{ type: "screenshot", storageUrl: shot.storageUrl, sha256: shot.sha256 }] }
           : undefined,
