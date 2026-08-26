@@ -17,6 +17,7 @@
 //   3. FULL — the six phases below.
 
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
+import { NonRetryableError } from "cloudflare:workflows";
 import type { AppAnatomy } from "@/lib/types";
 import type { Verdict } from "@/lib/enums";
 import { normalizeAnatomy } from "@/lib/anatomy";
@@ -25,6 +26,7 @@ import type { RunEvent, RunPhase } from "@/lib/types";
 import { makeAgentEnv, putText, type AgentBindings, type AgentEnv } from "./env";
 import { makeLlm, type UsageTotals } from "./llm";
 import { launchAgentBrowser, surfaceScan } from "./browser";
+import { LlmBudgetError } from "./core";
 import { discoverApp, type ProposedJourney, type RunInput } from "./discovery";
 import { walkOneJourney, type WalkRun } from "./execution";
 import { synthesizeVerdict, type SynthesizedFinding } from "./synthesis";
@@ -45,6 +47,16 @@ import {
 
 export interface CheckRunParams {
   runId: string;
+}
+
+// A budget failure must stop the whole run, and the Workflows engine must NOT
+// retry the step (each retry would re-spend tokens we don't have) — convert at
+// the step boundary (CHE-76).
+function rethrowBudgetNonRetryable(err: unknown): never {
+  if (err instanceof LlmBudgetError) {
+    throw new NonRetryableError(err.message, "LlmBudgetError");
+  }
+  throw err as Error;
 }
 
 export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRunParams> {
@@ -291,7 +303,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
             run: { ...run, userNotes } as RunInput,
             onLiveScreenshot: (url) => setLive(env, runId, { liveScreenshotUrl: url }),
             onProgress: (note) => setLive(env, runId, { currentAction: note }),
-          });
+          }).catch(rethrowBudgetNonRetryable);
           // Extraction trouble first, then the outcome — so "No journeys
           // mapped" always arrives with the reason it happened next to it.
           for (const n of d.notes) {
@@ -358,7 +370,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
               index: order,
               onLiveScreenshot: (url) => setLive(env, runId, { liveScreenshotUrl: url }),
               onProgress: (note) => setLive(env, runId, { currentAction: note }),
-            });
+            }).catch(rethrowBudgetNonRetryable);
             const journey = await env.db.journey.findFirst({
               where: { runId, order },
               select: { id: true },
@@ -411,7 +423,9 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
       // Phase 6 — Writing (LLM synthesis + findings + verdict).
       const verdict = await step.do("writing", async () => {
         await transition(env, runId, "writing", { icon: "info", text: "Writing your verdict" });
-        const synth = await synthesizeVerdict({ env, llm, runId, anatomy });
+        const synth = await synthesizeVerdict({ env, llm, runId, anatomy }).catch(
+          rethrowBudgetNonRetryable,
+        );
         await recordUsage(env, runId, "synthesis", llm.synthModel, synth.usage);
         await persistFindings(env, runId, synth.findings);
         if (synth.findings.length) {
@@ -548,10 +562,41 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
       });
     } catch (err) {
       await step.do("fail", async () => {
+        const msg = err instanceof Error ? err.message : String(err);
+        // CHE-76: our own LLM budget dying is an internal outage, not a fact
+        // about the customer's app. Mark the run failed with an internal
+        // reason (no verdict/findings/email were published — the throw
+        // happened before synthesis) and retry the watch soon.
+        const budget =
+          err instanceof LlmBudgetError ||
+          (err instanceof Error &&
+            (err.name === "LlmBudgetError" || /available credits|payment_required/i.test(msg)));
         await env.db.run.update({
           where: { id: runId },
-          data: { status: "failed", errorMessage: err instanceof Error ? err.message : String(err) },
+          data: {
+            status: "failed",
+            errorMessage: budget
+              ? `internal: LLM budget exhausted — nothing was published. ${msg}`.slice(0, 500)
+              : msg,
+          },
         });
+        if (budget) {
+          console.error(`[budget] run ${runId} aborted: LLM provider refused for credit state`);
+          await appendEvent(env, runId, "connecting", {
+            icon: "warn",
+            text:
+              "Internal error on our side (LLM provider budget) — this run published no " +
+              "verdict and sent no notifications. The watch retries automatically in ~2h.",
+          });
+          if (run.watchId) {
+            await env.db.watch
+              .update({
+                where: { id: run.watchId },
+                data: { nextRunAt: new Date(Date.now() + 2 * 60 * 60 * 1000) },
+              })
+              .catch(() => {});
+          }
+        }
       });
       throw err;
     }

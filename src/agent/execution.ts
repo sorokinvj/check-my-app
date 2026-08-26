@@ -6,7 +6,7 @@
 import type { Browser } from "@cloudflare/playwright";
 import { decryptSecret } from "@/lib/crypto";
 import type { StepStatus } from "@/lib/enums";
-import { runAgentLoop, finalizeJson, type TranscriptEntry } from "./core";
+import { LlmBudgetError, runAgentLoop, finalizeJson, type TranscriptEntry } from "./core";
 import { prepareAgentPage, type ToolEnv } from "./tools";
 import { agentContextOptions } from "./browser";
 import { walkingSystem } from "./instructions";
@@ -208,6 +208,10 @@ export async function walkOneJourney(args: {
       });
     } catch (err) {
       // Per-journey isolation: one failure must not abort the rest of the run.
+      // Our own LLM budget died (CHE-76) — not a fact about this journey or the
+      // app. Propagate so the workflow aborts the whole run unpublished instead
+      // of burning through the remaining journeys and shipping a verdict.
+      if (err instanceof LlmBudgetError) throw err;
       console.error(`[walk] journey "${proposed.title}" failed:`, err);
       await env.db.journey.update({
         where: { id: journey.id },

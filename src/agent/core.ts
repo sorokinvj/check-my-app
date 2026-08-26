@@ -47,6 +47,18 @@ export interface TranscriptEntry {
 
 const MAX_TOOL_RESULT_CHARS = 6_000;
 
+// Harness-side billing failure (CHE-76): the LLM provider refused the call over
+// OUR credit state (OpenRouter 402 "would exceed your available credits").
+// Never a fact about the customer's app — callers must abort the run without
+// publishing a verdict, findings, or email. Retrying is pointless until credits
+// change, so createWithRetry throws this immediately.
+export class LlmBudgetError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "LlmBudgetError";
+  }
+}
+
 export async function runAgentLoop(args: AgentLoopArgs): Promise<AgentLoopResult> {
   const { system, task, env, llm, maxIterations = 40, thinking = "adaptive", onProgress } = args;
   const messages: Anthropic.MessageParam[] = [{ role: "user", content: task }];
@@ -296,6 +308,9 @@ async function createWithRetry(
     } catch (err) {
       lastErr = err;
       const status = err instanceof Anthropic.APIError ? err.status : undefined;
+      if (status === 402) {
+        throw new LlmBudgetError(err instanceof Error ? err.message : String(err));
+      }
       const transient = status === 429 || status === 529 || (status ?? 0) >= 500;
       if (!transient || attempt === attempts - 1) throw err;
       const retryAfter = headerSeconds(err);
