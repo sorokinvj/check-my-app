@@ -270,7 +270,7 @@ const isInert = (r: Reaction) => r.requests === 0 && r.mutations === 0 && !r.nav
 // The result text records WHICH strategy produced a reaction, so transcripts
 // (and the synthesis pass) can see when only a fallback worked.
 async function click(env: ToolEnv, input: Record<string, unknown>): Promise<string> {
-  const target = resolveLocator(env.page, input).first();
+  const target = (await resolveClickTarget(env.page, input)).first();
   // Never interact before hydration: a click landing before listeners attach
   // is indistinguishable from a dead button.
   await waitForHydration(env.page, 1_500);
@@ -421,6 +421,22 @@ async function fill(env: ToolEnv, input: Record<string, unknown>): Promise<strin
     await field.fill(value, { timeout: 8_000 });
   }
   return usedSecret ? "Filled (credential substituted server-side)." : "Filled.";
+}
+
+// Exact accessible name first (CHE-79): getByRole's `name` matches SUBSTRINGS,
+// so clicking "Continue" on a Clerk modal picked "Continue with Google" (it
+// sits above the form in DOM order) and bounced the agent into OAuth — a false
+// broken/high on our own sign-in. When an exact-name match exists it wins;
+// the substring behavior stays as the fallback for the model's loose labels.
+async function resolveClickTarget(page: Page, input: Record<string, unknown>) {
+  if (input.role && input.name) {
+    const exact = page.getByRole(String(input.role) as Parameters<Page["getByRole"]>[0], {
+      name: String(input.name),
+      exact: true,
+    });
+    if ((await exact.count().catch(() => 0)) > 0) return exact;
+  }
+  return resolveLocator(page, input);
 }
 
 function resolveLocator(page: Page, input: Record<string, unknown>) {
