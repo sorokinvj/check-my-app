@@ -98,6 +98,7 @@ export async function updateAppSettings(appId: string, formData: FormData) {
 
   const testEmail = (String(formData.get("testEmail") ?? "").trim() || null) as string | null;
   const testPassword = String(formData.get("testPassword") ?? "");
+  const focusAreas = (String(formData.get("focusAreas") ?? "").trim() || null) as string | null;
   const scopeHints = (String(formData.get("scopeHints") ?? "").trim() || null) as string | null;
   const userNotes = (String(formData.get("userNotes") ?? "").trim() || null) as string | null;
   const notifyEmail = (String(formData.get("notifyEmail") ?? "").trim() || null) as string | null;
@@ -132,7 +133,7 @@ export async function updateAppSettings(appId: string, formData: FormData) {
   // App — creds/scope/notes (source of record for test creds).
   await db.app.update({
     where: { id: app.id },
-    data: { testEmail, scopeHints, userNotes, ...passwordUpdate },
+    data: { testEmail, scopeHints, userNotes, focusAreas, ...passwordUpdate },
   });
 
   // Watch — cadence + notify email; test creds mirrored here exactly as

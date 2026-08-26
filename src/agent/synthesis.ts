@@ -25,6 +25,11 @@ inventory of what works — "X, Y and Z all work cleanly; but..." buries the
 answer the reader came for. Say the problem first, then at most one clause on
 what's healthy.
 
+If the observation carries "ownerConcerns", the owner told us what they are
+most worried about. The bottomLine MUST address each concern explicitly —
+"your YouTube links: all N we checked play" or "we could not verify X this
+run" — before anything else you want to say.
+
 2. "Findings": 0-12 concrete, actionable findings from the walked journeys.
 Categories: broken (does not work) / risky (works but fragile or abusable) /
 confusing (user would hesitate) / polish (cosmetic) / exposed (security).
@@ -110,6 +115,13 @@ export async function synthesizeVerdict(args: {
 }> {
   const { env, llm, runId, anatomy } = args;
 
+  // CHE-81: the owner's priority concerns ride into the observation so the
+  // bottom line speaks to them explicitly.
+  const runRow = await env.db.run.findUnique({
+    where: { id: runId },
+    select: { focusAreas: true },
+  });
+
   const journeys = await env.db.journey.findMany({
     where: { runId },
     // include (not select) keeps every Journey scalar, carriedFromRunId among
@@ -131,6 +143,7 @@ export async function synthesizeVerdict(args: {
     orderBy: { order: "asc" },
   });
   const observation = JSON.stringify({
+    ownerConcerns: runRow?.focusAreas ?? undefined,
     pages: anatomy.pages,
     actions: anatomy.actions,
     services: anatomy.services,

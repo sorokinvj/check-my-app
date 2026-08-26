@@ -78,6 +78,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
           testPasswordEnc: true,
           scopeHints: true,
           userNotes: true,
+          focusAreas: true,
           notifyEmail: true,
           watchId: true,
           baselineRunId: true,
@@ -241,6 +242,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
         testPasswordEnc: run.testPasswordEnc,
         scopeHints: run.scopeHints,
         userNotes,
+        focusAreas: run.focusAreas,
       };
 
       await step.do("connecting", async () => {

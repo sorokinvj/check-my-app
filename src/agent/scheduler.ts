@@ -70,7 +70,7 @@ export async function runDueWatches(
       // Owner-configured scope/notes live on the App; watch runs must carry
       // them (run #19 self-check submitted a real paid check because the
       // "don't press the button" scope hint never reached the agent).
-      app: { select: { scopeHints: true, userNotes: true } },
+      app: { select: { scopeHints: true, userNotes: true, focusAreas: true } },
     },
   });
 
@@ -126,6 +126,7 @@ export async function runDueWatches(
           notifyEmail: watch.notifyEmail,
           scopeHints: watch.app?.scopeHints ?? null,
           userNotes: watch.app?.userNotes ?? null,
+          focusAreas: watch.app?.focusAreas ?? null,
           watchId: watch.id,
           baselineRunId: baseline?.id ?? null,
           appId: watch.appId,

@@ -18,6 +18,8 @@ export interface RunInput {
   testPasswordEnc: string | null;
   scopeHints: string | null;
   userNotes: string | null;
+  // CHE-81: owner's priority concerns, verbatim.
+  focusAreas: string | null;
 }
 
 export interface ProposedJourney {

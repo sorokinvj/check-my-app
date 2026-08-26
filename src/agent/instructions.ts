@@ -13,6 +13,8 @@ type Run = {
   targetUrl: string;
   testEmail?: string | null;
   testPasswordEnc?: string | null;
+  // CHE-81: the owner's priority concerns, verbatim.
+  focusAreas?: string | null;
 };
 
 const MISSION = `You are the CheckMyApp agent — a product mirror with QA fallout.
@@ -81,6 +83,23 @@ Operating rules:
   IS a legitimate finding — file it about the recovery UX, not as "the
   feature is broken".`;
 
+// The owner's "this is what I'm most worried about" (CHE-81). Positive
+// checking priorities — the opposite of scope limits. Discovery must plan
+// coverage for each; walking must verify and report the outcome either way.
+export function focusBlock(run: Pick<Run, "focusAreas">): string {
+  if (!run.focusAreas?.trim()) return "";
+  return `
+
+OWNER'S PRIORITY CONCERNS — the client is explicitly worried about these, in
+their own words. They outrank your default priorities:
+${run.focusAreas.trim()}
+
+Verify each concern explicitly EVERY run: cover it with concrete steps, gather
+evidence (screenshots, network responses), and state the outcome in your
+summary — "checked, works" matters as much as "broken". A concern you could
+not verify must be called out as unverified, never silently skipped.`;
+}
+
 // Told to the model only as a fact of availability; values never enter the
 // prompt. Sign-up stays skipped — the account already exists.
 export function credentialsBlock(run: Pick<Run, "testEmail" | "testPasswordEnc">): string {
@@ -132,7 +151,12 @@ When done, respond with ONLY a JSON object, no prose:
 {"journeys":[{"title":"...","steps":["...", "..."]}],
  "anatomy":{"pages":["/", ...],"actions":["...", ...],
   "services":[{"name":"...","role":"..."}],
-  "tech":{"frontend":"...","hosting":"...","auth":"...","realtime":"..."}}}${credentialsBlock(run)}${
+  "tech":{"frontend":"...","hosting":"...","auth":"...","realtime":"..."}}}${focusBlock(run)}${
+    run.focusAreas?.trim()
+      ? "\n\nAt least one of your proposed journeys must cover EACH of the owner's" +
+        " priority concerns above, with steps that verify it directly."
+      : ""
+  }${credentialsBlock(run)}${
     run.testEmail && run.testPasswordEnc
       ? "\n\nBecause test credentials are provided, one of your proposed journeys MUST be" +
         " signing in with them and reaching the core authenticated flow."
@@ -164,5 +188,5 @@ with label="...", getByPlaceholder for placeholder="..." fields.
 
 Finish with a 1-2 sentence summary of what you found (plain text). If anything
 was not ok, the FIRST sentence names the problem — the summary's job is "what's
-wrong", never a recap of what works.${credentialsBlock(run)}${clientInstructionBlock(run)}`;
+wrong", never a recap of what works.${focusBlock(run)}${credentialsBlock(run)}${clientInstructionBlock(run)}`;
 }

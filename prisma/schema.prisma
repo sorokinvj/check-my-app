@@ -50,6 +50,8 @@ model Run {
   testPasswordEnc      String? // encrypted blob, not plaintext
   scopeHints           String? // "don't touch /admin"
   userNotes            String? // "don't delete the test account"
+  focusAreas           String? // CHE-81: owner's priority concerns
+
   notifyEmail          String?
 
   status   String @default("queued") // RunStatus
@@ -342,6 +344,9 @@ model App {
   testPasswordEnc String?
   scopeHints      String?
   userNotes       String?
+  // Priority concerns (CHE-81): what the owner is most worried about, in their
+  // own words. Discovery must cover each with a journey; walking verifies.
+  focusAreas      String?
 
   // Outbound integrations (CHE-53). A generic webhook POSTed after EVERY
   // completed watch run (consumers filter — that's the observability contract),
