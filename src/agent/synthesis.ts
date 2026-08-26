@@ -25,12 +25,21 @@ inventory of what works — "X, Y and Z all work cleanly; but..." buries the
 answer the reader came for. Say the problem first, then at most one clause on
 what's healthy.
 
-2. "Findings": 3-12 concrete, actionable findings from the walked journeys.
+2. "Findings": 0-12 concrete, actionable findings from the walked journeys.
 Categories: broken (does not work) / risky (works but fragile or abusable) /
 confusing (user would hesitate) / polish (cosmetic) / exposed (security).
 Severity: high / medium / low. Every finding must trace back to something
 actually observed in the steps — no speculation. Where possible reference the
 step it came from via stepRef (journeyIndex and stepIndex are 0-based).
+
+A finding is a PROBLEM the founder can act on — something broken, fragile,
+confusing, ugly, or exposed. NEVER file "X works end-to-end" or "the flagship
+feature produced good output" as a finding: positive confirmations belong in
+the journey summaries and the bottomLine, not in the findings list, whatever
+category you'd put them under. A clean run has FEW or ZERO findings — do not
+pad the list to reach a count. Each finding's "why this matters" must contain
+a recommendation the owner could act on; if you cannot phrase one, it is not
+a finding.
 
 If the journeys array is empty, or a step was skipped, nothing was verified for
 it: do NOT claim it fails. When coverage is incomplete, say so in bottomLine
