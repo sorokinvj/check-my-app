@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { createApp } from "@/app/onboarding/actions";
 
 // Owner onboarding. One sectioned form (resumable multi-step is a later refinement)
@@ -17,12 +18,20 @@ export function OnboardingWizard({
 }) {
   const [submitting, setSubmitting] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  // CHE-84: the action returns refusals instead of throwing (a throw becomes a
+  // 500 page and the owner never learns why nothing was saved).
+  const [error, setError] = useState<string | null>(null);
 
   return (
     <form
       action={async (fd) => {
         setSubmitting(true);
-        await createApp(fd);
+        setError(null);
+        const result = await createApp(fd);
+        if (result?.error) {
+          setError(result.error);
+          setSubmitting(false);
+        }
       }}
       className="space-y-8"
     >
@@ -116,6 +125,22 @@ export function OnboardingWizard({
         </p>
       </section>
 
+      {/* 5a — Priority concerns (CHE-81): the owner's own words, first-class. */}
+      <section className="rounded-xl border border-accent/40 bg-accent/5 p-5">
+        <label className="block space-y-2">
+          <span className="text-sm font-medium text-fg">What worries you most?</span>
+          <span className="block text-xs text-fg-muted">
+            In your own words — we verify each of these on every run and answer them in the
+            verdict. e.g. &ldquo;All YouTube links must actually play&rdquo;.
+          </span>
+          <Textarea
+            name="focusAreas"
+            rows={3}
+            placeholder="All YouTube links and embeds must play. Checkout must never break."
+          />
+        </label>
+      </section>
+
       {/* 5 — Scope & notes */}
       <section className="card space-y-3 p-5">
         <p className="text-sm font-medium text-fg">
@@ -151,6 +176,14 @@ export function OnboardingWizard({
         </label>
       </section>
 
+      {error && (
+        <p
+          role="alert"
+          className="rounded-md border border-status-broken/40 bg-status-broken/10 px-3 py-2 text-sm text-status-broken"
+        >
+          {error}
+        </p>
+      )}
       <Button type="submit" disabled={submitting} className="w-full py-3.5 text-[15px]">
         {submitting ? "Saving…" : "Save & start watching"}
       </Button>

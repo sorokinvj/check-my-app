@@ -10,18 +10,27 @@ import type { UserPlan, WatchFrequency } from "@/lib/enums";
 // Persist an onboarded App + its Watch + TicketPolicy in one nested write.
 // D1 has no transactions, but the spike (CHE-21) proved nested create works and
 // these rows are created together once per app, so partial state is unlikely.
-export async function createApp(formData: FormData) {
+//
+// CHE-84: business outcomes (plan cap, duplicate app, bad URL) are RETURNED,
+// never thrown. A thrown error in a server action becomes an HTTP 500 and the
+// generic "a server error occurred" page — our own self-check hit the free-plan
+// watch cap and saw exactly that, with the app silently not created. A refusal
+// the owner can act on must always arrive as text next to the button.
+export type CreateAppResult = { error: string };
+
+export async function createApp(formData: FormData): Promise<CreateAppResult | void> {
   const { user, db } = await requireUser();
 
   const targetUrl = String(formData.get("targetUrl") ?? "").trim();
   if (!/^https?:\/\/.+\..+/.test(targetUrl)) {
-    throw new Error("Enter a valid app URL (https://…)");
+    return { error: "Enter a valid app URL (https://…)" };
   }
   const appSlug = appSlugFromUrl(targetUrl);
 
   const testEmail = (String(formData.get("testEmail") ?? "").trim() || null) as string | null;
   const testPassword = String(formData.get("testPassword") ?? "");
   const testPasswordEnc = testPassword ? encryptSecret(testPassword) : null;
+  const focusAreas = (String(formData.get("focusAreas") ?? "").trim() || null) as string | null;
   const scopeHints = (String(formData.get("scopeHints") ?? "").trim() || null) as string | null;
   const userNotes = (String(formData.get("userNotes") ?? "").trim() || null) as string | null;
   const notifyEmail = (String(formData.get("notifyEmail") ?? "").trim() || null) as string | null;
@@ -33,7 +42,7 @@ export async function createApp(formData: FormData) {
     plan: user.plan as UserPlan,
     frequency,
   });
-  if (!gate.ok) throw new Error(gate.reason);
+  if (!gate.ok) return { error: gate.reason };
 
   // Ticket policy — the pickup contract with the owner's own automation.
   const pickupLabels = String(formData.get("pickupLabels") ?? "")
@@ -54,7 +63,7 @@ export async function createApp(formData: FormData) {
     select: { id: true },
   });
   if (dupe) {
-    throw new Error("You already have this app — manage it from your dashboard.");
+    return { error: "You already have this app — manage it from your dashboard." };
   }
 
   try {
@@ -68,6 +77,7 @@ export async function createApp(formData: FormData) {
         testPasswordEnc,
         scopeHints,
         userNotes,
+        focusAreas,
         watch: {
           create: {
             appSlug,
@@ -90,7 +100,7 @@ export async function createApp(formData: FormData) {
     });
   } catch (err) {
     if (err instanceof Error && err.message.includes("Unique constraint")) {
-      throw new Error("You already have this app — manage it from your dashboard.");
+      return { error: "You already have this app — manage it from your dashboard." };
     }
     throw err;
   }
