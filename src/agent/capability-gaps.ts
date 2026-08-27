@@ -35,6 +35,11 @@ const CAPABILITIES: { match: RegExp; label: string; why: string }[] = [
     why: "Any app whose only login is Google/GitHub is unverifiable behind the login wall — a whole class of customers we cannot serve end to end.",
   },
   {
+    match: /magic link|passwordless|email link|sign-?in link|login link/i,
+    label: "Checker cannot complete passwordless / magic-link sign-in",
+    why: "Magic-link products have NO password to hand us — no amount of owner input unblocks it. We need a mailbox the agent can read for test accounts; until then the entire signed-in half of every passwordless app is invisible to us.",
+  },
+  {
     match: /verification code|2fa|mfa|one-?time (code|password)|otp/i,
     label: "Checker cannot complete an emailed/SMS verification code step",
     why: "MFA-protected accounts stop the walk at the door. Needs a mailbox/code channel the agent can read for test accounts.",

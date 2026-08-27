@@ -471,7 +471,7 @@ async function resolveClickTarget(page: Page, input: Record<string, unknown>) {
 // sure every skipped step carries a reason, so the capability filer can open a
 // ticket against us instead of the customer reading an excuse.
 const CAPABILITY_PATTERNS =
-  /(target=_?"?_blank|new tab|popup|pop-up|oauth|headless|our (test )?browser|verification code|2fa|mfa|camera|microphone|media device|could not follow|cannot follow|no (network )?requests?|0 requests)/i;
+  /(target=_?"?_blank|new tab|popup|pop-up|oauth|headless|our (test )?browser|verification code|2fa|mfa|camera|microphone|media device|could not follow|cannot follow|no (network )?requests?|0 requests|magic link|passwordless|email link|sign-?in link)/i;
 
 function classifyUnverified(step: ReportedStep): void {
   const text = `${step.observed ?? ""} ${step.attempted ?? ""}`;
@@ -490,11 +490,17 @@ function classifyUnverified(step: ReportedStep): void {
     return;
   }
   if (!step.unverifiedReason) {
-    step.unverifiedReason = /credential|password|test account|sign-?in details/i.test(text)
-      ? "missing_access"
-      : environmental
-        ? "our_capability"
-        : "not_applicable";
+    // Passwordless flows are OUR gap, not the owner's: there is no password to
+    // give us, so "add test credentials" would be a lie. Checked before the
+    // credentials wording, which such steps almost always also mention.
+    const passwordless = /magic link|passwordless|email link|sign-?in link|login link/i.test(text);
+    step.unverifiedReason = passwordless
+      ? "our_capability"
+      : /credential|password|test account|sign-?in details/i.test(text)
+        ? "missing_access"
+        : environmental
+          ? "our_capability"
+          : "not_applicable";
   }
 }
 
