@@ -55,3 +55,6 @@ src/generated/prisma/
 
 # clerk configuration (can include secrets)
 /.clerk/
+
+# Local Redis dump (brew redis in this dir)
+dump.rdb
