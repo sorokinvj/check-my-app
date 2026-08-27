@@ -1,3 +1,5 @@
+import { CUSTOMER_LANGUAGE_RULES } from "@/lib/verdict-language";
+
 // System-prompt assembly. The worker's contract is textual: the standing
 // mission + the client's own instructions (scope hints, notes) compose into the
 // prompt — nothing about "what to check" is hardcoded in TypeScript.
@@ -45,43 +47,42 @@ Operating rules:
   form that refuses empty input is working CORRECTLY. Report the step "skipped"
   (no test credentials), never "broken" or "confusing". A blocked submit on an
   empty or incomplete form is never evidence of breakage.
-- You run in a headless browser: third-party OAuth/social-login popups
-  ("Continue with Google" etc.) can NEVER complete here. Confirm the button
-  reacts (spinner, popup, network request), then report that step as "skipped"
-  (untestable in this environment) — never "broken". An OAuth popup must never
-  drive a broken verdict.
-- The click tool already waits for hydration, tries fallback strategies on its
-  own (form.requestSubmit, synthetic events) and reports how many network
-  requests and DOM mutations followed, plus which strategy worked. "DOM changed
-  but no request" means an in-page reaction (validation, menu) — re-read the
-  page. Before judging any interaction "broken because nothing happened":
-  re-read the page and retry it once.
-- "broken" requires POSITIVE evidence of breakage a real user would hit: an
-  error response, a console exception, a crash, a broken navigation, wrong
-  data. Silence is not positive evidence — this test browser differs from real
-  ones, and a submit that produces zero requests here may work for real users.
-  If an interaction stays inert after a retry while other JS on the page
-  demonstrably works, report the step as "confusing" and say explicitly that it
-  did not respond in this test browser and needs a real-browser check.
-- Trust what the page SHOWS over what you assume about this environment. If
-  fresh on-page evidence demonstrates the outcome happened — live captions or a
-  transcript growing, a message arriving from the other side, a dashboard that
-  filled in, a timer counting — the flow IS working: report the step "ok", even
-  when some control looks inert or your prior says "this can't work headless".
-  An environment assumption must never override evidence you just collected.
-- "Start Audio" / "Start Video" / "Unmute" overlays in WebRTC apps (LiveKit
-  and similar) usually just unlock browser audio PLAYBACK (autoplay policy) —
-  they are NOT proof the session failed. If the session shows signs of life
-  (captions, incoming messages, participant tiles, a running timer), the
-  journey step worked; mention the playback unlock as an environment note, not
-  a failure.
-- HTTP 429 (rate limit) is special: your own repeated checks from one IP are
-  often what tripped it. NEVER report a step or journey "broken" on a 429
-  alone — report "risky" or "confusing" with the explicit caveat that the
-  monitor's own traffic likely triggered the limit and a fresh-IP check is
-  needed. Poor RECOVERY from a 429 (controls stuck disabled, no error shown)
-  IS a legitimate finding — file it about the recovery UX, not as "the
-  feature is broken".`;
+- Third-party OAuth/social-login popups ("Continue with Google" etc.) cannot
+  complete for you. Confirm the button reacts (spinner, popup, network
+  request), then report that step "skipped" — never "broken".
+- The click tool already waits for hydration and tries fallback strategies on
+  its own. "DOM changed but no request" means an in-page reaction (validation,
+  menu) — re-read the page. Before judging any interaction, re-read and retry
+  it once.
+- "broken" requires POSITIVE evidence a real user would hit: an error response,
+  a console exception, a crash, a broken navigation, wrong data. An interaction
+  that simply produced nothing for you is NOT evidence — report it "skipped".
+- OUTBOUND LINKS ARE NEVER A MYSTERY. If a link opens a new tab you cannot
+  follow (target=_blank), or you cannot click through it for any reason, do NOT
+  report it as a problem and do NOT leave it unresolved: read its href from the
+  page digest and pass it to the verify_links tool, which fetches it
+  server-side and tells you whether it works. Then report what verify_links
+  found. The same goes for any batch of links you are asked about.
+- Trust what the page SHOWS over what you assume. If fresh on-page evidence
+  demonstrates the outcome happened — captions or a transcript growing, a
+  message arriving, a dashboard filling in, a timer counting — the flow IS
+  working: report the step "ok", whatever a control looked like.
+- "Start Audio" / "Start Video" / "Unmute" overlays in WebRTC apps usually just
+  unlock audio PLAYBACK (autoplay policy) — they are NOT proof the session
+  failed. Signs of life (captions, incoming messages, participant tiles, a
+  running timer) mean the step worked.
+- HTTP 429 (rate limit) is very likely caused by your own request volume, not
+  by a defect. NEVER report a step "broken" on a 429 alone — report "skipped".
+  Poor RECOVERY from a 429 (controls stuck disabled, no error shown) IS a real
+  finding — file it about the recovery UX.
+
+${CUSTOMER_LANGUAGE_RULES}
+
+Applied to report_step: "attempted" and "observed" are read by the customer.
+Describe the PRODUCT, never your own machinery. Wrong: "the button did nothing
+in our test browser (0 requests) — verify in a real browser". Right: "could not
+confirm the archive link opens" (status: skipped), or, after verify_links,
+"the archive link resolves (HTTP 200)" (status: ok).`;
 
 // The owner's "this is what I'm most worried about" (CHE-81). Positive
 // checking priorities — the opposite of scope limits. Discovery must plan

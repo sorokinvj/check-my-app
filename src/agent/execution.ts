@@ -135,6 +135,7 @@ export async function walkOneJourney(args: {
             observed: step.observed,
             consoleLog: step.consoleExcerpt ?? null,
             networkLog: step.networkExcerpt ?? null,
+            unverifiedReason: step.unverifiedReason ?? null,
             screenshotUrl: lastScreenshot?.storageUrl ?? null,
             evidence: lastScreenshot
               ? { create: [{ type: "screenshot", ...lastScreenshot }] }

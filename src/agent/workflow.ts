@@ -32,6 +32,7 @@ import { discoverApp, type ProposedJourney, type RunInput } from "./discovery";
 import { walkOneJourney, type WalkRun } from "./execution";
 import { synthesizeVerdict, type SynthesizedFinding } from "./synthesis";
 import { autoFileFindings } from "./autofile";
+import { fileCapabilityGaps } from "./capability-gaps";
 import { reconcileIssueLinks, reverifyInstructions, verifyFixedLinks } from "./reconcile";
 import { sendVerdictReady } from "@/lib/email";
 import { deliverWebhook, type RunCompletedPayload } from "@/lib/notify/webhook";
@@ -503,6 +504,22 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
           }
         });
       }
+
+      // CHE-83 — hold OURSELVES to the same loop. Any step this run could not
+      // verify because of our checker (not because of the customer's product)
+      // becomes a high-priority ticket on our own board. Runs for every run,
+      // watch or not: a capability gap is a defect wherever it shows up. Never
+      // fails the run, exactly like autofile.
+      await step.do("capability-gaps", async () => {
+        try {
+          for (const note of await fileCapabilityGaps(env, runId)) {
+            await appendEvent(env, runId, "writing", note);
+          }
+        } catch (err) {
+          const text = err instanceof Error ? err.message : String(err);
+          console.warn(`[capability] gap filing failed: ${text}`);
+        }
+      });
 
       // Reverse sync, closing half (CHE-61): after autofile, so a reappeared
       // signature has already been refiled (flipping its link back to "open")

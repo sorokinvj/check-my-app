@@ -54,6 +54,8 @@ export interface ReportedStep {
   observed: string;
   consoleExcerpt?: string;
   networkExcerpt?: string;
+  // CHE-83: only meaningful when status === "skipped".
+  unverifiedReason?: "our_capability" | "missing_access" | "not_applicable";
 }
 
 export const BROWSER_TOOLS: Anthropic.Tool[] = [
@@ -131,7 +133,7 @@ export const BROWSER_TOOLS: Anthropic.Tool[] = [
   {
     name: "report_step",
     description:
-      "Record one completed journey step with its outcome. Call after each meaningful step while walking a journey. status: ok (works) / risky (works but fragile or abusable) / confusing (user would hesitate) / broken (does not work) / exposed (security issue) / skipped (unreachable).",
+      "Record one completed journey step with its outcome. Call after each meaningful step while walking a journey. status: ok (works) / risky (works but fragile or abusable) / confusing (user would hesitate) / broken (does not work) / exposed (security issue) / skipped (could not verify). When status is skipped you MUST set unverifiedReason: our_capability if OUR checker could not do it (new-tab links you could not follow, OAuth popups, MFA codes, camera/mic, anything about our own machinery), missing_access if the owner has not given us what is needed (test credentials, a URL), not_applicable if it is deliberately out of scope. our_capability opens a high-priority ticket on OUR board — that is how the checker gets better, so classify honestly.",
     input_schema: {
       type: "object",
       properties: {
@@ -144,6 +146,11 @@ export const BROWSER_TOOLS: Anthropic.Tool[] = [
         observed: { type: "string", description: "What actually happened" },
         consoleExcerpt: { type: "string" },
         networkExcerpt: { type: "string" },
+        unverifiedReason: {
+          type: "string",
+          enum: ["our_capability", "missing_access", "not_applicable"],
+          description: "Required when status is skipped — see the description above.",
+        },
       },
       required: ["label", "status", "attempted", "observed"],
     },
@@ -191,6 +198,7 @@ export async function executeTool(
         // The model occasionally invents enum values — coerce to the schema.
         const valid = ["ok", "risky", "confusing", "broken", "exposed", "skipped"];
         if (!valid.includes(step.status)) step.status = "confusing";
+        classifyUnverified(step);
         await env.onReportStep?.(step);
         return "Step recorded.";
       }
@@ -455,6 +463,39 @@ async function resolveClickTarget(page: Page, input: Record<string, unknown>) {
     if ((await exact.count().catch(() => 0)) > 0) return exact;
   }
   return resolveLocator(page, input);
+}
+
+// CHE-82/83. An interaction that produced nothing for US is not a product
+// defect — it is an unverified step and a gap in our own checker. Coerce it
+// (the model still slips into "confusing: the button did nothing") and make
+// sure every skipped step carries a reason, so the capability filer can open a
+// ticket against us instead of the customer reading an excuse.
+const CAPABILITY_PATTERNS =
+  /(target=_?"?_blank|new tab|popup|pop-up|oauth|headless|our (test )?browser|verification code|2fa|mfa|camera|microphone|media device|could not follow|cannot follow|no (network )?requests?|0 requests)/i;
+
+function classifyUnverified(step: ReportedStep): void {
+  const text = `${step.observed ?? ""} ${step.attempted ?? ""}`;
+  const environmental = CAPABILITY_PATTERNS.test(text);
+  const hardEvidence = /\b(4\d{2}|5\d{2})\b|console error|exception|stack|crash/i.test(
+    step.observed ?? "",
+  );
+  // "broken/confusing" justified only by our own inability → unverified.
+  if ((step.status === "broken" || step.status === "confusing") && environmental && !hardEvidence) {
+    step.status = "skipped";
+    step.unverifiedReason = "our_capability";
+    return;
+  }
+  if (step.status !== "skipped") {
+    step.unverifiedReason = undefined;
+    return;
+  }
+  if (!step.unverifiedReason) {
+    step.unverifiedReason = /credential|password|test account|sign-?in details/i.test(text)
+      ? "missing_access"
+      : environmental
+        ? "our_capability"
+        : "not_applicable";
+  }
 }
 
 // Bulk outbound-link verification (CHE-81 follow-up). Run #92 inventoried 200+

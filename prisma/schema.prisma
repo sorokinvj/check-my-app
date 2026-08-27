@@ -156,6 +156,9 @@ model Step {
   screenshotUrl String?
   attempted  String? // what the agent tried to do
   observed   String? // what happened
+  // CHE-83: why a skipped step went unverified — our_capability (our defect,
+  // auto-filed against us) | missing_access | not_applicable.
+  unverifiedReason String?
   consoleLog String?
   networkLog String? // HAR excerpt
 

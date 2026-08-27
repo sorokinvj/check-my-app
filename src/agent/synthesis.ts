@@ -9,6 +9,11 @@ import { addUsage, costOf, emptyUsage, mergeUsage, type LlmConfig, type UsageTot
 import { finalizeStructured } from "./core";
 import type { AgentEnv } from "./env";
 import type { ProposedJourney } from "./discovery";
+import {
+  CUSTOMER_LANGUAGE_RULES,
+  hasEnvironmentLeak,
+  stripEnvironmentLeak,
+} from "@/lib/verdict-language";
 
 const APP_LENS_SYSTEM = `You just observed a web app for a while. Produce two things.
 
@@ -48,11 +53,9 @@ a finding.
 
 If the journeys array is empty, or a step was skipped, nothing was verified for
 it: do NOT claim it fails. When coverage is incomplete, say so in bottomLine
-("we couldn't verify X this run") instead of inventing failures. Steps skipped
-as untestable-in-headless (OAuth popups) are not evidence of breakage. A
-journey with status "partial" means everything attempted worked and only some
-steps went unverified — treat it as working, with a coverage caveat, never as
-a failure.
+("we couldn't verify X this run") instead of inventing failures. A journey with
+status "partial" means everything attempted worked and only some steps went
+unverified — treat it as working, with a coverage caveat, never as a failure.
 
 If any step was skipped because no test credentials were provided (sign-in /
 authenticated journeys), the run could not verify anything behind the login. Say
@@ -71,18 +74,16 @@ Never call an app broken unless you can point at it: a finding you categorized
 is not evidence of breakage — if nothing you saw broke, the worst honest verdict
 is "needs attention".
 
-Steps that were merely INERT in the test browser (an interaction produced no
-request/effect, with no error response or console exception) are uncertain, not
-proof of breakage — the test browser differs from real ones. Never extrapolate
-them into claims like "no user can log in"; describe them as "did not respond
-in our test browser — verify in a real browser" and weigh them as confusing,
-not broken.
+A step that simply produced no effect for us, with no error response and no
+console exception, proves NOTHING about the product. It is an unverified step,
+not a defect: it must never become a finding, and the only honest mention is a
+coverage clause ("we could not confirm X this run"). Never extrapolate it into
+"no user can log in".
 
-HTTP 429 / "rate limit" / "too many requests" responses are very likely
-SELF-INDUCED: this check makes hundreds of requests from a single IP in minutes,
-far more than a real user. Do NOT report a 429 as broken. A first-time user
-almost certainly never hits it. Treat it as "risky — our check volume may have
-tripped rate limiting; verify from a clean session", low/medium at most.
+HTTP 429 / "rate limit" responses are self-induced by our own request volume.
+They are never a finding and never belong in the bottom line.
+
+${CUSTOMER_LANGUAGE_RULES}
 
 Respond with ONLY JSON:
 {"oneLiner":"...","whoFor":"...","coreValue":"...","businessModel":"...",
@@ -210,6 +211,61 @@ export async function synthesizeVerdict(args: {
       );
     }
   }
+  // CHE-82 — customer-language gate. Deterministic, applied AFTER the model has
+  // spoken, because three rounds of prompt rules did not stop the leak. Runs
+  // before the roll-up on purpose: a finding that only describes our own
+  // machinery is an artifact, and it must not colour the verdict either.
+  {
+    const before = parsed.findings.length;
+    const cleanedFindings = parsed.findings
+      .map((f): SynthesizedFinding | null => {
+        const detail = f.detail ?? {};
+        // The title IS the claim: if it names our machinery, the whole finding
+        // is an artifact of how we check, not a fact about the product.
+        if (hasEnvironmentLeak(f.title)) return null;
+        const whatHappened = hasEnvironmentLeak(detail.whatHappened)
+          ? stripEnvironmentLeak(detail.whatHappened)
+          : (detail.whatHappened ?? null);
+        // Nothing left to say once our machinery is removed → nothing was
+        // actually observed about the product.
+        if (detail.whatHappened && !whatHappened) return null;
+        const whyItMatters = hasEnvironmentLeak(detail.whyItMatters)
+          ? stripEnvironmentLeak(detail.whyItMatters)
+          : (detail.whyItMatters ?? null);
+        return {
+          ...f,
+          detail: {
+            ...detail,
+            ...(whatHappened ? { whatHappened } : {}),
+            ...(whyItMatters ? { whyItMatters } : {}),
+          },
+        };
+      })
+      .filter((f): f is SynthesizedFinding => f !== null);
+
+    let bottomLine = parsed.bottomLine;
+    if (hasEnvironmentLeak(bottomLine)) {
+      console.warn(`[synthesis] bottom line leaked our environment — rewriting: ${bottomLine}`);
+      const rewritten = await rewriteBottomLine(llm, bottomLine!).catch(() => null);
+      if (rewritten) {
+        costUsd += rewritten.costUsd;
+        mergeUsage(usage, rewritten.usage);
+      }
+      bottomLine =
+        rewritten && !hasEnvironmentLeak(rewritten.text)
+          ? rewritten.text
+          : (stripEnvironmentLeak(bottomLine) ??
+            "We checked what we could reach this run; some paths went unverified.");
+    }
+
+    if (cleanedFindings.length !== before) {
+      console.warn(
+        `[synthesis] dropped ${before - cleanedFindings.length} finding(s) that described our environment, not the product`,
+      );
+    }
+    parsed = { ...parsed, bottomLine, findings: cleanedFindings };
+  }
+
   // Verdict rolls up BOTH observed journey-step outcomes AND synthesized
   // findings. Earlier it ignored findings, so a run with 0 journeys but several
   // high-severity findings reported "all_good" — a contradiction.
@@ -367,4 +423,32 @@ function placeholderLens(): AppLens {
     criticalPaths: [],
     ifItBreaks: "",
   };
+}
+
+// One short call to restate a bottom line in customer language (CHE-82). Cheap
+// by construction: it only ever sees the offending sentence, never the run.
+async function rewriteBottomLine(
+  llm: LlmConfig,
+  bottomLine: string,
+): Promise<{ text: string; costUsd: number; usage: UsageTotals }> {
+  const message = await llm.synthClient.messages.create({
+    model: llm.synthModel,
+    max_tokens: 600,
+    system:
+      `Rewrite a product verdict's bottom line so it never mentions how the check ` +
+      `was performed and never asks the reader to verify anything themselves.\n\n` +
+      CUSTOMER_LANGUAGE_RULES +
+      `\n\nKeep every real finding about the product. Turn anything we could not ` +
+      `confirm into a plain coverage clause ("we could not confirm X this run"). ` +
+      `Reply with the rewritten text only — no preamble, no quotes.`,
+    messages: [{ role: "user", content: bottomLine }],
+  });
+  const usage = emptyUsage();
+  addUsage(usage, llm.synthModel, message.usage);
+  const text = message.content
+    .filter((b): b is Anthropic.TextBlock => b.type === "text")
+    .map((b) => b.text)
+    .join(" ")
+    .trim();
+  return { text, costUsd: costOf(llm.synthModel, message.usage), usage };
 }
