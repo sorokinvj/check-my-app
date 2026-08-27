@@ -16,9 +16,15 @@ import type { UserPlan, WatchFrequency } from "@/lib/enums";
 // generic "a server error occurred" page — our own self-check hit the free-plan
 // watch cap and saw exactly that, with the app silently not created. A refusal
 // the owner can act on must always arrive as text next to the button.
-export type CreateAppResult = { error: string };
+export type CreateAppResult = { error: string } | null;
 
-export async function createApp(formData: FormData): Promise<CreateAppResult | void> {
+// useActionState signature (prevState, formData): the form works as a plain
+// HTML POST before hydration, so an early click is never swallowed (CHE-73/75
+// class — the same bug we fixed on the verdict page).
+export async function createApp(
+  _prevState: CreateAppResult,
+  formData: FormData,
+): Promise<CreateAppResult> {
   const { user, db } = await requireUser();
 
   const targetUrl = String(formData.get("targetUrl") ?? "").trim();

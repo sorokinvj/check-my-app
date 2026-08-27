@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useActionState, useState } from "react";
+import { useFormStatus } from "react-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -16,25 +17,14 @@ export function OnboardingWizard({
   prefillUrl: string;
   defaultEmail?: string;
 }) {
-  const [submitting, setSubmitting] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
-  // CHE-84: the action returns refusals instead of throwing (a throw becomes a
-  // 500 page and the owner never learns why nothing was saved).
-  const [error, setError] = useState<string | null>(null);
+  // CHE-84: refusals come back as state instead of a thrown 500, and the action
+  // is passed to <form> directly so a click that lands before hydration still
+  // submits (progressive enhancement).
+  const [state, formAction] = useActionState(createApp, null);
 
   return (
-    <form
-      action={async (fd) => {
-        setSubmitting(true);
-        setError(null);
-        const result = await createApp(fd);
-        if (result?.error) {
-          setError(result.error);
-          setSubmitting(false);
-        }
-      }}
-      className="space-y-8"
-    >
+    <form action={formAction} className="space-y-8">
       <div className="space-y-2">
         <p className="section-label">set up daily QA</p>
         <h1 className="text-3xl font-semibold tracking-tight">Add your app</h1>
@@ -176,17 +166,15 @@ export function OnboardingWizard({
         </label>
       </section>
 
-      {error && (
+      {state?.error && (
         <p
           role="alert"
           className="rounded-md border border-status-broken/40 bg-status-broken/10 px-3 py-2 text-sm text-status-broken"
         >
-          {error}
+          {state.error}
         </p>
       )}
-      <Button type="submit" disabled={submitting} className="w-full py-3.5 text-[15px]">
-        {submitting ? "Saving…" : "Save & start watching"}
-      </Button>
+      <SubmitButton />
     </form>
   );
 }
@@ -228,5 +216,14 @@ function EyeOffIcon() {
       <path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" />
       <path d="m2 2 20 20" />
     </svg>
+  );
+}
+
+function SubmitButton() {
+  const { pending } = useFormStatus();
+  return (
+    <Button type="submit" disabled={pending} className="w-full py-3.5 text-[15px]">
+      {pending ? "Saving…" : "Save & start watching"}
+    </Button>
   );
 }
