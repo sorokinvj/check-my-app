@@ -20,6 +20,9 @@ export interface RunInput {
   userNotes: string | null;
   // CHE-81: owner's priority concerns, verbatim.
   focusAreas: string | null;
+  // CHE-90: CRUD lifecycle permission + the marker created records carry.
+  writeAllowed?: boolean;
+  testMarker?: string;
 }
 
 export interface ProposedJourney {
@@ -78,6 +81,8 @@ export async function discoverApp(args: {
     page,
     targetOrigin: originOf(run.targetUrl),
     visionScreenshots: isVisionModel(llm.navModel),
+    // Discovery only maps the app — creation belongs to the walk.
+    writeAllowed: false,
     testEmail: run.testEmail ?? undefined,
     // Decrypted only here, in-memory; the LLM only ever sees {{TEST_PASSWORD}}.
     testPassword: run.testPasswordEnc ? decryptSecret(run.testPasswordEnc) : undefined,

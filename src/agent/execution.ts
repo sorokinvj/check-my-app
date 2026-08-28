@@ -17,6 +17,7 @@ import { emptyUsage, isVisionModel, mergeUsage, type LlmConfig, type UsageTotals
 export interface WalkRun extends RunInput {
   id: string;
   appSlug: string;
+  appId?: string | null;
 }
 
 const SEVERITY_ORDER: StepStatus[] = ["ok", "skipped", "confusing", "risky", "exposed", "broken"];
@@ -113,6 +114,30 @@ export async function walkOneJourney(args: {
       page,
       targetOrigin: originOf(run.targetUrl),
       visionScreenshots: isVisionModel(llm.navModel),
+      // CHE-90: creation is allowed only when the owner enabled it, and every
+      // created record lands in the ledger the moment it exists.
+      writeAllowed: run.writeAllowed ?? false,
+      testMarker: run.testMarker,
+      onResourceCreated: async (r) => {
+        await env.db.createdResource.create({
+          data: {
+            runId: run.id,
+            appId: run.appId ?? null,
+            kind: r.kind.slice(0, 100),
+            marker: r.marker.slice(0, 200),
+            locationUrl: r.locationUrl?.slice(0, 500) ?? null,
+            notes: r.notes?.slice(0, 500) ?? null,
+          },
+        });
+      },
+      onResourceDeleted: async (r) => {
+        await env.db.createdResource.updateMany({
+          where: { runId: run.id, marker: r.marker },
+          data: r.ok
+            ? { deletedAt: new Date(), cleanupNote: r.note?.slice(0, 500) ?? null }
+            : { cleanupNote: (r.note ?? "deletion failed").slice(0, 500) },
+        });
+      },
       testEmail: run.testEmail ?? undefined,
       testPassword: run.testPasswordEnc ? decryptSecret(run.testPasswordEnc) : undefined,
       networkLog: [],

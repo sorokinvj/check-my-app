@@ -33,6 +33,7 @@ import { walkOneJourney, type WalkRun } from "./execution";
 import { synthesizeVerdict, type SynthesizedFinding } from "./synthesis";
 import { autoFileFindings } from "./autofile";
 import { fileCapabilityGaps } from "./capability-gaps";
+import { auditCreatedResources } from "./cleanup";
 import { reconcileIssueLinks, reverifyInstructions, verifyFixedLinks } from "./reconcile";
 import { sendVerdictReady } from "@/lib/email";
 import { deliverWebhook, type RunCompletedPayload } from "@/lib/notify/webhook";
@@ -73,6 +74,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
         select: {
           id: true,
           publicId: true,
+          runNumber: true,
           targetUrl: true,
           appSlug: true,
           testEmail: true,
@@ -235,15 +237,24 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
       const reverifyBlock = reverifyInstructions(reconciled.reverify);
       const userNotes = [run.userNotes, reverifyBlock, watchNotes].filter(Boolean).join("\n\n") || null;
 
+      // CHE-90: CRUD lifecycle checking is per-app and opt-in. The marker goes
+      // into every record the agent creates so cleanup can only touch our own.
+      const writeMode = run.appId
+        ? ((await env.db.app.findUnique({ where: { id: run.appId }, select: { writeMode: true } }))
+            ?.writeMode ?? "read_only")
+        : "read_only";
       const walkRun: WalkRun = {
         id: run.id,
         appSlug: run.appSlug,
+        appId: run.appId,
         targetUrl: run.targetUrl,
         testEmail: run.testEmail,
         testPasswordEnc: run.testPasswordEnc,
         scopeHints: run.scopeHints,
         userNotes,
         focusAreas: run.focusAreas,
+        writeAllowed: writeMode === "create_cleanup",
+        testMarker: `CheckMyApp test r${run.runNumber}`,
       };
 
       await step.do("connecting", async () => {
@@ -504,6 +515,21 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
           }
         });
       }
+
+      // CHE-90 — cleanup audit. Anything this run created inside the customer's
+      // product must be gone by now. Whatever is left is reported to the owner
+      // (with where to find it) AND filed as our own defect: leaving junk in
+      // someone's product is never an acceptable outcome. Older orphans from
+      // crashed runs of the same app are swept in here too.
+      await step.do("cleanup-audit", async () => {
+        try {
+          for (const note of await auditCreatedResources(env, runId)) {
+            await appendEvent(env, runId, "writing", note);
+          }
+        } catch (err) {
+          console.warn(`[cleanup] audit failed: ${err instanceof Error ? err.message : err}`);
+        }
+      });
 
       // CHE-83 — hold OURSELVES to the same loop. Any step this run could not
       // verify because of our checker (not because of the customer's product)

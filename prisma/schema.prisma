@@ -107,6 +107,9 @@ model Run {
   journeys Journey[]
   findings Finding[]
   llmUsage LlmUsage[]
+  // CHE-90: everything this run created in the target product, so cleanup is
+  // auditable even when the run dies mid-journey.
+  createdResources CreatedResource[]
 
   startedAt   DateTime  @default(now())
   completedAt DateTime?
@@ -118,6 +121,29 @@ model Run {
   @@index([appId])
   @@index([ownerId])
   @@index([anonKeyHash])
+}
+
+// Ledger of records the agent created inside a customer's product (CHE-90).
+// Written the moment something is created — before the walk continues — so a
+// crash can never hide it. The end-of-run audit reports anything still alive.
+model CreatedResource {
+  id     String @id @default(cuid())
+  run    Run    @relation(fields: [runId], references: [id], onDelete: Cascade)
+  runId  String
+  appId  String?
+
+  kind        String // "story", "app", "job posting" — the product's own word
+  marker      String // the recognisable string we typed in; cleanup keys on it
+  locationUrl String?
+  notes       String?
+
+  deletedAt   DateTime?
+  cleanupNote String?
+
+  createdAt DateTime @default(now())
+
+  @@index([runId])
+  @@index([appId, deletedAt])
 }
 
 // ─── Journeys & steps ────────────────────────────────────────────────────────
@@ -350,6 +376,9 @@ model App {
   // Priority concerns (CHE-81): what the owner is most worried about, in their
   // own words. Discovery must cover each with a journey; walking verifies.
   focusAreas      String?
+  // CHE-90: may the agent create records while checking? read_only (default)
+  // or create_cleanup — full CRUD lifecycle, every creation removed again.
+  writeMode       String  @default("read_only")
 
   // Outbound integrations (CHE-53). A generic webhook POSTed after EVERY
   // completed watch run (consumers filter — that's the observability contract),

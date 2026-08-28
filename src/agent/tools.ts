@@ -30,6 +30,13 @@ export interface ToolEnv {
   // Off for text-only nav models — the image would be rejected.
   visionScreenshots?: boolean;
   pendingScreenshotJpegB64?: string;
+  // CRUD lifecycle checking (CHE-90). writeAllowed comes from App.writeMode;
+  // marker is the string every created record must carry so cleanup can only
+  // ever touch our own rows.
+  writeAllowed?: boolean;
+  testMarker?: string;
+  onResourceCreated?: (r: { kind: string; marker: string; locationUrl?: string; notes?: string }) => Promise<void>;
+  onResourceDeleted?: (r: { marker: string; ok: boolean; note?: string }) => Promise<void>;
 }
 
 // Strip any occurrence of the real test credentials from text leaving the tool
@@ -131,6 +138,41 @@ export const BROWSER_TOOLS: Anthropic.Tool[] = [
     },
   },
   {
+    name: "record_created",
+    description:
+      "Register a record you just created inside the target product (a story, an app, a job posting…). " +
+      "Call it IMMEDIATELY after the creation succeeds, before doing anything else — this ledger is what " +
+      "guarantees the record gets cleaned up even if the run dies later. Every created record must carry " +
+      "the run's test marker in a visible field (name/title), and you must delete it before the journey ends.",
+    input_schema: {
+      type: "object",
+      properties: {
+        kind: { type: "string", description: 'What it is in the product\'s own words, e.g. "story"' },
+        marker: { type: "string", description: "The exact marker text you typed into it" },
+        locationUrl: { type: "string", description: "URL where it can be found again" },
+        notes: { type: "string", description: "Anything cleanup needs to know" },
+      },
+      required: ["kind", "marker"],
+    },
+  },
+  {
+    name: "record_deleted",
+    description:
+      "Confirm that a record you created has been removed. Call it after you deleted it AND verified it is " +
+      "gone (it left the list, or its URL no longer resolves). If deletion failed or the product offers no " +
+      "way to delete, call this with ok=false and say why — that is both a finding about the product and " +
+      "something we must clean up.",
+    input_schema: {
+      type: "object",
+      properties: {
+        marker: { type: "string", description: "The marker of the record you created" },
+        ok: { type: "boolean", description: "true only if you verified it is actually gone" },
+        note: { type: "string", description: "How you verified it, or why it could not be removed" },
+      },
+      required: ["marker", "ok"],
+    },
+  },
+  {
     name: "report_step",
     description:
       "Record one completed journey step with its outcome. Call after each meaningful step while walking a journey. status: ok (works) / risky (works but fragile or abusable) / confusing (user would hesitate) / broken (does not work) / exposed (security issue) / skipped (could not verify). When status is skipped you MUST set unverifiedReason: our_capability if OUR checker could not do it (new-tab links you could not follow, OAuth popups, MFA codes, camera/mic, anything about our own machinery), missing_access if the owner has not given us what is needed (test credentials, a URL), not_applicable if it is deliberately out of scope. our_capability opens a high-priority ticket on OUR board — that is how the checker gets better, so classify honestly.",
@@ -193,6 +235,35 @@ export async function executeTool(
         return scrubSecrets(env, drainLogs(env));
       case "verify_links":
         return await verifyLinks(input);
+      case "record_created": {
+        if (!env.onResourceCreated) return "No ledger available — do not create records in this run.";
+        const marker = String(input.marker ?? "");
+        if (env.testMarker && !marker.includes(env.testMarker)) {
+          return (
+            `Refused: the record must carry this run's marker "${env.testMarker}" in a visible field. ` +
+            `Cleanup may only ever remove records carrying it — a record without it cannot be safely removed. ` +
+            `Rename the record to include the marker, then call record_created again.`
+          );
+        }
+        await env.onResourceCreated({
+          kind: String(input.kind ?? "record"),
+          marker,
+          locationUrl: input.locationUrl ? String(input.locationUrl) : undefined,
+          notes: input.notes ? String(input.notes) : undefined,
+        });
+        return "Recorded. You MUST delete this record before the journey ends, then call record_deleted.";
+      }
+      case "record_deleted": {
+        if (!env.onResourceDeleted) return "No ledger available.";
+        await env.onResourceDeleted({
+          marker: String(input.marker ?? ""),
+          ok: Boolean(input.ok),
+          note: input.note ? String(input.note) : undefined,
+        });
+        return input.ok
+          ? "Cleanup recorded."
+          : "Recorded as NOT removed — report this as a finding (a user who creates this cannot remove it).";
+      }
       case "report_step": {
         const step = input as unknown as ReportedStep;
         // The model occasionally invents enum values — coerce to the schema.

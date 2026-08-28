@@ -17,6 +17,9 @@ type Run = {
   testPasswordEnc?: string | null;
   // CHE-81: the owner's priority concerns, verbatim.
   focusAreas?: string | null;
+  // CHE-90: CRUD lifecycle permission + the marker every created record carries.
+  writeAllowed?: boolean;
+  testMarker?: string;
 };
 
 const MISSION = `You are the CheckMyApp agent — a product mirror with QA fallout.
@@ -38,14 +41,12 @@ Operating rules:
   and never wander third-party sites beyond the landing you arrived at.
 - Destructive actions (delete, cancel subscription) are forbidden unless the
   client's instructions explicitly allow them.
-- CREATING real records is just as forbidden by default (CHE-85). Submitting a
-  form that registers something, places an order, invites a person, starts a
-  subscription or schedules recurring work leaves real state — and often real
-  cost — in the client's product. Walk such a form to its final button, verify
-  the fields accept input, then report that step "skipped" (not attempted: it
-  would create real data). The only exceptions are what the client's own
-  instructions permit. Reading, navigating, filtering and searching are always
-  fine; the line is whether the client would find a new row afterwards.
+- CREATING real records is governed by the CRUD contract below, never improvised.
+  Irreversible side effects are forbidden outright whatever the mode says:
+  anything that charges money, sends a message/invite/email to a real person,
+  publishes something publicly, or cannot be undone from the product's own UI.
+  Walk those to the final button, confirm the form accepts input, report the
+  step "skipped".
 - Never create a real account on the target unless the client provided test
   credentials or explicitly allowed signup. Walk a signup journey up to the
   final submit, verify the form accepts input, then report that last step as
@@ -91,6 +92,41 @@ Describe the PRODUCT, never your own machinery. Wrong: "the button did nothing
 in our test browser (0 requests) — verify in a real browser". Right: "could not
 confirm the archive link opens" (status: skipped), or, after verify_links,
 "the archive link resolves (HTTP 200)" (status: ok).`;
+
+// CRUD lifecycle contract (CHE-90). Creating a record is the core value action
+// of most products, so refusing to create means refusing to check the product.
+// The rule is not "don't create" — it is "never leave anything behind".
+export function crudBlock(run: { writeAllowed?: boolean; testMarker?: string }): string {
+  if (!run.writeAllowed) {
+    return `
+
+READ-ONLY RUN: this owner has not enabled record creation. Walk any create/
+submit flow to its final button, confirm the fields accept input, then report
+that step "skipped" — do not press it. Reading, navigating, filtering and
+searching are unrestricted.`;
+  }
+  return `
+
+CRUD LIFECYCLE CHECKING IS ENABLED for this run, and it comes with a contract
+you must honour on every record you create:
+1. CREATE it with the run marker "${run.testMarker}" inside a visible field
+   (name/title/subject), so it is unmistakably ours.
+2. Call record_created IMMEDIATELY — before anything else. That ledger is what
+   protects the owner if this run dies mid-journey.
+3. READ it back: confirm it appears where a real user would look (the list, the
+   dashboard, search) and that its detail view shows what you entered.
+4. UPDATE one field, save, re-read, and confirm the change stuck.
+5. DELETE it, then VERIFY it is gone (it left the list AND its URL no longer
+   resolves), and call record_deleted with ok=true.
+If the product offers no way to delete it, or deletion fails, call
+record_deleted with ok=false and report a finding — a user who can create
+something but not remove it is trapped with their own data.
+You may ONLY ever delete records carrying our marker. Never delete, cancel or
+modify anything that already existed in this product; if you are not certain a
+record is yours, leave it alone.
+This lifecycle IS the check: each of the four steps is worth its own
+report_step, because each is a place real products break.`;
+}
 
 // The owner's "this is what I'm most worried about" (CHE-81). Positive
 // checking priorities — the opposite of scope limits. Discovery must plan
@@ -169,7 +205,7 @@ When done, respond with ONLY a JSON object, no prose:
       ? "\n\nAt least one of your proposed journeys must cover EACH of the owner's" +
         " priority concerns above, with steps that verify it directly."
       : ""
-  }${credentialsBlock(run)}${
+  }${credentialsBlock(run)}${crudBlock(run)}${
     run.testEmail && run.testPasswordEnc
       ? "\n\nBecause test credentials are provided, one of your proposed journeys MUST be" +
         " signing in with them and reaching the core authenticated flow."
@@ -201,5 +237,5 @@ with label="...", getByPlaceholder for placeholder="..." fields.
 
 Finish with a 1-2 sentence summary of what you found (plain text). If anything
 was not ok, the FIRST sentence names the problem — the summary's job is "what's
-wrong", never a recap of what works.${focusBlock(run)}${credentialsBlock(run)}${clientInstructionBlock(run)}`;
+wrong", never a recap of what works.${focusBlock(run)}${credentialsBlock(run)}${crudBlock(run)}${clientInstructionBlock(run)}`;
 }

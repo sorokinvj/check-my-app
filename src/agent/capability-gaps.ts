@@ -13,6 +13,7 @@
 import { LinearTracker } from "@/lib/tracker/linear";
 import { fileFindingTicket, type TicketFinding, type TicketRun } from "@/lib/tracker/file";
 import { freshLinearToken } from "@/lib/tracker/token";
+import { findOrphans } from "./cleanup";
 import type { AgentEnv } from "./env";
 
 export interface CapabilityNote {
@@ -53,6 +54,11 @@ const CAPABILITIES: { match: RegExp; label: string; why: string }[] = [
     match: /captcha|turnstile|recaptcha|bot (check|protection)/i,
     label: "Checker is blocked by CAPTCHA/bot protection on the target",
     why: "Owners must be able to allowlist us, or we silently lose coverage of their signup/login.",
+  },
+  {
+    match: /leaves its test records|records still present|cleanup audit/i,
+    label: "Checker leaves test records behind in the customer's product",
+    why: "Cleanup is the whole basis on which owners let us create anything. One orphan and the permission is rightly withdrawn — and the product fills with our junk (our own self-check left a live app plus a daily watch on your-app.com).",
   },
   {
     match: /file (upload|picker)|download/i,
@@ -99,7 +105,24 @@ export async function fileCapabilityGaps(env: AgentEnv, runId: string): Promise<
     where: { unverifiedReason: "our_capability", journey: { runId } },
     select: { label: true, attempted: true, observed: true, journey: { select: { title: true } } },
   });
-  if (gaps.length === 0) return [];
+
+  // CHE-90: leaving a test record behind is our defect too, not just an
+  // inability — it files through the same loop so it gets fixed, not tolerated.
+  const orphans = await findOrphans(env, runId);
+  const orphanGaps =
+    orphans.fromThisRun + orphans.older > 0
+      ? [
+          {
+            label: "Checker leaves its test records behind",
+            attempted: "Create → read → update → delete lifecycle with guaranteed cleanup",
+            observed: `Records still present: ${orphans.lines.slice(0, 5).join(" · ")}`,
+            journey: { title: "Cleanup audit" },
+          },
+        ]
+      : [];
+
+  const allGaps = [...gaps, ...orphanGaps];
+  if (allGaps.length === 0) return [];
 
   const self = await ourApp(env);
   if (!self?.tracker?.teamId) {
@@ -124,7 +147,7 @@ export async function fileCapabilityGaps(env: AgentEnv, runId: string): Promise<
 
   // Collapse this run's gaps onto capabilities before filing.
   const byCapability = new Map<string, { why: string; examples: string[] }>();
-  for (const g of gaps) {
+  for (const g of allGaps) {
     const { label, why } = classify(`${g.observed ?? ""} ${g.attempted ?? ""} ${g.label}`);
     const entry = byCapability.get(label) ?? { why, examples: [] };
     entry.examples.push(`${run.appSlug} · ${g.journey.title} → ${g.label}: ${g.observed ?? ""}`.slice(0, 300));
