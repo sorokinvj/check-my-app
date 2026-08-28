@@ -15,7 +15,11 @@
 
 // Phrases that name our machinery.
 const ENVIRONMENT_TERMS = [
-  /\b(our|the|this)\s+test\s+browser\b/i,
+  // Deliberately broad: any mention at all. A narrower rule ("in a real
+  // browser") missed "with a real browser" / "works in real browsers" and left
+  // 40 published findings leaking after the first cleanup pass.
+  /\btest browser\b/i,
+  /\breal browsers?\b/i,
   /\bheadless\b/i,
   /\bplaywright\b/i,
   /\bbrowser\s+rendering\b/i,
@@ -27,8 +31,7 @@ const ENVIRONMENT_TERMS = [
 
 // Phrases that hand the verification back to the customer.
 const DELEGATION_TERMS = [
-  /\bverify\s+(this|it|them|that|these)?\s*(manually|yourself)?\s*(in|with|using)\s+(a\s+)?real\s+browser\b/i,
-  /\b(check|test|try|confirm|verify)\s+[^.]{0,40}\bin\s+(a\s+)?(real|normal|regular|actual)\s+browser\b/i,
+  /\b(check|test|try|confirm|verify)\s+[^.]{0,60}\b(real|normal|regular|actual)\s+browsers?\b/i,
   /\bneeds?\s+(a\s+)?(real|manual|human)[- ]browser\s+check\b/i,
   /\bspot-?check\s+[^.]{0,40}\b(yourself|manually|in\s+a\s+real\s+browser)\b/i,
   /\bbefore\s+treating\s+it\s+as\s+broken\b/i,
