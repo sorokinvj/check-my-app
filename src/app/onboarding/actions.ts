@@ -37,6 +37,9 @@ export async function createApp(
   const testPassword = String(formData.get("testPassword") ?? "");
   const testPasswordEnc = testPassword ? encryptSecret(testPassword) : null;
   const focusAreas = (String(formData.get("focusAreas") ?? "").trim() || null) as string | null;
+  // CHE-91: creation is opt-in AND only meaningful with a test account — the
+  // run-time gate enforces the second half, this records the owner's consent.
+  const writeMode = formData.get("writeMode") === "create_cleanup" ? "create_cleanup" : "read_only";
   const scopeHints = (String(formData.get("scopeHints") ?? "").trim() || null) as string | null;
   const userNotes = (String(formData.get("userNotes") ?? "").trim() || null) as string | null;
   const notifyEmail = (String(formData.get("notifyEmail") ?? "").trim() || null) as string | null;
@@ -84,6 +87,7 @@ export async function createApp(
         scopeHints,
         userNotes,
         focusAreas,
+        writeMode,
         watch: {
           create: {
             appSlug,

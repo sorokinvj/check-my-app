@@ -100,15 +100,23 @@ export function crudBlock(run: { writeAllowed?: boolean; testMarker?: string }):
   if (!run.writeAllowed) {
     return `
 
-READ-ONLY RUN: this owner has not enabled record creation. Walk any create/
-submit flow to its final button, confirm the fields accept input, then report
-that step "skipped" — do not press it. Reading, navigating, filtering and
-searching are unrestricted.`;
+READ-ONLY RUN: the owner has not granted permission to create records (or no
+test account is set, which means anything created would land outside a sandbox
+we could clean up). Walk any create/submit flow to its final button, confirm
+the fields accept input, then report that step "skipped" — do not press it.
+Reading, navigating, filtering and searching are unrestricted.`;
   }
   return `
 
-CRUD LIFECYCLE CHECKING IS ENABLED for this run, and it comes with a contract
-you must honour on every record you create:
+CRUD LIFECYCLE CHECKING IS ENABLED for this run — the owner explicitly allowed
+it. It is bound to the test account whose credentials you were given: you act
+as that user and nobody else. Create ONLY inside that account's own space
+(its own items, its own settings). Never create anything that reaches other
+people or shared state — no invites, no public posts, no shared workspaces, no
+messages to real users, nothing that spends money. If a flow would leave that
+account's own space, walk it to the final button and report it "skipped".
+
+The contract you must honour on every record you create:
 1. CREATE it with the run marker "${run.testMarker}" inside a visible field
    (name/title/subject), so it is unmistakably ours.
 2. Call record_created IMMEDIATELY — before anything else. That ledger is what

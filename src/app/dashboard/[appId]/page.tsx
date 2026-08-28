@@ -120,6 +120,28 @@ export default async function AppSettingsPage({
 
           <div className="card space-y-3 p-5">
             <div>
+              <p className="text-sm font-medium text-fg">May we create test records?</p>
+              <p className="text-xs text-fg-faint">
+                We check the full lifecycle — create, see it appear, edit, delete — signed in as
+                the test account above and inside its own space only. Everything we create is
+                named &ldquo;CheckMyApp test&rdquo; and removed again. Never invites, publishing,
+                messages or payments. Requires the test login; without it we stay read-only.
+              </p>
+            </div>
+            <label className="flex items-start gap-2.5 text-sm text-fg">
+              <input
+                type="checkbox"
+                name="writeMode"
+                value="create_cleanup"
+                defaultChecked={app.writeMode === "create_cleanup"}
+                className="mt-0.5 h-4 w-4 rounded border-ink-600 bg-ink-900"
+              />
+              <span>Yes — create and clean up test records as my test account</span>
+            </label>
+          </div>
+
+          <div className="card space-y-3 p-5">
+            <div>
               <p className="text-sm font-medium text-fg">Scope &amp; notes</p>
               <p className="text-xs text-fg-faint">
                 Hard limits and context. The agent follows these to the letter.

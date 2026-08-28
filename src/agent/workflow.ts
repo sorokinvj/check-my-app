@@ -243,6 +243,20 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
         ? ((await env.db.app.findUnique({ where: { id: run.appId }, select: { writeMode: true } }))
             ?.writeMode ?? "read_only")
         : "read_only";
+      // CHE-91: creation happens ONLY as the owner's test account. Without one
+      // the agent would be creating in shared or anonymous space — someone
+      // else's data, not a sandbox we can clean up — so the permission is void
+      // however the app is configured. Deterministic, not a prompt promise.
+      const hasTestAccount = Boolean(run.testEmail && run.testPasswordEnc);
+      const writeAllowed = writeMode === "create_cleanup" && hasTestAccount;
+      if (writeMode === "create_cleanup" && !hasTestAccount) {
+        await appendEvent(env, runId, "connecting", {
+          icon: "warn",
+          text:
+            "Record creation is enabled for this app but no test account is set — " +
+            "checking read-only. Add test credentials so we create only inside that account.",
+        });
+      }
       const walkRun: WalkRun = {
         id: run.id,
         appSlug: run.appSlug,
@@ -253,7 +267,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
         scopeHints: run.scopeHints,
         userNotes,
         focusAreas: run.focusAreas,
-        writeAllowed: writeMode === "create_cleanup",
+        writeAllowed,
         testMarker: `CheckMyApp test r${run.runNumber}`,
       };
 

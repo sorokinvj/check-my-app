@@ -115,6 +115,36 @@ export function OnboardingWizard({
         </p>
       </section>
 
+      {/* 4b — Permission to create (CHE-91). An explicit, informed choice at
+          onboarding: creation happens only as the test account above, and every
+          created record is deleted again. */}
+      <section className="card space-y-3 p-5">
+        <p className="text-sm font-medium text-fg">
+          May we create test records? <span className="font-normal text-fg-faint">(optional)</span>
+        </p>
+        <p className="text-xs text-fg-muted">
+          Most products&apos; core action is creating something. With permission we check the full
+          lifecycle — create it, see it appear, edit it, then delete it — signed in as the test
+          account above, inside that account&apos;s own space only. Everything we create is named
+          &ldquo;CheckMyApp test&rdquo; and removed again; if anything is ever left behind we tell
+          you exactly where it is. We never invite people, publish, message anyone or spend money.
+        </p>
+        <label className="flex items-start gap-2.5 text-sm text-fg">
+          <input
+            type="checkbox"
+            name="writeMode"
+            value="create_cleanup"
+            className="mt-0.5 h-4 w-4 rounded border-ink-600 bg-ink-900"
+          />
+          <span>
+            Yes — create and clean up test records as my test account
+            <span className="block text-xs text-fg-faint">
+              Requires the test login above. Without it we stay read-only.
+            </span>
+          </span>
+        </label>
+      </section>
+
       {/* 5a — Priority concerns (CHE-81): the owner's own words, first-class. */}
       <section className="rounded-xl border border-accent/40 bg-accent/5 p-5">
         <label className="block space-y-2">
