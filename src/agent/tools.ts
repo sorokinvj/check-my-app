@@ -366,7 +366,26 @@ const isInert = (r: Reaction) => r.requests === 0 && r.mutations === 0 && !r.nav
 //      trusted click in this environment.
 // The result text records WHICH strategy produced a reaction, so transcripts
 // (and the synthesis pass) can see when only a fallback worked.
+// Buttons that leave state behind. Deterministic refusal beats instruction:
+// run #108 created a real app during discovery, where the prompt had already
+// said read-only — and never ledgered it, so cleanup could not see it either.
+const CREATE_VERBS =
+  /\b(create|register|sign ?up|save|add|publish|post|submit|send|order|buy|subscribe|book|invite|start watching|place order)\b/i;
+// Submits that only read: never blocked.
+const SAFE_SUBMITS = /\b(search|filter|apply filter|log ?in|sign ?in|continue|next|show|find|preview|refresh)\b/i;
+
 async function click(env: ToolEnv, input: Record<string, unknown>): Promise<string> {
+  const label = [input.name, input.selector].filter(Boolean).map(String).join(" ");
+  if (!env.writeAllowed && label && CREATE_VERBS.test(label) && !SAFE_SUBMITS.test(label)) {
+    console.warn(`[click] refused create-shaped click in read-only run: ${label}`);
+    return (
+      `Refused: "${label}" looks like it would create or send something, and this run is read-only ` +
+      `(the owner has not enabled record creation). You have confirmed the form accepts input — ` +
+      `that is the whole check here. Report this step "skipped" with unverifiedReason ` +
+      `"not_applicable" and move on. If you believe this button only reads data, click it by CSS ` +
+      `selector instead and say why in the step.`
+    );
+  }
   const target = (await resolveClickTarget(env.page, input)).first();
   // Never interact before hydration: a click landing before listeners attach
   // is indistinguishable from a dead button.
@@ -455,7 +474,11 @@ async function click(env: ToolEnv, input: Record<string, unknown>): Promise<stri
     reaction.requests === 0 && !reaction.navigated
       ? " No network request followed, but the DOM changed — likely an in-page reaction (validation message, menu, state change); re-read the page to see what happened."
       : "";
-  return `Clicked (strategy: ${strategy}). Current URL: ${env.page.url()} (${observed}).${note}`;
+  const ledgerNudge =
+    env.writeAllowed && label && CREATE_VERBS.test(label) && !SAFE_SUBMITS.test(label)
+      ? ` If that created something, call record_created NOW (marker "${env.testMarker}") — before anything else.`
+      : "";
+  return `Clicked (strategy: ${strategy}). Current URL: ${env.page.url()} (${observed}).${note}${ledgerNudge}`;
 }
 
 async function fill(env: ToolEnv, input: Record<string, unknown>): Promise<string> {
