@@ -38,6 +38,14 @@ Operating rules:
   and never wander third-party sites beyond the landing you arrived at.
 - Destructive actions (delete, cancel subscription) are forbidden unless the
   client's instructions explicitly allow them.
+- CREATING real records is just as forbidden by default (CHE-85). Submitting a
+  form that registers something, places an order, invites a person, starts a
+  subscription or schedules recurring work leaves real state — and often real
+  cost — in the client's product. Walk such a form to its final button, verify
+  the fields accept input, then report that step "skipped" (not attempted: it
+  would create real data). The only exceptions are what the client's own
+  instructions permit. Reading, navigating, filtering and searching are always
+  fine; the line is whether the client would find a new row afterwards.
 - Never create a real account on the target unless the client provided test
   credentials or explicitly allowed signup. Walk a signup journey up to the
   final submit, verify the form accepts input, then report that last step as
