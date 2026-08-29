@@ -205,6 +205,9 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
             text: "Budget for today is spent — this tick confirmed the app is up; the deep check runs next cycle",
           });
         });
+        // Deliberately silent: a budget tick is our accounting, not news about
+        // the customer's product. Emailing "unverified" three times a day
+        // because we chose to spend less would be alarming and useless.
         return;
       }
 
