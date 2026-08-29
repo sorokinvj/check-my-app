@@ -15,9 +15,9 @@ import type { UserPlan } from "@/lib/enums";
 export default async function DashboardPage({
   searchParams,
 }: {
-  searchParams: Promise<{ integration?: string }>;
+  searchParams: Promise<{ integration?: string; added?: string }>;
 }) {
-  const { integration } = await searchParams;
+  const { integration, added } = await searchParams;
   const { user, db } = await requireUser();
   const apps = await db.app.findMany({
     where: { ownerId: user.id },
@@ -65,6 +65,18 @@ export default async function DashboardPage({
 
   return (
     <main className="mx-auto w-full max-w-3xl px-4 py-12">
+      {/* CHE-92: a successful onboarding used to land here with no word about
+          what happened — the agent (and any first-time owner) could not tell a
+          silent success from a silent failure. */}
+      {added && (
+        <div className="card mb-6 border-status-ok/40 bg-status-ok/5 p-4">
+          <p className="text-sm text-status-ok">
+            ✓ {added} is added and its first check is on the way — you&apos;ll get an email when
+            the verdict is ready.
+          </p>
+        </div>
+      )}
+
       {integrationNotice && (
         <div className="card mb-6 flex items-start justify-between gap-4 p-4">
           <div>

@@ -31,10 +31,17 @@ export default async function VerdictPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ watch_error?: string }>;
+  searchParams: Promise<{ watch_error?: string; recheck?: string }>;
 }) {
-  // CHE-75: the Enable Daily Watch server action bounces gate errors back here.
-  const { watch_error: watchError } = await searchParams;
+  // CHE-75/94: the verdict actions bounce their outcomes back here as text —
+  // a refusal the visitor can read beats a button that quietly does nothing.
+  const { watch_error: watchError, recheck } = await searchParams;
+  const recheckNotice =
+    recheck === "reused"
+      ? "This is the current verdict for this app — it was checked recently, so we're showing that result instead of spending a new check."
+      : recheck === "notfound"
+        ? "That run no longer exists."
+        : (recheck ?? null);
   const prisma = await getDbFromContext();
   const run = await prisma.run.findUnique({
     where: { publicId: (await params).id },
@@ -159,6 +166,12 @@ export default async function VerdictPage({
               />
             </div>
           </div>
+
+          {recheckNotice && (
+            <p className="rounded-md border border-ink-600 bg-ink-800/60 px-3 py-2 text-sm text-fg-muted">
+              {recheckNotice}
+            </p>
+          )}
 
           {watchError && (
             <p className="rounded-md border border-status-broken/40 bg-status-broken/10 px-3 py-2 text-sm text-status-broken">

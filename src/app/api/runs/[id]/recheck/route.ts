@@ -15,5 +15,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   if (result.kind === "unauthorized") {
     return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
   }
+  if (result.kind === "quota") {
+    return NextResponse.json({ error: result.reason }, { status: 403 });
+  }
+  if (result.kind === "reused") {
+    return NextResponse.json({ id: result.publicId, reused: true }, { status: 200 });
+  }
   return NextResponse.json({ id: result.publicId }, { status: 201 });
 }

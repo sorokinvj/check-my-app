@@ -56,6 +56,14 @@ async function doRecheck(publicId: string, full: boolean): Promise<void> {
   if (result.kind === "not_found") {
     redirect(`/verdict/${publicId}?recheck=notfound`);
   }
+  // CHE-94: anonymous callers get the fresh verdict they already have, or a
+  // plain explanation for the owner-only full walk — never a silent no-op.
+  if (result.kind === "reused") {
+    redirect(`/verdict/${result.publicId}?recheck=reused`);
+  }
+  if (result.kind === "quota") {
+    redirect(`/verdict/${publicId}?recheck=${encodeURIComponent(result.reason)}`);
+  }
   if (result.kind === "ok") {
     redirect(`/run/${result.publicId}`);
   }

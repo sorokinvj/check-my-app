@@ -115,5 +115,5 @@ export async function createApp(
     throw err;
   }
 
-  redirect("/dashboard");
+  redirect(`/dashboard?added=${encodeURIComponent(appSlug)}`);
 }
