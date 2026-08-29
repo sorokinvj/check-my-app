@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth";
 import { credentialFingerprint, encryptSecret } from "@/lib/crypto";
 import { generateApiKey, hashApiKey } from "@/lib/apiKeys";
@@ -160,4 +161,46 @@ export async function updateAppSettings(appId: string, formData: FormData) {
 
   revalidatePath("/dashboard");
   revalidatePath(`/dashboard/${app.id}`);
+}
+
+// Remove an app the owner no longer wants watched (CHE-95). Our own check
+// found this missing: you could add an app and never get rid of it, which
+// also meant a free plan could be permanently stuck at its one-watch cap.
+//
+// Verdicts are NOT deleted. Their URLs are shareable and often the only record
+// of what a product looked like on a given day; the runs are detached from the
+// app instead, so the history survives while the app stops being watched and
+// stops counting against the plan.
+export type DeleteAppResult = { error: string } | null;
+
+export async function deleteApp(
+  appId: string,
+  _prev: DeleteAppResult,
+  formData: FormData,
+): Promise<DeleteAppResult> {
+  const { user, db } = await requireUser();
+  const app = await db.app.findFirst({
+    where: { id: appId, ownerId: user.id },
+    select: { id: true, appSlug: true },
+  });
+  if (!app) return { error: "App not found." };
+
+  // Typing the name is the confirmation: no modal to mis-click, and it cannot
+  // be triggered by a stray form submit.
+  const typed = String(formData.get("confirmSlug") ?? "").trim();
+  if (typed !== app.appSlug) {
+    return { error: `Type ${app.appSlug} to confirm removal.` };
+  }
+
+  await db.run.updateMany({ where: { appId: app.id }, data: { appId: null, watchId: null } });
+  await db.createdResource.updateMany({ where: { appId: app.id }, data: { appId: null } });
+  await db.issueLink.deleteMany({ where: { appId: app.id } });
+  await db.watch.deleteMany({ where: { appId: app.id } });
+  await db.ticketPolicy.deleteMany({ where: { appId: app.id } });
+  await db.trackerIntegration.deleteMany({ where: { appId: app.id } });
+  await db.repoIntegration.deleteMany({ where: { appId: app.id } });
+  await db.app.delete({ where: { id: app.id } });
+
+  revalidatePath("/dashboard");
+  redirect(`/dashboard?removed=${encodeURIComponent(app.appSlug)}`);
 }

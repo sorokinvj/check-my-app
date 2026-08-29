@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { setIntegrationEndpoints, updateAppSettings } from "../actions";
+import { DeleteAppSection } from "@/components/delete-app";
 
 // Per-app settings (CHE-64, redesigned CHE-81). Three meaning-first sections —
 // the page will keep growing, so hierarchy comes from sections, not from a pile
@@ -348,6 +349,10 @@ export default async function AppSettingsPage({
           </form>
         </details>
       </section>
+
+      {/* CHE-95: found by our own check — an app could be added and never
+          removed, which also pinned a free plan at its one-watch cap. */}
+      <DeleteAppSection appId={app.id} appSlug={app.appSlug} />
 
       {/* One Save for sections 1–2 + the ticket contract (form= association). */}
       <div className="sticky bottom-0 mt-10 border-t border-ink-700 bg-ink-950/90 py-4 backdrop-blur">
