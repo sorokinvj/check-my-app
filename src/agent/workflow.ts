@@ -735,12 +735,28 @@ async function notifyVerdictReady(
   if (run.watchId && !(await watchWantsNotice(env, run.watchId, run.baselineRunId, verdict))) {
     return;
   }
+  // CHE-96: carry the answer into the mail. Read back rather than threaded
+  // through, because both callers (smoke shortcut and full run) reach here at
+  // different points, and the row is the single source of truth by now.
+  const written = await env.db.run.findUnique({
+    where: { publicId: run.publicId },
+    select: {
+      bottomLine: true,
+      findings: { select: { category: true }, where: { mark: { not: "false_positive" } } },
+    },
+  });
+  const findings = written?.findings ?? [];
   await sendVerdictReady({
     to: run.notifyEmail,
     appSlug: run.appSlug,
     publicId: run.publicId,
     verdict,
     recurring: Boolean(run.watchId),
+    bottomLine: written?.bottomLine ?? null,
+    findingCounts: {
+      total: findings.length,
+      broken: findings.filter((f) => f.category === "broken" || f.category === "exposed").length,
+    },
     apiKey: bindings.EMAIL_API_KEY,
     from: bindings.EMAIL_FROM,
     baseUrl: bindings.APP_URL,

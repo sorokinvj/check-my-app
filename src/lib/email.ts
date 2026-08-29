@@ -5,6 +5,16 @@
 
 import { VERDICT_META } from "@/lib/status";
 
+// The bottom line is model-written prose about the customer's product; it goes
+// into HTML mail, so it gets escaped rather than trusted.
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
 interface VerdictReadyArgs {
   to: string;
   appSlug: string;
@@ -15,6 +25,11 @@ interface VerdictReadyArgs {
   // The run came from a Daily Watch, so the mail is a recurring report rather
   // than the one-off result the /check form promised.
   recurring?: boolean;
+  // CHE-96: the answer itself, so the mail is worth opening on its own. The
+  // bottom line is already written for exactly this job — leading with it beats
+  // "your verdict is ready", which makes the reader do the work of finding out.
+  bottomLine?: string | null;
+  findingCounts?: { broken: number; total: number };
   apiKey?: string;
   from?: string;
   baseUrl?: string;
@@ -27,6 +42,8 @@ export async function sendVerdictReady({
   partial,
   verdict,
   recurring,
+  bottomLine,
+  findingCounts,
   apiKey,
   from,
   baseUrl,
@@ -41,7 +58,7 @@ export async function sendVerdictReady({
       : `Your verdict for ${appSlug} is ready`;
 
   if (!apiKey || !from) {
-    // eslint-disable-next-line no-console
+     
     console.log(`[email:dev] to=${to} subject="${subject}" url=${url}`);
     return;
   }
@@ -54,9 +71,17 @@ export async function sendVerdictReady({
       to: [to],
       subject,
       html:
-        `<p>We finished looking at <strong>${appSlug}</strong>.</p>` +
-        (label ? `<p>Verdict: <strong>${label}</strong></p>` : "") +
-        `<p><a href="${url}">Open your verdict</a></p><p>— CheckMyApp</p>`,
+        `<p style="margin:0 0 4px"><strong>${appSlug}</strong>${label ? ` — ${escapeHtml(label)}` : ""}</p>` +
+        (bottomLine ? `<p style="margin:0 0 16px">${escapeHtml(bottomLine)}</p>` : "") +
+        (findingCounts && findingCounts.total > 0
+          ? `<p style="margin:0 0 16px;color:#666">${findingCounts.total} finding${findingCounts.total === 1 ? "" : "s"}` +
+            `${findingCounts.broken > 0 ? `, ${findingCounts.broken} of them blocking` : ""}.</p>`
+          : "") +
+        `<p><a href="${url}">See the evidence →</a></p><p style="color:#666">— CheckMyApp</p>`,
+      text:
+        `${appSlug}${label ? ` — ${label}` : ""}\n\n` +
+        (bottomLine ? `${bottomLine}\n\n` : "") +
+        `See the evidence: ${url}\n\n— CheckMyApp`,
     }),
   });
   if (!res.ok) {
@@ -88,7 +113,7 @@ export async function sendWatchTrialPaused({
   const subject = `Your daily watch on ${appSlug} is paused`;
 
   if (!apiKey || !from) {
-    // eslint-disable-next-line no-console
+     
     console.log(`[email:dev] to=${to} subject="${subject}" url=${url}`);
     return;
   }
