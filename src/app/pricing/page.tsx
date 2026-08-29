@@ -43,7 +43,7 @@ const PLANS: Plan[] = [
     priceNote: "/mo per app",
     blurb: "Your app, watched every day.",
     features: [
-      "Daily Watch — a fresh check every 24h",
+      "Daily Watch — a full journey check every 24h",
       "Regression alerts by email",
       "Every verdict kept, with its evidence — nothing expires",
       "Export Playwright specs to GitHub as a PR",
@@ -59,7 +59,7 @@ const PLANS: Plan[] = [
     blurb: "For teams shipping more than one thing.",
     features: [
       "Up to 5 apps",
-      "Checks every 6h",
+      "Checks every 6h — uptime and page health each cycle, one deep journey walk a day per app",
       "Findings auto-filed to your tracker — Linear now, GitHub next — with dedup & escalation",
       "Fixes verified from the outside: close a ticket and the next run confirms it",
     ],

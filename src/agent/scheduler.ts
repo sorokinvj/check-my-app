@@ -8,6 +8,7 @@
 
 import { nextRunNumber } from "@/lib/db";
 import type { UserPlan, WatchFrequency } from "@/lib/enums";
+import { PLAN_LIMITS } from "@/lib/plans";
 import { sendWatchTrialPaused } from "@/lib/email";
 import { shouldSkipWatch } from "@/lib/plans";
 import { makeAgentEnv, type AgentEnv, type AgentBindings } from "./env";
@@ -116,9 +117,33 @@ export async function runDueWatches(
         data: { lastRunAt: now, nextRunAt: new Date(now.getTime() + hours * 60 * 60 * 1000) },
       });
 
+      // CHE-98: an app's agent budget for the day. Beyond it the tick still
+      // happens — as a smoke pass, which still notices the app going down —
+      // and the deep walk resumes tomorrow. Without this, Growth (5 apps on a
+      // 6-hourly cadence) costs ~$264/mo against $99 of revenue.
+      const budget = PLAN_LIMITS[(watch.owner?.plan ?? "free") as UserPlan].dailyBudgetUsd;
+      const dayStart = new Date(now);
+      dayStart.setUTCHours(0, 0, 0, 0);
+      const spentToday = watch.appId
+        ? ((
+            await env.db.run.aggregate({
+              where: { appId: watch.appId, createdAt: { gte: dayStart } },
+              _sum: { costUsd: true },
+            })
+          )._sum.costUsd ?? 0)
+        : 0;
+      const smokeOnly = spentToday >= budget;
+      if (smokeOnly) {
+        console.log(
+          `[scheduler] watch ${watch.id} (${watch.appSlug}) over budget: ` +
+            `$${spentToday.toFixed(2)} of $${budget.toFixed(2)} today — smoke-only tick`,
+        );
+      }
+
       const run = await env.db.run.create({
         data: {
           runNumber: await nextRunNumber(env.db),
+          smokeOnly,
           targetUrl: watch.targetUrl,
           appSlug: watch.appSlug,
           testEmail: watch.testEmail,

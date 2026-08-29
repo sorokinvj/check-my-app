@@ -92,6 +92,9 @@ model Run {
   // Full re-check (CHE-74): the owner explicitly asked to walk everything from
   // scratch — replay/partial planning skip themselves when set.
   forceFull     Boolean @default(false)
+  // CHE-98: today's agent budget for this app is spent — run a smoke pass
+  // (still catches an app going down) instead of a paid walk.
+  smokeOnly     Boolean @default(false)
 
   // M3: owner-scoping. Anonymous runs keep these null and stay reachable only
   // by their unguessable publicId — the multi-tenant layer is additive.

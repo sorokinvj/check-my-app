@@ -86,6 +86,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
           watchId: true,
           baselineRunId: true,
           forceFull: true,
+          smokeOnly: true,
           appId: true,
         },
       });
@@ -156,6 +157,9 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
         if (run.forceFull) {
           return { taken: false, reason: "full re-check requested — walking everything" };
         }
+        if (run.smokeOnly) {
+          return { taken: false, reason: "today's agent budget for this app is spent" };
+        }
         if (!run.watchId) return { taken: false, reason: "one-off check" };
         if (smoke.taken) {
           return { taken: false, reason: "the smoke check found trouble — re-walking every journey" };
@@ -175,6 +179,33 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
             await appendEvent(env, runId, "replay", event);
           }
         });
+      }
+
+      // CHE-98: the budget is spent and the smoke pass could not carry the
+      // verdict forward. Finish honestly rather than spend: the app was
+      // checked for outages today, and the deep walk resumes tomorrow.
+      if (run.smokeOnly && !(smoke.taken && smoke.ok)) {
+        await step.do("budget-complete", async () => {
+          await env.db.run.update({
+            where: { id: runId },
+            data: {
+              status: "completed",
+              verdict: "unverified",
+              bottomLine:
+                "We checked that your app is up and serving its known pages today. The full " +
+                "journey check runs on the next cycle — your plan covers one deep check a day " +
+                "per app, and today's has already run.",
+              costUsd: SMOKE_COST_USD,
+              currentAction: null,
+              completedAt: new Date(),
+            },
+          });
+          await appendEvent(env, runId, "replay", {
+            icon: "info",
+            text: "Budget for today is spent — this tick confirmed the app is up; the deep check runs next cycle",
+          });
+        });
+        return;
       }
 
       if (smoke.taken && smoke.ok) {

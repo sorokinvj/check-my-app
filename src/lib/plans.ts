@@ -13,6 +13,12 @@ export interface PlanLimits {
   // API key creation. Mirrors the pricing page: "API access" is listed only
   // under Business, so it's Business+ (business, enterprise) here.
   apiAccess: boolean;
+  // CHE-98: what one watched app may spend on agent work per day. Measured
+  // reality is ~$0.44/tick, so these are budgets for roughly one deep check a
+  // day plus room for a re-check when something is wrong. Beyond it, ticks
+  // still run — as smoke passes, which cost ~$0.01 and still catch an app
+  // going down. Set against revenue: Starter is $29/mo/app ≈ $0.97/day.
+  dailyBudgetUsd: number;
 }
 
 export const PLAN_LIMITS: Record<UserPlan, PlanLimits> = {
@@ -20,15 +26,43 @@ export const PLAN_LIMITS: Record<UserPlan, PlanLimits> = {
   // Watch", and with no billing wired a 0-cap made the button a dead end for
   // every account that exists. One watch is the product's hook; caps bite at
   // the second app.
-  free: { maxWatches: 1, maxFrequency: "daily", trackerIntegration: false, apiAccess: false },
-  starter: { maxWatches: 1, maxFrequency: "daily", trackerIntegration: true, apiAccess: false },
-  growth: { maxWatches: 5, maxFrequency: "every_6h", trackerIntegration: true, apiAccess: false },
-  business: { maxWatches: 50, maxFrequency: "every_6h", trackerIntegration: true, apiAccess: true },
+  free: {
+    maxWatches: 1,
+    maxFrequency: "daily",
+    trackerIntegration: false,
+    apiAccess: false,
+    // A trial should be able to show its best work once a day.
+    dailyBudgetUsd: 1.2,
+  },
+  starter: {
+    maxWatches: 1,
+    maxFrequency: "daily",
+    trackerIntegration: true,
+    apiAccess: false,
+    dailyBudgetUsd: 1.2,
+  },
+  growth: {
+    maxWatches: 5,
+    maxFrequency: "every_6h",
+    trackerIntegration: true,
+    apiAccess: false,
+    // $99/mo across 5 apps ≈ $0.66/day/app of revenue; one deep walk a day
+    // plus smoke on the other ticks fits inside it.
+    dailyBudgetUsd: 0.8,
+  },
+  business: {
+    maxWatches: 50,
+    maxFrequency: "every_6h",
+    trackerIntegration: true,
+    apiAccess: true,
+    dailyBudgetUsd: 4,
+  },
   enterprise: {
     maxWatches: Number.MAX_SAFE_INTEGER,
     maxFrequency: "every_6h",
     trackerIntegration: true,
     apiAccess: true,
+    dailyBudgetUsd: 10,
   },
 };
 
