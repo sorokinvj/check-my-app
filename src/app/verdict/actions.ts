@@ -4,9 +4,11 @@
 // submits natively even before React hydrates, so an early click on
 // "Re-check now" can't be silently swallowed the way an onClick was.
 
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { getDbFromContext } from "@/lib/db";
 import { getOptionalUser } from "@/lib/auth";
+import { hashClientKey } from "@/lib/crypto";
 import { createRecheckRun } from "@/lib/recheck";
 import { enableWatchForRun } from "@/lib/watch-enable";
 
@@ -49,7 +51,8 @@ export async function enableWatchAction(publicId: string): Promise<void> {
 
 async function doRecheck(publicId: string, full: boolean): Promise<void> {
   const prisma = await getDbFromContext();
-  const result = await createRecheckRun(prisma, publicId, { full });
+  const anonKeyHash = await hashClientKey((await headers()).get("cf-connecting-ip"));
+  const result = await createRecheckRun(prisma, publicId, { full, anonKeyHash });
   if (result.kind === "unauthorized") {
     redirect(`/sign-in?redirect_url=${encodeURIComponent(`/verdict/${publicId}`)}`);
   }

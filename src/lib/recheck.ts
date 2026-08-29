@@ -5,6 +5,7 @@
 import type { PrismaClient } from "@/generated/prisma/client";
 import { nextRunNumber } from "@/lib/db";
 import { canMutateOwned } from "@/lib/auth";
+import { assertCanStartRun } from "@/lib/plans";
 import { triggerRun } from "@/lib/trigger";
 
 export type RecheckResult =
@@ -24,7 +25,7 @@ const ANON_REUSE_WINDOW_MS = 6 * 60 * 60 * 1000;
 export async function createRecheckRun(
   prisma: PrismaClient,
   publicId: string,
-  opts: { full?: boolean } = {},
+  opts: { full?: boolean; anonKeyHash?: string | null } = {},
 ): Promise<RecheckResult> {
   const prev = await prisma.run.findUnique({
     where: { publicId },
@@ -71,6 +72,13 @@ export async function createRecheckRun(
       select: { publicId: true },
     });
     if (fresh) return { kind: "reused", publicId: fresh.publicId };
+
+    // No fresh verdict to hand back, so this WOULD spend money. The submission
+    // form has counted anonymous runs since CHE-40; the re-check button never
+    // did, which left the same tap open one step further down the funnel — a
+    // shared link could produce a run every time the reuse window lapsed.
+    const gate = await assertCanStartRun(prisma, null, opts.anonKeyHash ?? null);
+    if (!gate.ok) return { kind: "quota", reason: gate.reason };
   }
 
   const run = await prisma.run.create({
@@ -90,6 +98,9 @@ export async function createRecheckRun(
       baselineRunId: prev.id,
       // CHE-74: an explicit full re-check must not be eaten by smoke/partial.
       forceFull: opts.full ?? false,
+      // Anonymous re-checks count against the same daily allowance as
+      // anonymous submissions (CHE-97).
+      anonKeyHash: prev.ownerId ? null : (opts.anonKeyHash ?? null),
       status: "queued",
     },
     select: { id: true, publicId: true },

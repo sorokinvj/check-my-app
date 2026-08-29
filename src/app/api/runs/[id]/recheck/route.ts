@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getDbFromContext } from "@/lib/db";
+import { hashClientKey } from "@/lib/crypto";
 import { createRecheckRun } from "@/lib/recheck";
 
 // POST /api/runs/{publicId}/recheck — Journey 7: re-run with the same params.
@@ -8,7 +9,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const prisma = await getDbFromContext();
   // ?full=1 → CHE-74 full re-check (partial/smoke skip themselves).
   const full = new URL(req.url).searchParams.get("full") === "1";
-  const result = await createRecheckRun(prisma, (await params).id, { full });
+  const anonKeyHash = await hashClientKey(req.headers.get("cf-connecting-ip"));
+  const result = await createRecheckRun(prisma, (await params).id, { full, anonKeyHash });
   if (result.kind === "not_found") {
     return NextResponse.json({ error: "Run not found" }, { status: 404 });
   }
