@@ -94,12 +94,19 @@ export default async function DashboardPage({
           <p className="section-label">your apps</p>
           <h1 className="text-3xl font-semibold tracking-tight">Dashboard</h1>
         </div>
-        <Link
-          href="/onboarding"
-          className="rounded-md bg-accent px-4 py-2 font-mono text-[13px] font-semibold text-ink-950 transition-opacity hover:opacity-90"
-        >
-          + Add app
-        </Link>
+        <div className="flex items-center gap-4">
+          {/* CHE-99: our own error rate lives one click from the apps it is
+              about, not in a private spreadsheet. */}
+          <Link href="/dashboard/accuracy" className="text-xs text-fg-muted hover:text-fg">
+            Accuracy
+          </Link>
+          <Link
+            href="/onboarding"
+            className="rounded-md bg-accent px-4 py-2 font-mono text-[13px] font-semibold text-ink-950 transition-opacity hover:opacity-90"
+          >
+            + Add app
+          </Link>
+        </div>
       </div>
 
       {apps.length === 0 ? (
