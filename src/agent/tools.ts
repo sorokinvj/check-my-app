@@ -374,8 +374,27 @@ const CREATE_VERBS =
 // Submits that only read: never blocked.
 const SAFE_SUBMITS = /\b(search|filter|apply filter|log ?in|sign ?in|continue|next|show|find|preview|refresh)\b/i;
 
+// Controls that flip the state of something that ALREADY exists — someone
+// else's record, not ours. Refused in every mode, including runs allowed to
+// create: permission to add a test record was never permission to resume a
+// paused subscription, cancel a plan or re-enable a watch. Our own self-check
+// re-enabled a watch its owner had paused (CHE-99) and quietly spent $1.26
+// re-checking a domain nobody wanted checked.
+const STATE_TOGGLE_VERBS =
+  /\b(enable|disable|resume|reactivate|activate|deactivate|pause|unpause|cancel|upgrade|downgrade|subscribe|unsubscribe|renew|restore|archive|revoke|start watching|turn (on|off))\b/i;
+
 async function click(env: ToolEnv, input: Record<string, unknown>): Promise<string> {
   const label = [input.name, input.selector].filter(Boolean).map(String).join(" ");
+  if (label && STATE_TOGGLE_VERBS.test(label) && !SAFE_SUBMITS.test(label)) {
+    console.warn(`[click] refused state-toggling click: ${label}`);
+    return (
+      `Refused: "${label}" would change the state of something that already exists in this ` +
+      `product — a subscription, a schedule, a setting someone deliberately set. That is never ` +
+      `ours to touch, whatever this run is allowed to create. Confirm the control is present ` +
+      `and reachable, report the step "skipped" with unverifiedReason "not_applicable", and ` +
+      `say in the step that acting on it would have changed the owner's own state.`
+    );
+  }
   if (!env.writeAllowed && label && CREATE_VERBS.test(label) && !SAFE_SUBMITS.test(label)) {
     console.warn(`[click] refused create-shaped click in read-only run: ${label}`);
     return (
