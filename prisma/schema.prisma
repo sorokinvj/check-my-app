@@ -320,6 +320,11 @@ model Counter {
 // request. role/plan are String unions (no SQLite enums) — see src/lib/enums.ts.
 
 model User {
+  // CHE-100: a real, sign-in-able account used to check CheckMyApp with
+  // CheckMyApp. Everything it does is SILENT — its runs never mail the real
+  // owner — and everything it owns is disposable: the janitor clears it.
+  isTestAccount Boolean @default(false)
+
   id          String  @id @default(cuid())
   clerkUserId String  @unique
   clerkOrgId  String? // active org for team/multi-tenant accounts

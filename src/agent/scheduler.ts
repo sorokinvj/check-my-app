@@ -9,6 +9,7 @@
 import { nextRunNumber } from "@/lib/db";
 import type { UserPlan, WatchFrequency } from "@/lib/enums";
 import { PLAN_LIMITS } from "@/lib/plans";
+import { sweepTestAccounts } from "./janitor";
 import { sendWatchTrialPaused } from "@/lib/email";
 import { shouldSkipWatch } from "@/lib/plans";
 import { makeAgentEnv, type AgentEnv, type AgentBindings } from "./env";
@@ -43,6 +44,15 @@ export async function runDueWatches(
   now: Date = new Date(),
 ): Promise<TickResult> {
   const env = makeAgentEnv(bindings);
+
+  // CHE-100: clear what the self-check account left behind before deciding what
+  // to run, so a stale placeholder app can never take a slot — or a budget.
+  // Never fails the tick: housekeeping must not stop real work.
+  try {
+    await sweepTestAccounts(env, now);
+  } catch (err) {
+    console.warn(`[janitor] sweep failed: ${err instanceof Error ? err.message : err}`);
+  }
 
   const due = await env.db.watch.findMany({
     where: {

@@ -64,7 +64,28 @@ a degraded verdict caused by our billing.
 belong in journey summaries and the bottom line. Every finding's "why this
 matters" must carry an action the owner could take.
 
-## 6. Dogfood, atomically.
+## 6. Self-checks are silent, and they clean up after themselves.
+
+CheckMyApp checks CheckMyApp by signing in as a real account and using the
+product. That account is flagged `User.isTestAccount` and three things follow,
+enforced in code rather than by habit:
+
+- **Silent.** A run owned by a test account never emails anyone
+  (`ownedByTestAccount` in `src/agent/workflow.ts`). Its results live in that
+  account's own dashboard — sign in as it to look. The person running the
+  business must be able to forget the self-check exists.
+- **Disposable.** `src/agent/janitor.ts` runs on every scheduler tick and
+  removes apps the test account accumulated (12-hour grace, so a fresh run is
+  still inspectable). Verdicts are detached, never deleted — they cost money to
+  produce and are the record of what we saw.
+- **Ordinary otherwise.** It is a normal account you can sign into. Nothing
+  about it is special-cased in the product itself.
+
+This exists because the absence of it cost real money twice: a placeholder app
+the agent registered was checked daily for two days, and a paused watch came
+back to life because the agent pressed resume while exploring (CHE-89, CHE-99).
+
+## 7. Dogfood, atomically.
 
 Every change is one merge → one deploy → one verification against the real
 product (a run, a browser check, a D1 query) before moving on. CheckMyApp

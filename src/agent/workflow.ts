@@ -766,6 +766,14 @@ async function notifyVerdictReady(
   verdict: Verdict | null,
 ): Promise<void> {
   if (!run.notifyEmail) return;
+  // CHE-100: self-checks are silent. A run owned by the test account exists so
+  // CheckMyApp can check itself; the person running the business must be able
+  // to forget it exists. Its results live in that account's dashboard, where
+  // they can be looked at deliberately — they never arrive in anyone's inbox.
+  if (await ownedByTestAccount(env, run.publicId)) {
+    console.log(`[notify] run ${run.publicId} belongs to a test account — staying silent`);
+    return;
+  }
   if (run.watchId && !(await watchWantsNotice(env, run.watchId, run.baselineRunId, verdict))) {
     return;
   }
@@ -873,6 +881,14 @@ function sentence(text: string): string {
 // notifyOnChangeOnly means the owner only wants to hear from a recurring watch
 // when something moved: the verdict differs from the baseline this run was
 // diffed against. No baseline = first run of the watch = always worth sending.
+
+async function ownedByTestAccount(env: AgentEnv, publicId: string): Promise<boolean> {
+  const row = await env.db.run.findUnique({
+    where: { publicId },
+    select: { owner: { select: { isTestAccount: true } } },
+  });
+  return Boolean(row?.owner?.isTestAccount);
+}
 
 async function watchWantsNotice(
   env: AgentEnv,
