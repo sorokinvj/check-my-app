@@ -478,6 +478,10 @@ model IssueLink {
   // open | fixed (tracker Done, awaiting outside re-verify — CHE-61)
   //      | resolved (fix verified by a walk) | suppressed (Canceled = not-a-bug, never auto-refile)
   status          String   @default("open")
+  // Set when status becomes "suppressed": which of OUR failure modes produced a
+  // claim the owner ruled not-a-bug (CHE-99). capability | configuration |
+  // interpretation | bookkeeping; null = unclassified, needs a person to look.
+  defectClass     String?
   occurrences     Int      @default(1)
   escalatedAt     DateTime?
   firstSeenRunId  String?

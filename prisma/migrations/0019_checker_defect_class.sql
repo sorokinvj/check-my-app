@@ -1,0 +1,25 @@
+-- A rejected ticket is a defect report against us (CHE-99).
+--
+-- Owner rule, 2026-08-30, after the JobLander case: the question "is this our
+-- bug or theirs" must never be answered by looking deeper into the customer —
+-- it must be made impossible by not having bugs on our side. Six tickets went
+-- onto JobLander's board in three days; three were ours, and their team spent
+-- real investigation time disproving them. On the third one their agent began
+-- discussing how to suppress us.
+--
+-- Reverse sync already reads Canceled as "not a bug" and stops auto-filing that
+-- signature. That is where it went silent — the most valuable signal we ever
+-- receive (a customer telling us we were wrong) produced nothing on our own
+-- board. Rule §2 says our defects become tickets; this is our defect.
+--
+-- defectClass names WHICH of our four failure modes produced the false claim,
+-- so the meter counts causes rather than incidents:
+--   capability     — we could not perform the action and reported the product
+--   configuration  — our own inputs were wrong (a stale credential, a bad URL)
+--   interpretation — we read absence of evidence as evidence of a defect
+--   bookkeeping    — we lost track of what we had already filed or been told
+-- NULL is deliberate and visible: an unclassified rejection is the one we learn
+-- least from, and it should be looked at by a person.
+
+-- AlterTable
+ALTER TABLE "IssueLink" ADD COLUMN "defectClass" TEXT;
