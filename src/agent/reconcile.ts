@@ -27,6 +27,7 @@
 import { LinearTracker } from "@/lib/tracker/linear";
 import { freshLinearToken } from "@/lib/tracker/token";
 import { dedupKeyForFinding } from "@/lib/tracker/file";
+import { classifyCheckerDefect, fileCheckerDefect } from "./capability-gaps";
 import type { Tracker } from "@/lib/tracker/types";
 import { parseJson } from "@/lib/json";
 import type { FindingDetail } from "@/lib/types";
@@ -128,12 +129,35 @@ export async function reconcileIssueLinks(
     }
 
     if (outcome === "canceled") {
-      await env.db.issueLink.update({ where: { id: link.id }, data: { status: "suppressed" } });
+      // Suppressing the signature is only half of it (CHE-99). Being told we
+      // were wrong is the most valuable signal we ever get, and it used to stop
+      // here — silently, inside our own noise model. By rule §2 our defects
+      // become tickets on our own board; this is our defect.
+      const defectClass = await classifyCheckerDefect(env, {
+        originRunId: link.firstSeenRunId,
+        journeyTitle: journeyTitleOf(original),
+        claimText: [original?.title, parseJson<FindingDetail>(original?.detail ?? null)?.whatHappened]
+          .filter(Boolean)
+          .join(" "),
+      });
+      await env.db.issueLink.update({
+        where: { id: link.id },
+        data: { status: "suppressed", defectClass },
+      });
       await markOriginal(env, original, "false_positive");
       notes.push({
         icon: "ok",
         text: `${link.externalIssueId} was canceled (not a bug) — suppressing that signature from future filing`,
       });
+      notes.push(
+        await fileCheckerDefect(env, {
+          defectClass,
+          rejectedIssueId: link.externalIssueId,
+          customerAppSlug: run.appSlug,
+          claimTitle: original?.title ?? null,
+          originRunId: link.firstSeenRunId,
+        }),
+      );
       continue;
     }
 

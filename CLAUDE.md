@@ -91,3 +91,39 @@ Every change is one merge → one deploy → one verification against the real
 product (a run, a browser check, a D1 query) before moving on. CheckMyApp
 checks CheckMyApp; the loop that files tickets for customers files them for us
 too (rule 2).
+
+## 8. "Whose bug is it" is not a question we answer. It is one we make impossible.
+
+Owner rule, 2026-08-30, after the JobLander case: of six tickets we filed on a
+real customer's board in three days, three were our own defects. Their team
+disproved them with Cloud Run logs, request byte sizes and Firebase state — and
+on the third one began discussing how to suppress us.
+
+The tempting conclusion is that we need their logs. It is the wrong one. In all
+three cases the deciding evidence was **inside CheckMyApp**: our own click could
+not drive the form, our own stored password was stale. The answer is not to
+argue better. It is to have no defects of our own to mistake for theirs.
+
+> A claim about the customer's product may only rest on evidence uncontaminated
+> by our own state. If we cannot separate our incapacity from their defect,
+> there is no finding — there is a ticket on our board.
+
+This is rule 2 one step further: "we could not verify X" is our defect, and so
+is "we could not tell whose defect X was". Four classes, and every rejected
+ticket is filed against one of them (`src/agent/capability-gaps.ts`,
+`IssueLink.defectClass`):
+
+- **capability** — we could not perform the action and blamed the product;
+- **configuration** — our own inputs were wrong (a stale credential, a bad URL);
+- **interpretation** — we read absence of evidence as evidence of a defect;
+- **bookkeeping** — we lost track of what we had filed or been told.
+
+Mechanism, not intention: a tracker `Canceled` suppresses the signature **and**
+opens "[Checker defect] …" on our own board, deduped by class and counted across
+every customer that trips it (`src/agent/reconcile.ts`). The share of tickets
+customers accept is the number that decides whether we are ready to be told to
+anyone.
+
+We do not take access to a customer's logs, error tracker or repository in order
+to judge their product. The GitHub connection exists to export Playwright specs
+and never enters a verdict.
