@@ -116,6 +116,7 @@ export default async function AccuracyPage() {
     .map((app) => {
       const mine = links.filter((l) => l.appId === app.id);
       return {
+        id: app.id,
         slug: app.appSlug,
         filed: mine.length,
         rejected: mine.filter((l) => l.status === "suppressed").length,
@@ -129,20 +130,36 @@ export default async function AccuracyPage() {
 
   return (
     <main className="mx-auto w-full max-w-3xl px-4 py-12">
+      {/* A page with no way back and no reason given reads as a dead end, however
+          good its numbers are. Say where you are, then why this exists for YOU. */}
+      <Link
+        href="/dashboard"
+        className="mb-6 inline-block font-mono text-xs text-fg-faint transition-colors hover:text-fg"
+      >
+        ← Your apps
+      </Link>
       <div className="mb-8">
-        <p className="section-label">how often we were right</p>
-        <h1 className="text-3xl font-semibold tracking-tight">Accuracy</h1>
+        <p className="section-label">your apps · accuracy</p>
+        <h1 className="text-3xl font-semibold tracking-tight">How often we were right</h1>
+        <p className="mt-3 max-w-xl text-sm text-fg-muted">
+          Every problem we find goes onto your board as a ticket, and you close it — fixed, or not
+          a bug. Not a bug means we were wrong.
+        </p>
         <p className="mt-2 max-w-xl text-sm text-fg-muted">
-          Every ticket we file gets a verdict from the person who owns the code. Ruled not-a-bug
-          means we were wrong, and that opens a ticket on our own board until the cause is gone.
+          This page keeps that score, because you should know how much of your time a finding from
+          us is worth before you spend it. Every time we are wrong it opens a ticket on our own
+          board, and it stays open until the cause is gone.
         </p>
       </div>
 
       {t.filed === 0 && findings === 0 ? (
-        <div className="card p-8 text-center">
-          <p className="text-fg-muted">Nothing checked yet — nothing to score.</p>
-          <Link href="/dashboard" className="mt-2 inline-block text-accent hover:underline">
-            Back to dashboard →
+        <div className="card p-8">
+          <p className="text-fg-muted">
+            Nothing to score yet. This page fills in once we have checked an app of yours and
+            reported something — and it stays honest whether that flatters us or not.
+          </p>
+          <Link href="/dashboard" className="mt-3 inline-block text-accent hover:underline">
+            Add an app to watch →
           </Link>
         </div>
       ) : (
@@ -232,7 +249,16 @@ export default async function AccuracyPage() {
                 <tbody className="font-mono">
                   {perApp.map((a) => (
                     <tr key={a.slug} className="border-b border-ink-700/50 last:border-0">
-                      <td className="py-2">{a.slug}</td>
+                      {/* The score is about a specific app of theirs, so it
+                          should be one click from that app, not a dead string. */}
+                      <td className="py-2">
+                        <Link
+                          href={`/dashboard/${a.id}`}
+                          className="transition-colors hover:text-accent"
+                        >
+                          {a.slug}
+                        </Link>
+                      </td>
                       <td className="py-2 text-right text-fg-muted">{a.filed}</td>
                       <td className="py-2 text-right text-status-ok">{a.closed}</td>
                       <td className="py-2 text-right text-status-broken">{a.rejected}</td>
