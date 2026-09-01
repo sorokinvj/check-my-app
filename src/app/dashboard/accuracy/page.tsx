@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { requireUser } from "@/lib/auth";
 
 // How often we were right (CHE-99).
@@ -6,13 +7,20 @@ import { requireUser } from "@/lib/auth";
 // Rule §8: "whose defect is this" is a question we make impossible rather than
 // one we answer — and the only way to know whether that is working is to count.
 // Everything here comes from state the loop already writes: IssueLink.status is
-// the customer's own verdict on our ticket (suppressed = they ruled it not-a-bug,
-// resolved = we found it, they fixed it, we confirmed from outside), and
-// Finding.mark is the owner's hand triage.
+// the customer's own verdict on our ticket (suppressed = they ruled it
+// not-a-bug, resolved = we found it, they fixed it, we confirmed from outside),
+// and Finding.mark is the owner's hand triage.
 //
-// Deliberately blunt: the number this page exists for is how often we were WRONG,
-// stated first and without softening. A checker that hides its own error rate is
-// asking to be trusted on faith, which is exactly what we sell against.
+// Owner rule, 2026-09-01: accuracy counts where we have to prove we are worth
+// paying for. Being wrong on a product under watch is expensive and compounds —
+// their team investigates, then starts filtering us out. Being wrong on our own
+// self-check costs nobody anything. The first version of this page averaged the
+// two together, which flattered the number; they are now separate, and the
+// figure worth quoting is the one about someone else's product.
+//
+// Deliberately blunt: the number this page exists for is how often we were
+// WRONG, stated first and without softening. A checker that hides its own error
+// rate is asking to be trusted on faith, which is what we sell against.
 
 export const dynamic = "force-dynamic";
 
@@ -35,17 +43,30 @@ const CLASS_COPY: Record<string, { label: string; why: string }> = {
   },
 };
 
+// Our own product, checked by our own agent. It is an ordinary app row, so the
+// only thing that marks it is the host we are served from.
+function ourOwnSlug(): string {
+  const env = getCloudflareContext().env as Record<string, string | undefined>;
+  try {
+    return new URL(env.APP_URL ?? "https://checkmyapp.dev").host;
+  } catch {
+    return "checkmyapp.dev";
+  }
+}
+
 export default async function AccuracyPage() {
   const { user, db } = await requireUser();
+  const selfSlug = ourOwnSlug();
 
   const apps = await db.app.findMany({
     where: { ownerId: user.id },
     select: { id: true, appSlug: true },
     orderBy: { appSlug: "asc" },
   });
+  const selfAppIds = new Set(apps.filter((a) => a.appSlug === selfSlug).map((a) => a.id));
   const appById = new Map(apps.map((a) => [a.id, a.appSlug]));
 
-  const links = apps.length
+  const allLinks = apps.length
     ? await db.issueLink.findMany({
         where: { appId: { in: apps.map((a) => a.id) } },
         select: {
@@ -59,25 +80,39 @@ export default async function AccuracyPage() {
       })
     : [];
 
-  const filed = links.length;
-  const rejected = links.filter((l) => l.status === "suppressed");
-  const closed = links.filter((l) => l.status === "resolved");
-  const inFlight = filed - rejected.length - closed.length;
+  const links = allLinks.filter((l) => !selfAppIds.has(l.appId));
+  const selfLinks = allLinks.filter((l) => selfAppIds.has(l.appId));
+
+  const tally = (rows: typeof allLinks) => ({
+    filed: rows.length,
+    rejected: rows.filter((l) => l.status === "suppressed").length,
+    closed: rows.filter((l) => l.status === "resolved").length,
+    open: rows.filter((l) => l.status !== "suppressed" && l.status !== "resolved").length,
+  });
+  const t = tally(links);
+  const self = tally(selfLinks);
 
   // Findings are counted on runs this owner owns, so the denominator is work we
-  // actually did for them — not every run that ever touched the same URL.
-  const [findings, falsePositives] = await Promise.all([
-    db.finding.count({ where: { run: { ownerId: user.id } } }),
-    db.finding.count({ where: { run: { ownerId: user.id }, mark: "false_positive" } }),
+  // actually did for them. Split the same way: our own product never props up
+  // the number we would quote about someone else's.
+  const forOwner = { ownerId: user.id };
+  const [findings, falsePositives, selfFindings, selfFalsePositives] = await Promise.all([
+    db.finding.count({ where: { run: { ...forOwner, appSlug: { not: selfSlug } } } }),
+    db.finding.count({
+      where: { mark: "false_positive", run: { ...forOwner, appSlug: { not: selfSlug } } },
+    }),
+    db.finding.count({ where: { run: { ...forOwner, appSlug: selfSlug } } }),
+    db.finding.count({ where: { mark: "false_positive", run: { ...forOwner, appSlug: selfSlug } } }),
   ]);
 
   const byClass = new Map<string, number>();
-  for (const l of rejected) {
+  for (const l of links.filter((x) => x.status === "suppressed")) {
     const key = l.defectClass ?? "unclassified";
     byClass.set(key, (byClass.get(key) ?? 0) + 1);
   }
 
   const perApp = apps
+    .filter((a) => !selfAppIds.has(a.id))
     .map((app) => {
       const mine = links.filter((l) => l.appId === app.id);
       return {
@@ -103,9 +138,9 @@ export default async function AccuracyPage() {
         </p>
       </div>
 
-      {filed === 0 ? (
+      {t.filed === 0 && findings === 0 ? (
         <div className="card p-8 text-center">
-          <p className="text-fg-muted">No tickets filed yet — nothing to score.</p>
+          <p className="text-fg-muted">Nothing checked yet — nothing to score.</p>
           <Link href="/dashboard" className="mt-2 inline-block text-accent hover:underline">
             Back to dashboard →
           </Link>
@@ -113,36 +148,49 @@ export default async function AccuracyPage() {
       ) : (
         <div className="space-y-6">
           <div className="card p-6">
-            <p className="section-label">tickets we filed</p>
+            <p className="section-label">tickets on your board</p>
             <p className="mt-2 font-mono text-4xl">
-              {rejected.length}
-              <span className="text-fg-faint"> / {filed}</span>
+              {t.rejected}
+              <span className="text-fg-faint"> / {t.filed}</span>
             </p>
             <p className="mt-1 text-sm text-fg-muted">
-              ruled not-a-bug — {pct(rejected.length, filed)} of everything we filed was our own
-              defect, not theirs.
+              {t.filed === 0
+                ? "No tickets filed yet — connect a tracker and we will start scoring ourselves."
+                : `ruled not-a-bug — ${pct(t.rejected, t.filed)} of what we filed was our own defect, not yours.`}
             </p>
             <div className="mt-5 grid grid-cols-3 gap-4 border-t border-ink-700 pt-4">
               <div>
-                <p className="font-mono text-xl text-status-ok">{closed.length}</p>
+                <p className="font-mono text-xl text-status-ok">{t.closed}</p>
                 <p className="text-xs text-fg-faint">
                   loops closed — found, fixed, confirmed from outside
                 </p>
               </div>
               <div>
-                <p className="font-mono text-xl text-status-broken">{rejected.length}</p>
-                <p className="text-xs text-fg-faint">rejected — ours, not theirs</p>
+                <p className="font-mono text-xl text-status-broken">{t.rejected}</p>
+                <p className="text-xs text-fg-faint">rejected — ours, not yours</p>
               </div>
               <div>
-                <p className="font-mono text-xl text-fg-muted">{inFlight}</p>
+                <p className="font-mono text-xl text-fg-muted">{t.open}</p>
                 <p className="text-xs text-fg-faint">still open — no verdict yet</p>
               </div>
             </div>
           </div>
 
           <div className="card p-6">
+            <p className="section-label">findings</p>
+            <p className="mt-2 font-mono text-2xl">
+              {falsePositives}
+              <span className="text-fg-faint"> / {findings}</span>
+            </p>
+            <p className="mt-1 text-sm text-fg-muted">
+              marked a false positive by hand — {pct(falsePositives, findings)} of everything we
+              have reported to you.
+            </p>
+          </div>
+
+          <div className="card p-6">
             <p className="section-label">why we were wrong</p>
-            {rejected.length === 0 ? (
+            {t.rejected === 0 ? (
               <p className="mt-3 text-sm text-fg-muted">
                 Nothing rejected yet. This stays empty only as long as that holds.
               </p>
@@ -169,68 +217,79 @@ export default async function AccuracyPage() {
             )}
           </div>
 
-          <div className="card p-6">
-            <p className="section-label">findings</p>
-            <p className="mt-2 font-mono text-2xl">
-              {falsePositives}
-              <span className="text-fg-faint"> / {findings}</span>
-            </p>
-            <p className="mt-1 text-sm text-fg-muted">
-              marked a false positive by hand — {pct(falsePositives, findings)} of everything we
-              have ever reported to you.
-            </p>
-          </div>
-
-          <div className="card p-6">
-            <p className="section-label">by app</p>
-            <table className="mt-3 w-full text-sm">
-              <thead>
-                <tr className="border-b border-ink-700 text-left text-xs text-fg-faint">
-                  <th className="pb-2 font-normal">app</th>
-                  <th className="pb-2 text-right font-normal">filed</th>
-                  <th className="pb-2 text-right font-normal">closed</th>
-                  <th className="pb-2 text-right font-normal">rejected</th>
-                </tr>
-              </thead>
-              <tbody className="font-mono">
-                {perApp.map((a) => (
-                  <tr key={a.slug} className="border-b border-ink-700/50 last:border-0">
-                    <td className="py-2">{a.slug}</td>
-                    <td className="py-2 text-right text-fg-muted">{a.filed}</td>
-                    <td className="py-2 text-right text-status-ok">{a.closed}</td>
-                    <td className="py-2 text-right text-status-broken">{a.rejected}</td>
+          {perApp.length > 0 && (
+            <div className="card p-6">
+              <p className="section-label">by app</p>
+              <table className="mt-3 w-full text-sm">
+                <thead>
+                  <tr className="border-b border-ink-700 text-left text-xs text-fg-faint">
+                    <th className="pb-2 font-normal">app</th>
+                    <th className="pb-2 text-right font-normal">filed</th>
+                    <th className="pb-2 text-right font-normal">closed</th>
+                    <th className="pb-2 text-right font-normal">rejected</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody className="font-mono">
+                  {perApp.map((a) => (
+                    <tr key={a.slug} className="border-b border-ink-700/50 last:border-0">
+                      <td className="py-2">{a.slug}</td>
+                      <td className="py-2 text-right text-fg-muted">{a.filed}</td>
+                      <td className="py-2 text-right text-status-ok">{a.closed}</td>
+                      <td className="py-2 text-right text-status-broken">{a.rejected}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
 
-          <div className="card p-6">
-            <p className="section-label">latest verdicts on our tickets</p>
-            <ul className="mt-3 space-y-2">
-              {links.slice(0, 8).map((l) => (
-                <li key={l.externalIssueId} className="flex items-center justify-between gap-4">
-                  <span className="font-mono text-sm">{l.externalIssueId}</span>
-                  <span className="text-xs text-fg-faint">{appById.get(l.appId)}</span>
-                  <span
-                    className={
-                      l.status === "suppressed"
-                        ? "font-mono text-xs text-status-broken"
+          {links.length > 0 && (
+            <div className="card p-6">
+              <p className="section-label">latest verdicts on our tickets</p>
+              <ul className="mt-3 space-y-2">
+                {links.slice(0, 8).map((l) => (
+                  <li key={l.externalIssueId} className="flex items-center justify-between gap-4">
+                    <span className="font-mono text-sm">{l.externalIssueId}</span>
+                    <span className="text-xs text-fg-faint">{appById.get(l.appId)}</span>
+                    <span
+                      className={
+                        l.status === "suppressed"
+                          ? "font-mono text-xs text-status-broken"
+                          : l.status === "resolved"
+                            ? "font-mono text-xs text-status-ok"
+                            : "font-mono text-xs text-fg-muted"
+                      }
+                    >
+                      {l.status === "suppressed"
+                        ? "not a bug — ours"
                         : l.status === "resolved"
-                          ? "font-mono text-xs text-status-ok"
-                          : "font-mono text-xs text-fg-muted"
-                    }
-                  >
-                    {l.status === "suppressed"
-                      ? "not a bug — ours"
-                      : l.status === "resolved"
-                        ? "fixed, confirmed"
-                        : l.status}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </div>
+                          ? "fixed, confirmed"
+                          : l.status}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* Our own product, checked by our own agent. Kept out of everything
+              above on purpose: being wrong here costs nobody anything, and
+              averaging it in would flatter the number that matters. Only ever
+              visible to us — a customer has no app on our own host. */}
+          {(selfLinks.length > 0 || selfFindings > 0) && (
+            <div className="card border-dashed p-6 opacity-80">
+              <p className="section-label">self-checks · not counted above</p>
+              <p className="mt-2 text-sm text-fg-muted">
+                {selfSlug} checking itself: {self.rejected} of {self.filed} tickets ruled
+                not-a-bug, {self.closed} loops closed, {selfFalsePositives} of {selfFindings}{" "}
+                findings marked a false positive.
+              </p>
+              <p className="mt-2 text-xs text-fg-faint">
+                Housekeeping, not evidence. Accuracy is only worth quoting about somebody
+                else&apos;s product.
+              </p>
+            </div>
+          )}
         </div>
       )}
 
