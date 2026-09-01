@@ -1,0 +1,64 @@
+# The doer — the half of the loop that does the tickets (design, 2026-09-02).
+#
+# CheckMyApp files tickets against itself and, until now, the same hand closed
+# them. That is the builder grading its own work, which rule §8 forbids for
+# customers and should never have been acceptable for us.
+#
+# What this may do: claim one ticket, open a branch and a PR, and ask an
+# implementer that is not us to do the work. What it may never do: decide the
+# work succeeded. The dispatcher can say "shipped"; only a later CheckMyApp run,
+# walking the deployed product from outside, may say "resolved"
+# (src/agent/reconcile.ts). Those are different words with different authors.
+#
+# It runs here rather than on a VM for a reason that was paid for on 1 September:
+# JobLander's dispatcher died of an out-of-memory kill on 26 August and nobody
+# noticed for six days, because the board still looked alive — CheckMyApp had
+# been quietly covering for it. A stopped machine is silent; a failed workflow
+# is loud, and being loud is the whole requirement for something unattended.
+
+name: Doer
+
+on:
+  schedule:
+    # Every two hours. The queue is nine tickets long; there is nothing to gain
+    # from tighter, and a slow loop that is trusted beats a fast one that is not.
+    - cron: "17 */2 * * *"
+  workflow_dispatch:
+
+# Never two ticks at once: both would claim the same ticket and open two PRs for
+# it. Queued rather than cancelled, so a tick that is mid-push is not killed
+# halfway with a branch pushed and no PR to explain it.
+concurrency:
+  group: doer
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The dispatcher branches from main and pushes only doer/* — it needs
+          # the history to do that, never the right to write to main itself.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # The rails are decisions, and a decision that cannot be tested is one
+      # nobody should trust unattended. If they do not hold, no tick happens.
+      - name: Verify the rails before using them
+        run: node scripts/verify-doer.mjs
+
+      - name: Tick
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DOER_REPO: ${{ github.repository }}
+        run: node scripts/doer/tick.mjs
