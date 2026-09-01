@@ -21,6 +21,7 @@ import { NonRetryableError } from "cloudflare:workflows";
 import type { AppAnatomy } from "@/lib/types";
 import type { Verdict } from "@/lib/enums";
 import { normalizeAnatomy } from "@/lib/anatomy";
+import { coverageSentence, unreachedPages } from "@/lib/coverage";
 import { parseJson } from "@/lib/json";
 import type { RunEvent, RunPhase } from "@/lib/types";
 import { makeAgentEnv, putText, type AgentBindings, type AgentEnv } from "./env";
@@ -517,7 +518,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
         // walked today, so the bottom line says which is which before it says
         // anything else. The re-walk count comes from the rows that landed, so
         // an aborted walk shrinks the claim instead of inflating it.
-        const bottomLine = plan.taken
+        const carriedAware = plan.taken
           ? partialBottomLine(
               plan,
               checked.bottomLine,
@@ -526,6 +527,25 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
               }),
             )
           : checked.bottomLine;
+
+        // CHE-107: discovery writes down what it found; the walk writes down
+        // where it went. A page in the first list and not the second is a part
+        // of the product this verdict does not cover, and until now nothing
+        // said so — run #128 knew about seven pages, built four journeys, and
+        // the difference was visible only in the database.
+        const bottomLine = await (async () => {
+          const pages = (anatomy.pages ?? []).filter(Boolean);
+          if (pages.length === 0) return carriedAware;
+          const steps = await env.db.step.findMany({
+            where: { journey: { runId } },
+            select: { networkLog: true, observed: true },
+          });
+          const note = coverageSentence(
+            unreachedPages(pages, steps.flatMap((s) => [s.networkLog ?? "", s.observed ?? ""])),
+            pages.length,
+          );
+          return note ? [carriedAware, note].filter(Boolean).join(" ") : carriedAware;
+        })();
 
         const costUsd = (discovery?.costUsd ?? 0) + walkCost + synth.costUsd;
         await env.db.run.update({
