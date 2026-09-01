@@ -37,29 +37,33 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                   checkmyapp
                 </span>
               </Link>
+              {/* Signed out, this is a website and the links sell it. Signed in,
+                  it is a workspace, and the same links leave the owner with no
+                  idea where they are or what else is here. Two different headers
+                  for two different people. */}
               <div className="flex items-center gap-4">
-                <span className="hidden font-mono text-[11px] uppercase tracking-[0.18em] text-fg-faint sm:inline">
-                  product mirror · qa fallout
-                </span>
-                <Link
-                  href="/pricing"
-                  className="font-mono text-[13px] text-fg-muted transition-colors hover:text-fg"
-                >
-                  Pricing
-                </Link>
-                <Link
-                  href="/faq"
-                  className="font-mono text-[13px] text-fg-muted transition-colors hover:text-fg"
-                >
-                  FAQ
-                </Link>
-                <Link
-                  href="/about"
-                  className="font-mono text-[13px] text-fg-muted transition-colors hover:text-fg"
-                >
-                  About
-                </Link>
                 <Show when="signed-out">
+                  <span className="hidden font-mono text-[11px] uppercase tracking-[0.18em] text-fg-faint sm:inline">
+                    product mirror · qa fallout
+                  </span>
+                  <Link
+                    href="/pricing"
+                    className="font-mono text-[13px] text-fg-muted transition-colors hover:text-fg"
+                  >
+                    Pricing
+                  </Link>
+                  <Link
+                    href="/faq"
+                    className="font-mono text-[13px] text-fg-muted transition-colors hover:text-fg"
+                  >
+                    FAQ
+                  </Link>
+                  <Link
+                    href="/about"
+                    className="font-mono text-[13px] text-fg-muted transition-colors hover:text-fg"
+                  >
+                    About
+                  </Link>
                   <SignInButton mode="modal">
                     <button className="font-mono text-[13px] text-fg-muted transition-colors hover:text-fg">
                       Sign in
@@ -71,7 +75,19 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                     href="/dashboard"
                     className="font-mono text-[13px] text-fg-muted transition-colors hover:text-fg"
                   >
-                    Dashboard
+                    Your apps
+                  </Link>
+                  <Link
+                    href="/dashboard/accuracy"
+                    className="font-mono text-[13px] text-fg-muted transition-colors hover:text-fg"
+                  >
+                    Accuracy
+                  </Link>
+                  <Link
+                    href="/check"
+                    className="font-mono text-[13px] text-fg-muted transition-colors hover:text-fg"
+                  >
+                    Check a link
                   </Link>
                   <UserButton />
                 </Show>

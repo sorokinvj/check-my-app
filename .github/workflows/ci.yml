@@ -20,6 +20,10 @@ jobs:
       - run: npm run typecheck # web app (tsc)
       - run: npm run agent:typecheck # agent worker (tsc)
       - run: npm run lint
+      # CHE-100: the one-attempt rule for a rejected credential. Verified here
+      # rather than by asking the owner to break a password by hand — that is
+      # homework, and this product exists to remove it.
+      - run: npm run verify:gates
       # Smoke-build the web worker via OpenNext (catches bundle/runtime issues).
       - run: npx opennextjs-cloudflare build
 

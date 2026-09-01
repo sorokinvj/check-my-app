@@ -26,7 +26,8 @@
     "db:migrate:local": "wrangler d1 migrations apply checkmyapp --local",
     "db:seed:local": "wrangler d1 execute checkmyapp --local --file prisma/seed-d1.sql",
     "agent:dev": "wrangler dev --config wrangler-agent.jsonc",
-    "agent:typecheck": "tsc --noEmit -p tsconfig.agent.json"
+    "agent:typecheck": "tsc --noEmit -p tsconfig.agent.json",
+    "verify:gates": "tsx --tsconfig tsconfig.json scripts/verify-credential-gate.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.104.1",
