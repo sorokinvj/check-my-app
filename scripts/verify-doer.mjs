@@ -102,6 +102,29 @@ const approved = [{ state: "APPROVED", headSha: "aaa" }];
   check("a failing check blocks", m.merge === false, m.reason);
 }
 {
+  // Found by a live tick, not by imagination: our deploy job reports "skipped"
+  // on every PR, and blocking on that would stall the gate permanently.
+  const m = decideMerge({
+    mayMerge: true,
+    headSha: "aaa",
+    checks: [
+      { name: "check", conclusion: "success", headSha: "aaa" },
+      { name: "deploy", conclusion: "skipped", headSha: "aaa" },
+    ],
+    reviews: approved,
+  });
+  check("a correctly skipped job is not a failure", m.merge === true, m.reason);
+}
+{
+  const m = decideMerge({
+    mayMerge: true,
+    headSha: "aaa",
+    checks: [{ name: "check", conclusion: "cancelled", headSha: "aaa" }],
+    reviews: approved,
+  });
+  check("a cancelled check still blocks", m.merge === false, m.reason);
+}
+{
   const m = decideMerge({ mayMerge: true, headSha: "aaa", checks: green, reviews: [] });
   check("green checks alone do not merge", m.merge === false, m.reason);
 }

@@ -95,7 +95,13 @@ export function decideMerge(v) {
   if (unfinished.length) {
     return { merge: false, reason: `still running: ${unfinished.map((c) => c.name).join(", ")}` };
   }
-  const failed = forHead.filter((c) => c.conclusion !== "success" && c.conclusion !== "neutral");
+  // A job that correctly did not need to run is not a failure. Our deploy job
+  // reports "skipped" on every PR because it only deploys from main — reading
+  // that as a failure would block every merge forever, which a live tick found
+  // and the invented test cases did not. Everything else unknown still blocks:
+  // cancelled, timed out and stale are absences of a verdict, not verdicts.
+  const PASSING = new Set(["success", "neutral", "skipped"]);
+  const failed = forHead.filter((c) => !PASSING.has(c.conclusion));
   if (failed.length) {
     return { merge: false, reason: `failing: ${failed.map((c) => c.name).join(", ")}` };
   }
