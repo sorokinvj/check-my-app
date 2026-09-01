@@ -133,12 +133,21 @@ export async function reconcileIssueLinks(
       // were wrong is the most valuable signal we ever get, and it used to stop
       // here — silently, inside our own noise model. By rule §2 our defects
       // become tickets on our own board; this is our defect.
+      // CHE-100: if the run that made the claim had its credential turned away,
+      // the cause is settled — our own configuration, not a judgement call.
+      const originRun = link.firstSeenRunId
+        ? await env.db.run.findUnique({
+            where: { id: link.firstSeenRunId },
+            select: { credentialsRejected: true },
+          })
+        : null;
       const defectClass = await classifyCheckerDefect(env, {
         originRunId: link.firstSeenRunId,
         journeyTitle: journeyTitleOf(original),
         claimText: [original?.title, parseJson<FindingDetail>(original?.detail ?? null)?.whatHappened]
           .filter(Boolean)
           .join(" "),
+        configurationFault: originRun?.credentialsRejected ?? false,
       });
       await env.db.issueLink.update({
         where: { id: link.id },

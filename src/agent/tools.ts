@@ -37,6 +37,12 @@ export interface ToolEnv {
   testMarker?: string;
   onResourceCreated?: (r: { kind: string; marker: string; locationUrl?: string; notes?: string }) => Promise<void>;
   onResourceDeleted?: (r: { marker: string; ok: boolean; note?: string }) => Promise<void>;
+  // CHE-100: shared across every journey of a run, seeded from Run.credentials-
+  // Rejected so it survives a Workflow replay. Once true, the credential we hold
+  // is known-bad: no further sign-in attempt is allowed and nothing behind that
+  // login may be reported as the product's fault.
+  credentials?: { rejected: boolean };
+  onCredentialRejected?: (signature: string) => Promise<void>;
 }
 
 // Strip any occurrence of the real test credentials from text leaving the tool
@@ -353,6 +359,41 @@ async function settleAndMeasure(env: ToolEnv, before: ReactionSnapshot): Promise
 
 const isInert = (r: Reaction) => r.requests === 0 && r.mutations === 0 && !r.navigated;
 
+// CHE-100: an auth endpoint answering 401/403 to a credential we submitted is
+// the product working CORRECTLY — refusing bad input. Read as a machine fact
+// from the request log, never from how the page phrased it: the phrasing is
+// precisely what we got wrong before, when "Invalid email or password" was
+// reported as a broken login and cost a customer two false tickets.
+// Segment-bounded so /api/authors/12 is not mistaken for an auth route, but
+// tolerant of the shapes providers actually ship: Clerk posts to
+// /v1/client/sign_ins, others to /auth/login, /api/session, /oauth/token.
+const AUTH_PATH =
+  /(^|[/_-])(auth|log[-_]?in|sign[-_]?in|session|token|oauth|identity)s?([/_-]|$|[?.])/i;
+// Narrow on purpose. Once the credential is known-bad the whole run must stop
+// trying, but "continue" and "submit" appear all over a product and blocking
+// them would quietly cost coverage everywhere else.
+const SIGN_IN_LABEL = /\b(log ?in|sign ?in|log-in|sign-in)\b/i;
+
+export function credentialRejection(entries: string[]): string | null {
+  for (const line of entries) {
+    const m = line.match(/^([A-Z]+)\s+(\S+)\s+→\s+(\d{3})$/);
+    if (!m) continue;
+    const [, method, url, status] = m;
+    // A rejected GET is an unauthenticated page read (a guest hitting a
+    // session check), not a sign-in we attempted.
+    if (method === "GET" || (status !== "401" && status !== "403")) continue;
+    let path = url;
+    try {
+      path = new URL(url).pathname;
+    } catch {
+      /* relative or malformed — match against the raw string */
+    }
+    if (!AUTH_PATH.test(path)) continue;
+    return `${method} ${path} → ${status}`;
+  }
+  return null;
+}
+
 // CHE-37: on Browser Rendering, clicks that work in every real browser come
 // back inert (0 requests). Strategy ladder, escalating only while the page
 // shows ZERO reaction (no requests, no DOM mutations, no navigation):
@@ -385,6 +426,18 @@ const STATE_TOGGLE_VERBS =
 
 async function click(env: ToolEnv, input: Record<string, unknown>): Promise<string> {
   const label = [input.name, input.selector].filter(Boolean).map(String).join(" ");
+  // CHE-100: five attempts with a stale password locked a customer's account
+  // and refused a real user. One rejection is the whole answer for the run.
+  if (env.credentials?.rejected && label && SIGN_IN_LABEL.test(label)) {
+    console.warn(`[click] refused repeat sign-in after credential rejection: ${label}`);
+    return (
+      `Refused: the credential we hold was already rejected by this product's auth endpoint ` +
+      `earlier in this run. Trying again cannot succeed and repeated failures lock real ` +
+      `accounts. Report this step "skipped" with unverifiedReason "missing_access" and move ` +
+      `on to what can be checked signed out. Nothing behind this login is verifiable this run, ` +
+      `and none of it may be described as failing.`
+    );
+  }
   if (label && STATE_TOGGLE_VERBS.test(label) && !SAFE_SUBMITS.test(label)) {
     console.warn(`[click] refused state-toggling click: ${label}`);
     return (
@@ -475,6 +528,27 @@ async function click(env: ToolEnv, input: Record<string, unknown>): Promise<stri
     }
   }
 
+  // CHE-100: before anything is said about the product, check whether what just
+  // happened was our own credential being turned away. Sliced from the tail so
+  // the rolling window's trim can never shift the range.
+  const fresh = reaction.requests > 0 ? env.networkLog.slice(-reaction.requests) : [];
+  const rejection = credentialRejection(fresh);
+  if (rejection) {
+    if (env.credentials && !env.credentials.rejected) {
+      env.credentials.rejected = true;
+      await env.onCredentialRejected?.(rejection);
+    }
+    return (
+      `The credential we hold was REJECTED (${rejection}). An auth endpoint answering that to a ` +
+      `submitted password is the product working correctly — it is refusing bad input, which is ` +
+      `what it should do. This is our access problem, not a defect of theirs.\n` +
+      `Do NOT try again: repeated failures lock real accounts. Do NOT report the login, or ` +
+      `anything behind it, as broken or confusing. Report this step "skipped" with ` +
+      `unverifiedReason "missing_access", say plainly that the sign-in details we were given no ` +
+      `longer work, and spend the rest of this run on what a signed-out visitor can reach.`
+    );
+  }
+
   const observed = `${reaction.requests} network request${reaction.requests === 1 ? "" : "s"}, ${reaction.mutations} DOM mutation${reaction.mutations === 1 ? "" : "s"}${reaction.navigated ? ", navigated" : ""}`;
   if (isInert(reaction)) {
     // Honest zero-reaction signal (CHE-37): the model must see "the page did
@@ -520,6 +594,17 @@ async function fill(env: ToolEnv, input: Record<string, unknown>): Promise<strin
   // the model misread that no-op as "Sign in doesn't respond" — the #1
   // false-positive on credential journeys (CHE-37; e.g. JOB-904). Refuse
   // instead, and tell the model to skip, not submit.
+  // CHE-100: the strongest half of the one-attempt rule. Refusing the click is
+  // easy to route around (a different button, a keyboard Enter); refusing to put
+  // the known-bad password into a field again is not.
+  if (usedSecret && env.credentials?.rejected) {
+    return (
+      "Refused: this product's auth endpoint already rejected the credential we hold, earlier " +
+      "in this run. Filling it again cannot succeed and repeated failures lock real accounts. " +
+      'Report this step "skipped" with unverifiedReason "missing_access" and continue with what ' +
+      "a signed-out visitor can reach."
+    );
+  }
   if (usedSecret) {
     const haveEmail = value.includes("{{TEST_EMAIL}}") ? Boolean(env.testEmail) : true;
     const havePwd = value.includes("{{TEST_PASSWORD}}") ? Boolean(env.testPassword) : true;

@@ -11,8 +11,13 @@ import { agentContextOptions } from "./browser";
 import { discoverySystem } from "./instructions";
 import { putScreenshot, type AgentEnv } from "./env";
 import { emptyUsage, isVisionModel, mergeUsage, type LlmConfig, type UsageTotals } from "./llm";
+import { credentialsAlreadyRejected, recordCredentialRejection } from "./credentials";
 
 export interface RunInput {
+  // CHE-100: present for every real run (the workflow spreads the Run row in).
+  // Optional only because the type predates it and a couple of callers build a
+  // bare input for probes; without it the credential state cannot be persisted.
+  id?: string;
   targetUrl: string;
   testEmail: string | null;
   testPasswordEnc: string | null;
@@ -88,6 +93,11 @@ export async function discoverApp(args: {
     testPassword: run.testPasswordEnc ? decryptSecret(run.testPasswordEnc) : undefined,
     networkLog: [],
     consoleLog: [],
+    // CHE-100: discovery explores, and exploring reaches login forms. If the
+    // credential we hold is turned away here, the walk must inherit that — the
+    // one-attempt rule is per run, not per phase.
+    credentials: { rejected: await credentialsAlreadyRejected(env, run.id) },
+    onCredentialRejected: (signature) => recordCredentialRejection(env, run.id, signature),
     onScreenshot: async (buffer) => {
       const { storageUrl } = await putScreenshot(env, buffer);
       await onLiveScreenshot?.(storageUrl);

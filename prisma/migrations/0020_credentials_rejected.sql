@@ -1,0 +1,23 @@
+-- A rejected credential is our access problem, not their defect (CHE-100).
+--
+-- On 2026-08-24 the password we held for JobLander's QA account was stale. The
+-- agent submitted it five times across one run. Three things followed, all ours:
+-- we filed JOB-907 and then JOB-908 against a product that was working, their
+-- team spent an investigation proving it from Cloud Run logs and Firebase state,
+-- and Firebase locked the account after our fifth failure — so a real user was
+-- refused with their own correct password 27 seconds later.
+--
+-- The deciding evidence was on our side of the boundary the whole time: an auth
+-- endpoint answering 401 to bad credentials is the product working correctly.
+-- Rule §8 — we do not resolve "ours or theirs" by looking further into the
+-- customer, we remove our own ability to get it wrong.
+--
+-- So the first rejection is final for the run: no second attempt (which is what
+-- tripped the lockout), the sign-in step goes to missing_access — the one thing
+-- rule §2 lets us ask the owner for — and nothing behind that login may be
+-- called broken. Recorded on the Run rather than held in memory because a run
+-- is a Workflow of separate steps: memory does not survive a replay, and the
+-- one-attempt rule has to.
+
+-- AlterTable
+ALTER TABLE "Run" ADD COLUMN "credentialsRejected" BOOLEAN NOT NULL DEFAULT false;

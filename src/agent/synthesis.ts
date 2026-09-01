@@ -120,7 +120,7 @@ export async function synthesizeVerdict(args: {
   // bottom line speaks to them explicitly.
   const runRow = await env.db.run.findUnique({
     where: { id: runId },
-    select: { focusAreas: true },
+    select: { focusAreas: true, credentialsRejected: true },
   });
 
   const journeys = await env.db.journey.findMany({
@@ -145,6 +145,20 @@ export async function synthesizeVerdict(args: {
   });
   const observation = JSON.stringify({
     ownerConcerns: runRow?.focusAreas ?? undefined,
+    // CHE-100: a fact about US, stated so the verdict cannot turn it into a
+    // fact about them. The product refused a bad password, which is the product
+    // working; the signed-in half simply went unchecked, and the honest ask is
+    // for a working credential — never a claim that their login is broken.
+    ...(runRow?.credentialsRejected
+      ? {
+          signInBlocked:
+            "The sign-in details on file were rejected by this product's auth endpoint. That is " +
+            "correct behaviour on their side and an access problem on ours. Say plainly in the " +
+            "bottom line that the signed-in part could not be checked because the sign-in " +
+            "details we hold no longer work, and ask for updated ones. NEVER describe the " +
+            "login, or anything behind it, as broken, confusing or failing.",
+        }
+      : {}),
     pages: anatomy.pages,
     actions: anatomy.actions,
     services: anatomy.services,

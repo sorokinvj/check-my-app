@@ -13,6 +13,7 @@ import { walkingSystem } from "./instructions";
 import { putScreenshot, putText, type AgentEnv } from "./env";
 import { originOf, type ProposedJourney, type RunInput } from "./discovery";
 import { emptyUsage, isVisionModel, mergeUsage, type LlmConfig, type UsageTotals } from "./llm";
+import { credentialsAlreadyRejected, recordCredentialRejection } from "./credentials";
 
 export interface WalkRun extends RunInput {
   id: string;
@@ -142,6 +143,10 @@ export async function walkOneJourney(args: {
       testPassword: run.testPasswordEnc ? decryptSecret(run.testPasswordEnc) : undefined,
       networkLog: [],
       consoleLog: [],
+      // CHE-100: read fresh per journey, because that is what makes the rule
+      // hold across journeys — an earlier one may already have been told no.
+      credentials: { rejected: await credentialsAlreadyRejected(env, run.id) },
+      onCredentialRejected: (signature) => recordCredentialRejection(env, run.id, signature),
       onScreenshot: async (buffer) => {
         const stored = await putScreenshot(env, buffer);
         lastScreenshot = stored;
