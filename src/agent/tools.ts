@@ -134,11 +134,13 @@ export const BROWSER_TOOLS: Anthropic.Tool[] = [
       "server-side and reported as OK or BROKEN with its status. YouTube links are " +
       "checked via the oEmbed API, which returns an error for deleted/private/" +
       "unplayable videos — the definitive answer to 'do all these video links work'. " +
-      "Use for link-heavy pages and for owner concerns about links; up to 60 URLs per call.",
+      "mailto: links are checked too — the address is validated, which is the only " +
+      "thing about one that can be wrong from outside. Use for link-heavy pages and " +
+      "for owner concerns about links; up to 60 URLs per call.",
     input_schema: {
       type: "object",
       properties: {
-        urls: { type: "array", items: { type: "string" }, description: "Absolute http(s) URLs" },
+        urls: { type: "array", items: { type: "string" }, description: "Absolute http(s) or mailto: URLs" },
       },
       required: ["urls"],
     },
@@ -713,10 +715,32 @@ function youtubeOembedUrl(url: string): string {
   return `https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(url)}`;
 }
 
+// CHE-104: a mailto: link cannot be fetched, but it is not unverifiable either
+// — the thing that can be wrong with one is the address, and that is readable.
+// Whether mail actually arrives is invisible from outside the product and is
+// not a gap of ours to file. Left unhandled, run #126 reported a plain mailto:
+// contact link as an unverified step, which the gap classifier then filed
+// against us as "cannot complete magic-link sign-in" — a capability we do lack,
+// but not the one that was in front of it.
+const MAILTO_ADDRESS = /^[^\s@]+@[^\s@.]+\.[^\s@]{2,}$/;
+
+function checkMailto(url: string): string {
+  const address = url.slice("mailto:".length).split("?")[0].trim();
+  if (!address) return `BROKEN empty-address ${url}`;
+  const bad = address.split(",").map((a) => a.trim()).filter((a) => !MAILTO_ADDRESS.test(a));
+  return bad.length ? `BROKEN malformed-address (${bad.join(", ")}) ${url}` : `OK mailto ${url}`;
+}
+
 async function verifyLinks(input: Record<string, unknown>): Promise<string> {
   const raw = Array.isArray(input.urls) ? input.urls.map(String) : [];
+  const mailtos = [...new Set(raw)].filter((u) => /^mailto:/i.test(u)).slice(0, 60);
   const urls = [...new Set(raw)].filter((u) => /^https?:\/\//i.test(u)).slice(0, 60);
-  if (!urls.length) return "No valid http(s) URLs given.";
+  if (!urls.length && mailtos.length) {
+    const results = mailtos.map(checkMailto);
+    const broken = results.filter((r) => r.startsWith("BROKEN")).length;
+    return `Checked ${results.length} mailto links — ${broken} malformed.\n${results.join("\n")}`;
+  }
+  if (!urls.length) return "No valid http(s) or mailto: URLs given.";
 
   const checkOne = async (url: string): Promise<string> => {
     const isYt = YOUTUBE_RE.test(url);
@@ -741,6 +765,7 @@ async function verifyLinks(input: Record<string, unknown>): Promise<string> {
   for (let i = 0; i < urls.length; i += 5) {
     results.push(...(await Promise.all(urls.slice(i, i + 5).map(checkOne))));
   }
+  results.push(...mailtos.map(checkMailto));
   const broken = results.filter((r) => r.startsWith("BROKEN")).length;
   return `Checked ${results.length} links — ${broken} broken.\n${results.join("\n")}`;
 }
