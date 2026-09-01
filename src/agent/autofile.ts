@@ -91,6 +91,8 @@ export async function autoFileFindings(env: AgentEnv, runId: string): Promise<Au
         run,
         policy: app.policy,
         verdictUrl: `${baseUrl}/verdict/${run.publicId}`,
+        // CHE-101: settlements belong to the owner, not to a deletable app row.
+        ownerId: app.ownerId,
       });
       if (outcome.kind === "created") {
         notes.push({ icon: "ok", text: `Filed ${outcome.identifier}: ${outcome.title}` });

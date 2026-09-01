@@ -217,6 +217,7 @@ export async function fileCapabilityGaps(env: AgentEnv, runId: string): Promise<
         finding,
         run: ticketRun,
         policy: selfPolicy(self, "[Checker gap] {verdict}"),
+        ownerId: self.ownerId,
         verdictUrl: `${baseUrl}/verdict/${run.publicId}`,
       });
       notes.push({
@@ -393,6 +394,7 @@ export async function fileCheckerDefect(
         appSlug: self.appSlug,
       },
       policy: selfPolicy(self, "[Checker defect] {verdict}"),
+      ownerId: self.ownerId,
       verdictUrl: origin ? `${baseUrl}/verdict/${origin.publicId}` : baseUrl,
     });
     return {
