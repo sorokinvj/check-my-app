@@ -107,7 +107,7 @@ export async function reconcileIssueLinks(
       continue;
     }
 
-    const original = await originalFinding(env, link.firstSeenRunId, link.dedupKey, run.appSlug);
+    const original = await originalFinding(env, link.firstSeenRunId, link.dedupKey, run.appSlug, link.findingId);
 
     if (outcome === "done") {
       if (link.status !== "fixed") {
@@ -152,6 +152,18 @@ export async function reconcileIssueLinks(
       await env.db.issueLink.update({
         where: { id: link.id },
         data: { status: "suppressed", defectClass },
+      });
+      // CHE-101: settle it against the OWNER, not the app row. Deleting and
+      // re-adding an app must not re-arm a claim they already rejected.
+      await env.db.settledSignature.create({
+        data: {
+          ownerId: app.ownerId,
+          appSlug: run.appSlug,
+          dedupKey: link.dedupKey,
+          externalIssueId: link.externalIssueId,
+          outcome: "suppressed",
+          defectClass,
+        },
       });
       await markOriginal(env, original, "false_positive");
       notes.push({
@@ -277,7 +289,7 @@ export async function verifyFixedLinks(env: AgentEnv, runId: string): Promise<Re
       continue;
     }
 
-    const original = await originalFinding(env, link.firstSeenRunId, link.dedupKey, run.appSlug);
+    const original = await originalFinding(env, link.firstSeenRunId, link.dedupKey, run.appSlug, link.findingId);
     const journeyTitle = journeyTitleOf(original);
     const covered = fullWalk || (journeyTitle !== null && walkedTitles.has(norm(journeyTitle)));
     if (!covered) {
@@ -298,6 +310,17 @@ export async function verifyFixedLinks(env: AgentEnv, runId: string): Promise<Re
       // Resolved only after the comment lands: a failed comment leaves the link
       // "fixed" so the next run retries the whole verification.
       await env.db.issueLink.update({ where: { id: link.id }, data: { status: "resolved" } });
+      // CHE-101: a closed loop is the product's own evidence. It outlives the
+      // app row for the same reason a rejection does.
+      await env.db.settledSignature.create({
+        data: {
+          ownerId: app.ownerId,
+          appSlug: run.appSlug,
+          dedupKey: link.dedupKey,
+          externalIssueId: link.externalIssueId,
+          outcome: "resolved",
+        },
+      });
       notes.push({
         icon: "ok",
         text: `Verified ${link.externalIssueId} fixed in prod — commented on the ticket`,
@@ -332,7 +355,17 @@ async function originalFinding(
   firstSeenRunId: string | null,
   dedupKey: string,
   appSlug: string,
+  findingId?: string | null,
 ): Promise<OriginalFinding | null> {
+  // CHE-103: the pointer first. Re-hashing only ever worked while the prose
+  // stayed put, and our own cleanup of leaking verdict language rewrote it.
+  if (findingId) {
+    const row = await env.db.finding.findUnique({
+      where: { id: findingId },
+      select: { id: true, title: true, category: true, severity: true, detail: true, mark: true },
+    });
+    if (row) return row;
+  }
   if (!firstSeenRunId) return null;
   const rows = await env.db.finding.findMany({
     where: { runId: firstSeenRunId },

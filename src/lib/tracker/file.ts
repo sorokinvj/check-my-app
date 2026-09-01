@@ -20,6 +20,10 @@ import type { PrismaClient } from "@/generated/prisma/client";
 // The Finding columns a ticket is built from — a structural subset so either
 // caller can pass its own query result.
 export interface TicketFinding {
+  // CHE-103: recorded on the link so the finding is found by pointer, not by
+  // re-hashing prose that a later cleanup may rewrite. Optional because the
+  // tickets we file against ourselves have no Finding row behind them.
+  id?: string;
   runId: string;
   number: number;
   title: string;
@@ -126,14 +130,30 @@ export async function fileFindingTicket(opts: {
   run: TicketRun;
   policy: TicketPolicyFields | null;
   verdictUrl: string;
+  // CHE-101: who the settlement belongs to. The App row can be deleted and
+  // re-created; the owner's answer about a signature must survive that.
+  ownerId?: string | null;
 }): Promise<FilingOutcome> {
-  const { db, tracker, appId, finding, run, policy } = opts;
+  const { db, tracker, appId, finding, run, policy, ownerId } = opts;
   const draft = draftForFinding(finding, run, policy, opts.verdictUrl);
   const key = dedupKeyForFinding(finding, run);
 
   const existing = await db.issueLink.findUnique({
     where: { appId_dedupKey: { appId, dedupKey: key } },
   });
+
+  // CHE-101: a signature the owner already ruled not-a-bug stays ruled that way
+  // even if the app row behind it is gone. Without this, removing and re-adding
+  // an app silently re-arms every claim they had already rejected — the fastest
+  // possible way to be filtered out.
+  if (!existing) {
+    const settled = await db.settledSignature.findFirst({
+      where: { ownerId: ownerId ?? undefined, appSlug: run.appSlug, dedupKey: key, outcome: "suppressed" },
+      orderBy: { settledAt: "desc" },
+    });
+    if (settled) return { kind: "suppressed", identifier: settled.externalIssueId };
+  }
+
   const action = decideTicketAction(
     existing
       ? { status: existing.status, occurrences: existing.occurrences, escalatedAt: existing.escalatedAt }
@@ -176,15 +196,46 @@ export async function fileFindingTicket(opts: {
   }
 
   const issue = await tracker.createIssue(draft);
-  await db.issueLink.upsert({
+
+  // CHE-101: the update branch below re-points the link at the new ticket, and
+  // the ticket it replaces used to vanish from the ledger entirely — which is
+  // how JOB-905 and JOB-908 became invisible, one of them carrying a rejection
+  // we never received. Keep the outgoing identity before overwriting it.
+  if (existing) {
+    await db.settledSignature.create({
+      data: {
+        ownerId: ownerId ?? null,
+        appSlug: run.appSlug,
+        dedupKey: key,
+        externalIssueId: existing.externalIssueId,
+        outcome: "superseded",
+        defectClass: existing.defectClass,
+      },
+    });
+  }
+
+  const link = await db.issueLink.upsert({
     where: { appId_dedupKey: { appId, dedupKey: key } },
     create: {
       appId,
       dedupKey: key,
       externalIssueId: issue.identifier,
       firstSeenRunId: finding.runId,
+      findingId: finding.id ?? null,
     },
-    update: { externalIssueId: issue.identifier, status: "open", lastSeenAt: new Date() },
+    update: {
+      externalIssueId: issue.identifier,
+      status: "open",
+      lastSeenAt: new Date(),
+      findingId: finding.id ?? null,
+    },
   });
+  // A ticket that exists on someone's board with no row on ours is a ticket
+  // whose verdict can never reach us. Loud, not silent (CHE-101).
+  if (!link) {
+    throw new Error(
+      `Filed ${issue.identifier} but its ledger row was not written — its outcome could never be read back.`,
+    );
+  }
   return { kind: "created", identifier: issue.identifier, url: issue.url, title: draft.title };
 }

@@ -487,6 +487,11 @@ model IssueLink {
   // claim the owner ruled not-a-bug (CHE-99). capability | configuration |
   // interpretation | bookkeeping; null = unclassified, needs a person to look.
   defectClass     String?
+  // CHE-103: the finding this ticket was filed from. Recovering it by
+  // re-hashing prose broke the moment we rewrote finding titles — a direct
+  // pointer cannot. Nullable: links filed before this existed keep the hash
+  // fallback, and capability/defect tickets have no Finding row at all.
+  findingId       String?
   occurrences     Int      @default(1)
   escalatedAt     DateTime?
   firstSeenRunId  String?
@@ -497,6 +502,28 @@ model IssueLink {
 
   @@unique([appId, dedupKey])
   @@index([appId])
+}
+
+// What the owner has settled about a signature, kept independently of the App
+// row (CHE-101). IssueLink is per-app and dies with the app; this does not, so
+// "we were told this is not a bug" survives an app being removed and re-added.
+// Deliberately not a relation: the whole point is to outlive the thing it
+// describes.
+model SettledSignature {
+  id              String   @id @default(cuid())
+  ownerId         String?
+  appSlug         String
+  dedupKey        String
+  externalIssueId String
+  // suppressed = ruled not-a-bug | resolved = fix confirmed from outside |
+  // superseded = the link was re-pointed at a newer ticket, and this preserves
+  // the older ticket's identity instead of overwriting it into nothing.
+  outcome         String
+  defectClass     String?
+  settledAt       DateTime @default(now())
+
+  @@index([ownerId, appSlug])
+  @@index([externalIssueId])
 }
 
 // ─── LLM usage ledger ────────────────────────────────────────────────────────
