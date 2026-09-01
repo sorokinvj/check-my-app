@@ -132,3 +132,23 @@ anyone.
 We do not take access to a customer's logs, error tracker or repository in order
 to judge their product. The GitHub connection exists to export Playwright specs
 and never enters a verdict.
+
+## 9. Take them over the water. Do not build them the bridge.
+
+Owner rule, 2026-09-01: **CheckMyApp is a managerial product.** It stays at
+"this is broken, fix it — how is yours to decide; what matters to me is that it
+isn't broken." It never descends to the level of implementation.
+
+So a ticket we file names the symptom, the evidence and how to know it is gone.
+It never names files, causes or fixes. Not because we cannot see them from
+outside — that too — but because a customer who prescribes the how is a category
+error: the owner has never seen it make a ticket more useful, and has seen it
+cause misunderstanding and bugs many times over.
+
+This is also why the loop works at all. Diagnosis belongs to whoever fixes it,
+who has the logs, the history and the code we deliberately do not take (rule 8).
+JobLander's own agent found `verifyApiAuth()` in twenty minutes with information
+we will never have. Our half is to state the problem so precisely that their
+half is possible — and then to check, from outside, whether it is really gone.
+
+A ticket of ours that contains a proposed fix is a defect in the ticket.
