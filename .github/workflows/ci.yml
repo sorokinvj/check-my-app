@@ -24,6 +24,8 @@ jobs:
       # rather than by asking the owner to break a password by hand — that is
       # homework, and this product exists to remove it.
       - run: npm run verify:gates
+      # The doer's rails — same reason: unattended decisions get tested.
+      - run: npm run verify:doer
       # Smoke-build the web worker via OpenNext (catches bundle/runtime issues).
       - run: npx opennextjs-cloudflare build
 
