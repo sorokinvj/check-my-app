@@ -1,4 +1,4 @@
--- Daily spend cap per app (CHE-98).
+-- Daily spend cap per app (CHE-106).
 --
 -- Measured on real watch traffic: only 1 of 12 natural ticks took the free
 -- smoke path, so a watched app costs ~$0.44/day on average and up to $1.05.

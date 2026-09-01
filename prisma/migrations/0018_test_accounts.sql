@@ -1,4 +1,4 @@
--- A formal test account for checking CheckMyApp with CheckMyApp (CHE-100).
+-- A formal test account for checking CheckMyApp with CheckMyApp (CHE-105).
 --
 -- Self-checking means our agent signs into our own product as a real user and
 -- uses it. Until now that user was an ordinary account, so everything it did

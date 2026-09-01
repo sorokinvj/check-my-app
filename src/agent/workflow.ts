@@ -181,7 +181,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
         });
       }
 
-      // CHE-98: the budget is spent and the smoke pass could not carry the
+      // CHE-106: the budget is spent and the smoke pass could not carry the
       // verdict forward. Finish honestly rather than spend: the app was
       // checked for outages today, and the deep walk resumes tomorrow.
       if (run.smokeOnly && !(smoke.taken && smoke.ok)) {
@@ -766,7 +766,7 @@ async function notifyVerdictReady(
   verdict: Verdict | null,
 ): Promise<void> {
   if (!run.notifyEmail) return;
-  // CHE-100: self-checks are silent. A run owned by the test account exists so
+  // CHE-105: self-checks are silent. A run owned by the test account exists so
   // CheckMyApp can check itself; the person running the business must be able
   // to forget it exists. Its results live in that account's dashboard, where
   // they can be looked at deliberately — they never arrive in anyone's inbox.

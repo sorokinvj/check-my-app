@@ -419,7 +419,7 @@ const SAFE_SUBMITS = /\b(search|filter|apply filter|log ?in|sign ?in|continue|ne
 // else's record, not ours. Refused in every mode, including runs allowed to
 // create: permission to add a test record was never permission to resume a
 // paused subscription, cancel a plan or re-enable a watch. Our own self-check
-// re-enabled a watch its owner had paused (CHE-99) and quietly spent $1.26
+// re-enabled a watch its owner had paused (CHE-98) and quietly spent $1.26
 // re-checking a domain nobody wanted checked.
 const STATE_TOGGLE_VERBS =
   /\b(enable|disable|resume|reactivate|activate|deactivate|pause|unpause|cancel|upgrade|downgrade|subscribe|unsubscribe|renew|restore|archive|revoke|start watching|turn (on|off))\b/i;
