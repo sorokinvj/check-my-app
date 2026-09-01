@@ -36,7 +36,11 @@ const CAPABILITIES: { match: RegExp; label: string; why: string }[] = [
     why: "Any app whose only login is Google/GitHub is unverifiable behind the login wall — a whole class of customers we cannot serve end to end.",
   },
   {
-    match: /magic link|passwordless|email link|sign-?in link|login link/i,
+    // CHE-104: "email link" alone used to land here, so an ordinary mailto:
+    // contact link on nkem.dev was filed as a missing sign-in capability. The
+    // match now needs sign-in context; mailto: is handled by verify_links and
+    // is not a gap at all.
+    match: /magic link|passwordless|(email|sign-?in|login)[ -]link (sign|log)[ -]?in|sign-?in (by|via) email/i,
     label: "Checker cannot complete passwordless / magic-link sign-in",
     why: "Magic-link products have NO password to hand us — no amount of owner input unblocks it. We need a mailbox the agent can read for test accounts; until then the entire signed-in half of every passwordless app is invisible to us.",
   },
