@@ -45,7 +45,7 @@ export async function runDueWatches(
 ): Promise<TickResult> {
   const env = makeAgentEnv(bindings);
 
-  // CHE-100: clear what the self-check account left behind before deciding what
+  // CHE-105: clear what the self-check account left behind before deciding what
   // to run, so a stale placeholder app can never take a slot — or a budget.
   // Never fails the tick: housekeeping must not stop real work.
   try {
@@ -127,7 +127,7 @@ export async function runDueWatches(
         data: { lastRunAt: now, nextRunAt: new Date(now.getTime() + hours * 60 * 60 * 1000) },
       });
 
-      // CHE-98: an app's agent budget for the day. Beyond it the tick still
+      // CHE-106: an app's agent budget for the day. Beyond it the tick still
       // happens — as a smoke pass, which still notices the app going down —
       // and the deep walk resumes tomorrow. Without this, Growth (5 apps on a
       // 6-hourly cadence) costs ~$264/mo against $99 of revenue.

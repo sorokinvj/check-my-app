@@ -13,7 +13,7 @@ export interface PlanLimits {
   // API key creation. Mirrors the pricing page: "API access" is listed only
   // under Business, so it's Business+ (business, enterprise) here.
   apiAccess: boolean;
-  // CHE-98: what one watched app may spend on agent work per day. Measured
+  // CHE-106: what one watched app may spend on agent work per day. Measured
   // reality is ~$0.44/tick, so these are budgets for roughly one deep check a
   // day plus room for a re-check when something is wrong. Beyond it, ticks
   // still run — as smoke passes, which cost ~$0.01 and still catch an app

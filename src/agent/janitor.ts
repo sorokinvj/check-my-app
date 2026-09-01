@@ -1,4 +1,4 @@
-// Housekeeping for the self-check account (CHE-100).
+// Housekeeping for the self-check account (CHE-105).
 //
 // CheckMyApp checks CheckMyApp by signing in as a real account and using the
 // product. That account is deliberately ordinary — the owner can sign in as it

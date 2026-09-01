@@ -92,7 +92,7 @@ model Run {
   // Full re-check (CHE-74): the owner explicitly asked to walk everything from
   // scratch — replay/partial planning skip themselves when set.
   forceFull     Boolean @default(false)
-  // CHE-98: today's agent budget for this app is spent — run a smoke pass
+  // CHE-106: today's agent budget for this app is spent — run a smoke pass
   // (still catches an app going down) instead of a paid walk.
   smokeOnly     Boolean @default(false)
   // CHE-100: an auth endpoint rejected the credential we hold. Set the first
@@ -325,7 +325,7 @@ model Counter {
 // request. role/plan are String unions (no SQLite enums) — see src/lib/enums.ts.
 
 model User {
-  // CHE-100: a real, sign-in-able account used to check CheckMyApp with
+  // CHE-105: a real, sign-in-able account used to check CheckMyApp with
   // CheckMyApp. Everything it does is SILENT — its runs never mail the real
   // owner — and everything it owns is disposable: the janitor clears it.
   isTestAccount Boolean @default(false)

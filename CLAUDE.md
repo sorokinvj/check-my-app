@@ -83,7 +83,7 @@ enforced in code rather than by habit:
 
 This exists because the absence of it cost real money twice: a placeholder app
 the agent registered was checked daily for two days, and a paused watch came
-back to life because the agent pressed resume while exploring (CHE-89, CHE-99).
+back to life because the agent pressed resume while exploring (CHE-89, CHE-98).
 
 ## 7. Dogfood, atomically.
 
@@ -117,6 +117,11 @@ ticket is filed against one of them (`src/agent/capability-gaps.ts`,
 - **configuration** — our own inputs were wrong (a stale credential, a bad URL);
 - **interpretation** — we read absence of evidence as evidence of a defect;
 - **bookkeeping** — we lost track of what we had filed or been told.
+
+A ticket number goes into a code comment only after that ticket exists. Three
+numbers here were written before they were assigned and later collided with real
+tickets, which sends the next reader — human or agent — to the wrong history and
+makes a rule look arbitrary. An arbitrary-looking rule gets deleted (CHE-102).
 
 Mechanism, not intention: a tracker `Canceled` suppresses the signature **and**
 opens "[Checker defect] …" on our own board, deduped by class and counted across
