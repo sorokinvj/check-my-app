@@ -42,7 +42,16 @@ const say = (s) => console.log(s);
 // work is done.
 function taskComment(issue) {
   return [
-    `@codex implement this ticket on the current branch.`,
+    // Proven on 2026-09-02 (karass experiment): a non-review "@codex" comment
+    // ON A PULL REQUEST starts a task that commits to THAT PR's branch. The
+    // same mention on a Linear issue does not — that task ends with "make_pr
+    // tool is not available" and waits for a person to press a button. So the
+    // branch-and-PR first, mention second, is the only shape of this handoff
+    // with no human in the middle, and simplifying it away would have put one
+    // back. The repository is pinned inside the sentence because the docs say
+    // it only binds there: "include it in your comment, for example: @Codex fix
+    // this in openai/codex".
+    `@codex implement this ticket in ${REPO}, on this branch.`,
     ``,
     `**Ticket #${issue.number} — ${issue.title}**`,
     ``,
@@ -56,16 +65,19 @@ function taskComment(issue) {
     `2. **Never touch \`CLAUDE.md\`.** Those nine rules are the owner's, each written`,
     `   after a failure that cost trust. A change that edits the rules it is judged`,
     `   against is not a change.`,
-    `3. **Read \`CLAUDE.md\` before you start.** It is the constitution of this repo:`,
-    `   what may appear in customer-facing text, what counts as evidence, and why`,
-    `   several refusals are deterministic rather than advisory.`,
-    `4. **\`npm run typecheck\`, \`npm run agent:typecheck\` and \`npm run lint\` must pass.**`,
-    `   So must every \`npm run verify:*\` script — they are the acceptance registry,`,
-    `   the closed set of commands this loop treats as proof.`,
+    `3. **Read \`AGENTS.md\` and \`CLAUDE.md\` before you start.** AGENTS.md carries the`,
+    `   commands, what counts as done, and the conventions this project does not`,
+    `   state anywhere else; CLAUDE.md is its constitution.`,
+    `4. **The commands in AGENTS.md must pass** — including every \`npm run verify:*\`,`,
+    `   which are the closed set this loop treats as proof. The OpenNext build`,
+    `   fails in your environment by design; do not chase it.`,
     `5. **If the fix is not user-visible, it lands with a \`verify:\` script of its own.**`,
     `   A merged diff proves the code is well written; it says nothing about whether`,
     `   this is the thing that was asked for.`,
-    `6. **Commit to this branch. Do not merge, do not touch \`main\`.** Whether the`,
+    `6. **If \`main\` has moved, rebase on it explicitly** — your checkout is a`,
+    `   snapshot taken when the task started, and naming a recent commit will not`,
+    `   make it visible to you.`,
+    `7. **Commit to this branch. Do not merge, do not touch \`main\`.** Whether the`,
     `   problem is actually gone is decided by a later run of CheckMyApp against the`,
     `   deployed product, never by you and never by me.`,
   ].join("\n");
