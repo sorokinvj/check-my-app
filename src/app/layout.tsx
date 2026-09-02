@@ -17,9 +17,36 @@ const mono = IBM_Plex_Mono({
   display: "swap",
 });
 
+// CHE-108: a link to this product used to paste into LinkedIn or Slack as a
+// grey card with one line on it — no page carried the metadata a platform reads
+// to build a preview. At launch a post IS the distribution, so the link was
+// losing its clicks in the composer, before anyone reached the product at all.
+//
+// metadataBase makes the relative image below absolute, which every platform
+// requires; templated titles let a page name itself without repeating the
+// product name.
+const SITE = process.env.NEXT_PUBLIC_APP_URL ?? "https://checkmyapp.dev";
+const TAGLINE =
+  "Paste a link and we check your app the way a person would — then tell you what a visitor hits.";
+
 export const metadata: Metadata = {
-  title: "CheckMyApp",
-  description: "Paste a link. We'll show you your app.",
+  metadataBase: new URL(SITE),
+  title: { default: "CheckMyApp", template: "%s · CheckMyApp" },
+  description: TAGLINE,
+  openGraph: {
+    type: "website",
+    siteName: "CheckMyApp",
+    title: "CheckMyApp",
+    description: TAGLINE,
+    url: SITE,
+    images: [{ url: "/og.png", width: 1200, height: 630, alt: "CheckMyApp" }],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "CheckMyApp",
+    description: TAGLINE,
+    images: ["/og.png"],
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

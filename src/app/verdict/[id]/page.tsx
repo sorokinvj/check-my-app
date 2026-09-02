@@ -22,6 +22,38 @@ function formatDuration(start: Date, end: Date | null): string | null {
   return `${Math.floor(mins / 60)}h ${mins % 60}m`;
 }
 
+// CHE-108: a verdict link is the one people paste — into a post, a message, a
+// thread with their team — and it used to arrive as a grey card carrying the
+// site's generic tagline. It should say whose product was checked and how it
+// came out.
+//
+// Named after the customer's product, never ours (rule §1): the only figure
+// here is how many problems we found on it, and nothing about how we looked.
+export async function generateMetadata({ params }: { params: Promise<{ id: string }> }) {
+  const prisma = await getDbFromContext();
+  const run = await prisma.run.findUnique({
+    where: { publicId: (await params).id },
+    select: { appSlug: true, verdict: true, _count: { select: { findings: true } } },
+  });
+  if (!run) return {};
+
+  const label = run.verdict ? (VERDICT_META[run.verdict]?.label ?? null) : null;
+  const n = run._count.findings;
+  const found =
+    n === 0
+      ? "Nothing to fix was found."
+      : `${n} thing${n === 1 ? "" : "s"} to fix ${n === 1 ? "was" : "were"} found.`;
+
+  const title = label ? `${run.appSlug} — ${label}` : run.appSlug;
+  const description = `${found} Open the check to see what a visitor to ${run.appSlug} runs into, and where.`;
+  return {
+    title,
+    description,
+    openGraph: { title, description, type: "article" },
+    twitter: { card: "summary_large_image" as const, title, description },
+  };
+}
+
 // Screen 3 — Verdict · /verdict/{id} — the main artifact. Private permalink.
 // Order is deliberate: Findings first (the owner opens a verdict to learn what's
 // wrong — 2026-08-23) → Lens (mirror) → Journeys (centerpiece) → Anatomy →
@@ -84,6 +116,12 @@ export default async function VerdictPage({
         include: { repo: { select: { repoFullName: true } } },
       })
     : null;
+  // CHE-108: a verdict URL is public by design — it is the thing that gets
+  // pasted into a message — so most people reading this page do not own the
+  // product it is about. What the run cost us, which models produced it and
+  // which deploy it hit are operating details of ours, and a stranger reading
+  // them learns nothing about the product they came to see.
+  const isOwner = Boolean(viewerApp) || (Boolean(viewer) && run.ownerId === viewer?.id);
   // A replay-first smoke pass (CHE-51) finishes inside the "replay" phase and
   // never walks a journey — so the run's last event is a replay one. Any run
   // that fell through to the full check has later phases after it.
@@ -142,13 +180,16 @@ export default async function VerdictPage({
                   minute: "2-digit",
                 }) ?? "—"}
                 {duration && ` · ${duration}`} · Run #{run.runNumber}
-                {run.costUsd != null && ` · $${run.costUsd.toFixed(2)}`}
-                {/* Deploy identity (CHE-56) — short sha, the form CI logs and
-                    humans recognise; the full sha stays in the API payload. */}
-                {run.deploySha &&
+                {/* CHE-108: what a run cost us, which models produced it and
+                    which deploy it ran against are OUR machinery — rule §1, and
+                    the worst of it is the model names arguing with $29 on the
+                    next tab. The language gate only ever saw the verdict's text,
+                    so the page chrome walked straight past it. Owner only. */}
+                {isOwner && run.costUsd != null && ` · $${run.costUsd.toFixed(2)}`}
+                {isOwner && run.deploySha &&
                   ` · deploy ${run.deploySha.slice(0, 7)}${run.deployEnv ? ` (${run.deployEnv})` : ""}`}
               </p>
-              {totalTokens > 0 && (
+              {isOwner && totalTokens > 0 && (
                 <p className="mt-0.5 font-mono text-xs text-fg-faint">
                   {fmtTok(totalTokens)} tokens
                   {byModel.map((m) => ` · ${m.model} $${m.costUsd.toFixed(2)}`).join("")}
