@@ -18,7 +18,7 @@
 
 import { execFileSync } from "node:child_process";
 import { writeFileSync, mkdirSync } from "node:fs";
-import { decideTick, decideMerge, branchFor, QUEUE_LABEL, STOP_LABEL } from "./eligibility.mjs";
+import { decideTick, branchFor, STOP_LABEL } from "./eligibility.mjs";
 
 const DRY = process.argv.includes("--dry-run");
 const REPO = process.env.DOER_REPO ?? "sorokinvj/check-my-app";
@@ -99,32 +99,10 @@ const openDoerPrs = openPrs
 
 const stopped = issues.some((i) => i.labels.includes(STOP_LABEL));
 
-// ─── First: can anything already open be merged? ─────────────────────────────
-for (const pr of openDoerPrs) {
-  const issueNumber = Number(pr.headRef.match(/^doer\/(\d+)/)?.[1]);
-  const issue = issues.find((i) => i.number === issueNumber);
-  const mayMerge = Boolean(issue?.labels.includes("doer:automerge"));
-
-  const checks = gh([
-    "api", `repos/${REPO}/commits/${pr.headSha}/check-runs`,
-    "--jq", "[.check_runs[] | {name:.name, conclusion:.conclusion, headSha:.head_sha}]",
-  ]) ?? [];
-  const reviews = gh([
-    "api", `repos/${REPO}/pulls/${pr.number}/reviews`,
-    "--jq", "[.[] | {state:.state, headSha:.commit_id}]",
-  ]) ?? [];
-
-  const verdict = decideMerge({ mayMerge, headSha: pr.headSha, checks, reviews });
-  say(`PR #${pr.number} (${pr.headRef}): ${verdict.merge ? "MERGE" : "hold"} — ${verdict.reason}`);
-  if (verdict.merge) {
-    run("gh", ["pr", "merge", String(pr.number), "--repo", REPO, "--squash", "--delete-branch"]);
-    if (issue) {
-      run("gh", ["issue", "comment", String(issue.number), "--repo", REPO, "--body",
-        "Shipped. Whether it is actually gone is decided by the next CheckMyApp run against the deployed product — not by this merge."]);
-    }
-  }
-}
-
+// Driving an open PR to a decision is NOT this process's job (CHE-122): that is
+// the shepherd, which runs on its own faster rhythm because a PR needs a nudge
+// in minutes, not in the two hours between claims. This one only claims.
+//
 // ─── Then: may we start something new? ───────────────────────────────────────
 const decision = decideTick({ issues, openDoerPrs, stopped });
 if (!decision.act) {

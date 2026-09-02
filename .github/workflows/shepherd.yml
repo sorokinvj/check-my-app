@@ -1,0 +1,54 @@
+# The shepherd — takes an open pull request to a decision (CHE-122).
+#
+# Separate from the doer on purpose. Claiming a ticket happens rarely and can
+# wait two hours; driving a PR through review → fixes → review needs a nudge in
+# minutes. One process doing both meant a PR sat idle waiting for the other
+# job's schedule.
+#
+# It holds no opinion. It reads facts — checks for the current head, unresolved
+# review threads, rounds already spent — runs them through the state machine,
+# and does what the machine says. Codex writes, Claude reviews, and only a later
+# CheckMyApp run may say the problem is actually gone.
+
+name: Shepherd
+
+on:
+  schedule:
+    # Every 20 minutes. Fast enough that a round does not idle, slow enough that
+    # a reviewer has time to finish before it is asked again.
+    - cron: "*/20 * * * *"
+  workflow_dispatch:
+
+# Never two shepherds at once: both would count the same rounds and ask for the
+# same fix twice. Queued rather than cancelled, so one mid-merge is not killed
+# halfway.
+concurrency:
+  group: shepherd
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  shepherd:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # The machine decides whether code merges. A decision that cannot be
+      # tested is not one to run unattended, so its cases run before it does.
+      - run: npm ci
+      - run: node scripts/verify-machine.mjs
+
+      - name: Shepherd open PRs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DOER_REPO: ${{ github.repository }}
+        run: node scripts/doer/shepherd.mjs
