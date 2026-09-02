@@ -258,12 +258,37 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
           where: { mark: "watch", run: { appSlug: run.appSlug, id: { not: run.id } } },
           orderBy: { createdAt: "desc" },
           take: 10,
-          select: { title: true },
+          select: { title: true, category: true, severity: true, detail: true, createdAt: true },
         });
-        return rows.map((f) => f.title);
+        if (rows.length === 0) return [];
+        // CHE-109: a watch mark had no way to end. The query asked only "was
+        // this ever marked watch", so a mark set on 23 July was still the first
+        // priority of every run six weeks later — for an endpoint fixed on 22
+        // August and confirmed fixed twice since. Follow-up that outlives the
+        // thing it follows stops being follow-up and becomes noise with
+        // priority. A signature marked fixed afterwards is finished.
+        const settled = await env.db.finding.findMany({
+          where: { mark: "fixed", run: { appSlug: run.appSlug } },
+          select: { title: true, category: true, severity: true, detail: true, createdAt: true },
+        });
+        const key = (f: (typeof rows)[number]) => dedupKeyForFinding(f, { appSlug: run.appSlug });
+        const done = new Map(settled.map((f) => [key(f), f.createdAt]));
+        return rows
+          .filter((f) => {
+            const fixedAt = done.get(key(f));
+            return !fixedAt || fixedAt <= f.createdAt;
+          })
+          .map((f) => f.title);
       });
+      // CHE-109: says what we can prove. The mark records no author and no date
+      // — we cannot tell whether the owner set it, or one of our own sessions
+      // did while exploring — so "the owner flagged" was a claim about the
+      // customer built on our own unaudited bookkeeping, and it reached them as
+      // "On your flagged analytics concern" about something they never touched.
       const watchNotes = watched.length
-        ? `PRIORITY — the owner flagged these earlier findings to verify first thing this run:\n${watched
+        ? `PRIORITY — these findings were marked for follow-up on an earlier run. ` +
+          `Re-check them first. Do NOT describe them to the owner as something they asked ` +
+          `for or flagged: say what you found, not who wanted it looked at.\n${watched
             .map((t) => `- ${t}`)
             .join("\n")}`
         : null;
