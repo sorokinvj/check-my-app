@@ -26,6 +26,8 @@ jobs:
       - run: npm run verify:gates
       # The doer's rails — same reason: unattended decisions get tested.
       - run: npm run verify:doer
+      # The gate that decides whether code merges (CHE-122).
+      - run: npm run verify:machine
       # Smoke-build the web worker via OpenNext (catches bundle/runtime issues).
       - run: npx opennextjs-cloudflare build
 
