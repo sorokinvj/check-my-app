@@ -116,12 +116,14 @@ export default async function VerdictPage({
         include: { repo: { select: { repoFullName: true } } },
       })
     : null;
-  // CHE-108: a verdict URL is public by design — it is the thing that gets
-  // pasted into a message — so most people reading this page do not own the
-  // product it is about. What the run cost us, which models produced it and
-  // which deploy it hit are operating details of ours, and a stranger reading
-  // them learns nothing about the product they came to see.
-  const isOwner = Boolean(viewerApp) || (Boolean(viewer) && run.ownerId === viewer?.id);
+  // CHE-108: what a run cost us, which models produced it and which deploy it
+  // ran against are OUR operating figures, and they belong to nobody outside
+  // this business — not a stranger who opened a shared link, and not the
+  // customer either. Owner rule, 2026-09-02: "зачем нашу кухню показывать
+  // вообще кому либо кроме админам?" A customer paying $29 reading that their
+  // check cost us $0.47 on opus is rule §1 in its purest form — our machinery,
+  // arguing with their invoice on the next tab.
+  const isAdmin = viewer?.role === "admin";
   // A replay-first smoke pass (CHE-51) finishes inside the "replay" phase and
   // never walks a journey — so the run's last event is a replay one. Any run
   // that fell through to the full check has later phases after it.
@@ -185,11 +187,11 @@ export default async function VerdictPage({
                     the worst of it is the model names arguing with $29 on the
                     next tab. The language gate only ever saw the verdict's text,
                     so the page chrome walked straight past it. Owner only. */}
-                {isOwner && run.costUsd != null && ` · $${run.costUsd.toFixed(2)}`}
-                {isOwner && run.deploySha &&
+                {isAdmin && run.costUsd != null && ` · $${run.costUsd.toFixed(2)}`}
+                {isAdmin && run.deploySha &&
                   ` · deploy ${run.deploySha.slice(0, 7)}${run.deployEnv ? ` (${run.deployEnv})` : ""}`}
               </p>
-              {isOwner && totalTokens > 0 && (
+              {isAdmin && totalTokens > 0 && (
                 <p className="mt-0.5 font-mono text-xs text-fg-faint">
                   {fmtTok(totalTokens)} tokens
                   {byModel.map((m) => ` · ${m.model} $${m.costUsd.toFixed(2)}`).join("")}
