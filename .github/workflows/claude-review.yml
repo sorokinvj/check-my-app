@@ -1,0 +1,55 @@
+# Cross-review: whoever writes the code does not judge it (CHE-116).
+#
+# The doer hands implementation to Codex. Codex also reviews pull requests —
+# which would make it author and sole approver of its own work, the exact thing
+# rule §8 forbids toward customers and the reason this project exists. So the
+# reviewer here is deliberately a different vendor from the implementer.
+#
+# The mirror of this arrangement runs on karass-landing, where Claude writes and
+# Codex reviews. Neither product has a model grading itself.
+#
+# This still only proves the code is sound. Whether the customer's problem is
+# actually gone is decided by a later CheckMyApp run walking the deployed site
+# from outside (src/agent/reconcile.ts) — never by a review, and never by a merge.
+
+name: Claude review
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+
+# One review per head. A second push supersedes the first, and a verdict about
+# an older push is not a verdict — the doer's merge gate enforces the same rule.
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          # A subscription token, not an API key: reviews then draw on the
+          # owner's plan instead of billing per call. Generated with
+          # `claude setup-token`.
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          plugin_marketplaces: "https://github.com/anthropics/claude-code.git"
+          plugins: "code-review@claude-code-plugins"
+          prompt: "/code-review:code-review --comment ${{ github.repository }}/pull/${{ github.event.pull_request.number }}"
+          claude_args: '--allowedTools "mcp__github_inline_comment__create_inline_comment"'
+          # The action refuses a bot actor by default, so that bots cannot
+          # trigger each other in a loop. On a doer PR the pushes come from
+          # Codex, which is precisely the case this review exists for — so that
+          # one bot is named, and no others.
+          allowed_bots: "chatgpt-codex-connector[bot]"
