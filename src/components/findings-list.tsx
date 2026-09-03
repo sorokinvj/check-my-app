@@ -122,8 +122,10 @@ function FindingRow({ finding }: { finding: FindingWithEvidence }) {
   }
 
   return (
-    <li>
-      <details className={`rounded-lg border border-ink-700 bg-ink-900 ${markLabel ? "opacity-60" : ""}`}>
+    <li
+      className={`overflow-hidden rounded-lg border border-ink-700 bg-ink-900 ${markLabel ? "opacity-60" : ""}`}
+    >
+      <details>
         <summary className="flex cursor-pointer select-none items-baseline gap-3 px-4 py-3">
           <span className="font-mono text-xs text-fg-faint">
             #{String(finding.number).padStart(3, "0")}
@@ -206,57 +208,58 @@ function FindingRow({ finding }: { finding: FindingWithEvidence }) {
             </div>
           )}
 
-          <div className="flex flex-wrap items-center gap-2 border-t border-ink-700 pt-3">
-            {/* Loop C triage: "That's fine" mutes it for future runs (noise
-                filter), "Watch it" makes the next run verify it FIRST, and
-                "Create Ticket" files it into the owner's Linear with the
-                onboarding TicketPolicy parameters. */}
-            <TriageButton
-              active={mark === "known"}
-              disabled={busy}
-              onClick={() => setMarkRemote(mark === "known" ? "none" : "known")}
-            >
-              That&apos;s fine
-            </TriageButton>
-            <TriageButton
-              active={mark === "watch"}
-              disabled={busy}
-              onClick={() => setMarkRemote(mark === "watch" ? "none" : "watch")}
-            >
-              Watch it
-            </TriageButton>
-            <TriageButton
-              active={mark === "fixed"}
-              disabled={busy}
-              onClick={() => setMarkRemote(mark === "fixed" ? "none" : "fixed")}
-            >
-              Mark as fixed
-            </TriageButton>
-            <TriageButton
-              active={mark === "false_positive"}
-              disabled={busy}
-              onClick={() => setMarkRemote(mark === "false_positive" ? "none" : "false_positive")}
-            >
-              Dispute
-            </TriageButton>
-            {ticket ? (
-              <a
-                href={ticket.url}
-                target="_blank"
-                rel="noreferrer"
-                className="rounded-md border border-accent/40 bg-accent/10 px-2.5 py-1 font-mono text-xs text-accent"
-              >
-                ✓ {ticket.id}
-              </a>
-            ) : (
-              <TriageButton active={false} disabled={busy} onClick={createTicket}>
-                Create Ticket
-              </TriageButton>
-            )}
-            {ticketErr && <span className="text-xs text-status-broken">{ticketErr}</span>}
-          </div>
         </div>
       </details>
+
+      <div className="flex flex-wrap items-center gap-2 border-t border-ink-700 px-4 py-3">
+        {/* Loop C triage: "That's fine" mutes it for future runs (noise
+            filter), "Watch it" makes the next run verify it FIRST, and
+            "Create Ticket" files it into the owner's Linear with the
+            onboarding TicketPolicy parameters. */}
+        <TriageButton
+          active={mark === "known"}
+          disabled={busy}
+          onClick={() => setMarkRemote(mark === "known" ? "none" : "known")}
+        >
+          That&apos;s fine
+        </TriageButton>
+        <TriageButton
+          active={mark === "watch"}
+          disabled={busy}
+          onClick={() => setMarkRemote(mark === "watch" ? "none" : "watch")}
+        >
+          Watch it
+        </TriageButton>
+        <TriageButton
+          active={mark === "fixed"}
+          disabled={busy}
+          onClick={() => setMarkRemote(mark === "fixed" ? "none" : "fixed")}
+        >
+          Mark as fixed
+        </TriageButton>
+        <TriageButton
+          active={mark === "false_positive"}
+          disabled={busy}
+          onClick={() => setMarkRemote(mark === "false_positive" ? "none" : "false_positive")}
+        >
+          Dispute
+        </TriageButton>
+        {ticket ? (
+          <a
+            href={ticket.url}
+            target="_blank"
+            rel="noreferrer"
+            className="rounded-md border border-accent/40 bg-accent/10 px-2.5 py-1 font-mono text-xs text-accent"
+          >
+            ✓ {ticket.id}
+          </a>
+        ) : (
+          <TriageButton active={false} disabled={busy} onClick={createTicket}>
+            Create Ticket
+          </TriageButton>
+        )}
+        {ticketErr && <span className="text-xs text-status-broken">{ticketErr}</span>}
+      </div>
     </li>
   );
 }
