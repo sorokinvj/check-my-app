@@ -11,7 +11,6 @@ import {
   branchFor,
   QUEUE_LABEL,
   HOLD_LABEL,
-  AUTOMERGE_LABEL,
 } from "./doer/eligibility.mjs";
 
 let bad = 0;
@@ -61,15 +60,15 @@ const issue = (number, labels, createdAt, title = "t") => ({ number, labels, cre
     openDoerPrs: [],
     stopped: false,
   });
-  check("merging is opt-in, not the default", d.act === true && d.mayMerge === false, `mayMerge=${d.mayMerge}`);
+  check("merging is the default, not an opt-in", d.act === true && d.mayMerge === true, `mayMerge=${d.mayMerge}`);
 }
 {
   const d = decideTick({
-    issues: [issue(3, [QUEUE_LABEL, AUTOMERGE_LABEL], "2026-08-20")],
+    issues: [issue(3, [QUEUE_LABEL, HOLD_LABEL], "2026-08-20")],
     openDoerPrs: [],
     stopped: false,
   });
-  check("opt-in is honoured when set", d.act === true && d.mayMerge === true);
+  check("a held ticket is not claimed at all", d.act === false, d.reason);
 }
 
 // ── the merge gate ───────────────────────────────────────────────────────────
@@ -77,7 +76,7 @@ const green = [{ name: "check", conclusion: "success", headSha: "aaa" }];
 const approved = [{ state: "APPROVED", headSha: "aaa" }];
 {
   const m = decideMerge({ mayMerge: false, headSha: "aaa", checks: green, reviews: approved });
-  check("without opt-in, never merges", m.merge === false, m.reason);
+  check("a held ticket never merges", m.merge === false, m.reason);
 }
 {
   const m = decideMerge({ mayMerge: true, headSha: "aaa", checks: [], reviews: approved });

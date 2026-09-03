@@ -39,10 +39,18 @@ that contains a proposed fix is a defect in the ticket.
 |---|---|
 | `doer` | in the queue |
 | `doer:hold` | skipped, without leaving the queue |
-| `doer:automerge` | the dispatcher may merge this one when every judge is clean |
 | `doer:stop` | on any open issue, halts every tick |
 
-**Merging is opt-in.** By default the doer proposes and stops; a person merges.
+**Merging is the default.** The gate merges when every judge is clean, and the
+brakes are `doer:hold` for one ticket and `doer:stop` for all of them.
+
+It was opt-in until 2026-09-03, which made "stopped, waiting for a person" the
+loop's normal state — the same manual button we refused when we chose the PR
+handoff over the Linear one, moved to the end of the pipeline instead of the
+middle. The owner decided this work should happen when the ticket was filed;
+asking again at the merge asks twice for one decision. What the merge does not
+decide is whether the problem is gone: that is still the next CheckMyApp run,
+walking the deployed product from outside.
 
 ## What blocks a tick, on purpose
 
@@ -60,6 +68,13 @@ reviewed:
 - a check still running — "computing" is not "passed";
 - no checks reported yet — absence of a verdict is not a verdict;
 - an approval of an earlier push — it was about a different diff.
+
+A fourth, learned on 2026-09-03 and costing four runs to see: a reviewer can go
+green having read nothing. It was denied the tool that starts it, then spawned
+background agents and ended its turn waiting for them, then skipped entirely
+because the branch's copy of the workflow lagged `main`. Each time the job
+reported success and published nothing. The rule that held was the one above —
+a verdict must be *reported for this head*, and silence never is.
 
 ## Acceptance
 

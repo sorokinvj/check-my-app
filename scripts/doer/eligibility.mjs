@@ -14,7 +14,10 @@ export const QUEUE_LABEL = "doer";
 /** Set by a person on an issue to keep the doer away from it. */
 export const HOLD_LABEL = "doer:hold";
 /** Only with this may the dispatcher merge; default is propose-and-stop. */
-export const AUTOMERGE_LABEL = "doer:automerge";
+// No automerge label any more. Merging is the default and doer:hold is the
+// brake (owner, 2026-09-03): a loop whose normal state is "waiting for a
+// person" is not a loop, and the owner already decided the work should
+// happen when the ticket was filed.
 /** Repository-wide stop. One label on one issue halts every tick. */
 export const STOP_LABEL = "doer:stop";
 
@@ -54,7 +57,7 @@ export function decideTick(state) {
   if (queue.length === 0) return { act: false, reason: "queue empty — nothing labelled for the doer" };
 
   const issue = queue[0];
-  return { act: true, issue, mayMerge: issue.labels.includes(AUTOMERGE_LABEL) };
+  return { act: true, issue, mayMerge: !issue.labels.includes(HOLD_LABEL) };
 }
 
 // A branch name that says where the work came from, and that the merge gate can
@@ -78,7 +81,7 @@ export function branchFor(issueNumber, title) {
 // change nobody reviewed.
 /**
  * @param {object} v
- * @param {boolean} v.mayMerge the issue opted in
+ * @param {boolean} v.mayMerge the ticket is not on hold
  * @param {string} v.headSha the sha the verdicts must be about
  * @param {{name:string,conclusion:string|null,headSha:string}[]} v.checks
  * @param {{state:string,headSha:string}[]} v.reviews
@@ -86,7 +89,7 @@ export function branchFor(issueNumber, title) {
  */
 export function decideMerge(v) {
   const { mayMerge, headSha, checks = [], reviews = [] } = v;
-  if (!mayMerge) return { merge: false, reason: "not opted in — the owner merges this one" };
+  if (!mayMerge) return { merge: false, reason: "on hold — this one waits for the owner" };
 
   const forHead = checks.filter((c) => c.headSha === headSha);
   if (forHead.length === 0) return { merge: false, reason: "no checks have reported for this head yet" };

@@ -18,7 +18,7 @@
 
 import { execFileSync } from "node:child_process";
 import { decidePr, MAX_ROUNDS } from "./machine.mjs";
-import { STOP_LABEL } from "./eligibility.mjs";
+import { HOLD_LABEL, STOP_LABEL } from "./eligibility.mjs";
 
 const DRY = process.argv.includes("--dry-run");
 const REPO = process.env.DOER_REPO ?? "sorokinvj/check-my-app";
@@ -35,6 +35,10 @@ function act(cmd, args) {
 // A marker only this process writes, so counting rounds needs no extra storage
 // and cannot be confused with a human asking for something.
 const ROUND_MARKER = "<!-- doer:round -->";
+
+// Whose plain comment counts as a verdict. Named, not inferred: any other
+// account commenting "looks fine to me" must not unblock a merge.
+const REVIEWER_LOGIN = "claude[bot]";
 
 // Unresolved review findings, read from GitHub's own reviewThreads state rather
 // than from the wording of a review. Classifying on a phrase reads the
@@ -95,19 +99,54 @@ function hasImplementerWork(prNumber) {
 }
 
 // Did a reviewer finish on THIS head? A verdict about an earlier push was about
-// a different diff. Counted from both formal reviews and the review comments
-// that the inline-comment reviewers leave.
+// a different diff.
+//
+// Three shapes count, because a reviewer with nothing to say uses a different
+// one from a reviewer with findings — and only the first two carry a sha:
+//
+//   - a formal review on this commit;
+//   - an inline comment on this commit;
+//   - a plain comment from the reviewer, newer than this commit.
+//
+// The third exists because a clean review publishes exactly that: on 2026-09-03
+// the reviewer read the diff for three minutes, ran typecheck and lint in a
+// worktree, and said "No issues found" in an ordinary PR comment. The gate saw
+// formal reviews: 0, inline: 0, and would have waited forever for a verdict it
+// had already been given.
+//
+// Time is the tie to the head, since a plain comment carries no sha: a verdict
+// written before this commit existed was about a different diff, and is not
+// counted. That is the same rule as the other two, expressed with the only
+// evidence this shape offers.
 function reviewReportedForHead(prNumber, headSha) {
   const reviews = gh([
     "api", `repos/${REPO}/pulls/${prNumber}/reviews`,
     "--jq", "[.[] | {sha:.commit_id, state:.state}]",
   ]) ?? [];
   if (reviews.some((r) => r.sha === headSha)) return true;
+
   const comments = gh([
     "api", `repos/${REPO}/pulls/${prNumber}/comments`,
     "--jq", "[.[] | {sha:.commit_id}]",
   ]) ?? [];
-  return comments.some((c) => c.sha === headSha);
+  if (comments.some((c) => c.sha === headSha)) return true;
+
+  try {
+    // Read as text: gh prints a bare jq string unquoted, which is not JSON.
+    const headAt = gh([
+      "api", `repos/${REPO}/commits/${headSha}`, "--jq", ".commit.committer.date",
+    ], { json: false }).trim();
+    if (!headAt) return false;
+    const verdicts = gh([
+      "api", `repos/${REPO}/issues/${prNumber}/comments?per_page=100`,
+      "--jq", `[.[] | select(.user.login == "${REVIEWER_LOGIN}") | .created_at]`,
+    ]) ?? [];
+    return verdicts.some((at) => Date.parse(at) > Date.parse(headAt));
+  } catch (err) {
+    // Fail closed: an unreadable verdict is not a verdict.
+    console.warn(`[shepherd] could not read the reviewer's comments on #${prNumber}: ${err.message}`);
+    return false;
+  }
 }
 
 const prs = gh([
@@ -140,7 +179,15 @@ for (const pr of prs) {
   const labels = issueNumber
     ? (gh(["issue", "view", String(issueNumber), "--repo", REPO, "--json", "labels"])?.labels ?? [])
     : [];
-  const mayMerge = labels.some((l) => l.name === "doer:automerge");
+  // Merging is the default, and this is the line that decides it (owner,
+  // 2026-09-03). It used to require an opt-in label, which made "stopped,
+  // waiting for a person" the loop's normal state — the same manual button we
+  // rejected the Linear handoff for, moved to the end of the pipeline. The
+  // owner already decided this work should happen when the ticket was filed;
+  // asking again at the merge is asking twice for one decision. The brakes are
+  // the labels that already exist: doer:hold for this ticket, doer:stop for
+  // everything.
+  const mayMerge = !labels.some((l) => l.name === HOLD_LABEL);
 
   const checks = gh([
     "api", `repos/${REPO}/commits/${pr.headRefOid}/check-runs`,
