@@ -7,7 +7,7 @@ import type { Browser } from "@cloudflare/playwright";
 import { decryptSecret } from "@/lib/crypto";
 import type { StepStatus } from "@/lib/enums";
 import { LlmBudgetError, runAgentLoop, finalizeJson, type TranscriptEntry } from "./core";
-import { prepareAgentPage, type ToolEnv } from "./tools";
+import { prepareAgentPage, type RecordedAction, type ToolEnv } from "./tools";
 import { agentContextOptions } from "./browser";
 import { walkingSystem } from "./instructions";
 import { putScreenshot, putText, walkImageWindow, type AgentEnv } from "./env";
@@ -110,6 +110,9 @@ export async function walkOneJourney(args: {
     let stepOrder = 0;
     let testWritten = false;
     let lastScreenshot: { storageUrl: string; sha256: string } | null = null;
+    // CHE-129: navigate/click/fill accumulate here between report_step calls;
+    // each report drains what ran since the last one into that step's row.
+    const actionTrail: RecordedAction[] = [];
 
     const toolEnv: ToolEnv = {
       page,
@@ -147,6 +150,7 @@ export async function walkOneJourney(args: {
       // hold across journeys — an earlier one may already have been told no.
       credentials: { rejected: await credentialsAlreadyRejected(env, run.id) },
       onCredentialRejected: (signature) => recordCredentialRejection(env, run.id, signature),
+      actionTrail,
       onScreenshot: async (buffer) => {
         const stored = await putScreenshot(env, buffer);
         lastScreenshot = stored;
@@ -155,6 +159,7 @@ export async function walkOneJourney(args: {
       },
       onReportStep: async (step) => {
         stepStatuses.push(step.status as StepStatus);
+        const trail = actionTrail.splice(0);
         await env.db.step.create({
           data: {
             journeyId: journey.id,
@@ -166,6 +171,7 @@ export async function walkOneJourney(args: {
             consoleLog: step.consoleExcerpt ?? null,
             networkLog: step.networkExcerpt ?? null,
             unverifiedReason: step.unverifiedReason ?? null,
+            actions: trail.length ? JSON.stringify(trail) : null,
             screenshotUrl: lastScreenshot?.storageUrl ?? null,
             evidence: lastScreenshot
               ? { create: [{ type: "screenshot", ...lastScreenshot }] }

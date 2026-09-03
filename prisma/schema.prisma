@@ -173,6 +173,13 @@ model Journey {
   // this run walked it itself. A plain id, not a relation: the source run may be
   // pruned one day and losing provenance must not cascade-delete the journey.
   carriedFromRunId String?
+  // CHE-129 spike: after the LLM walked this journey, the recorded Step.actions
+  // were replayed against the live app with no model in the loop, and this is
+  // how that went — reproduced | no_actions | refused | diverged | errored.
+  // Internal measurement only (never rendered, never in a verdict or email):
+  // it decides whether walking can stop re-discovering yesterday's path.
+  replayStatus String?
+  replayNote   String?
 
   steps   Step[]
 
@@ -195,6 +202,12 @@ model Step {
   unverifiedReason String?
   consoleLog String?
   networkLog String? // HAR excerpt
+  // CHE-129: the machine actions (navigate/click/fill) the walk executed for
+  // this step, as JSON — the part of the walk a browser can redo without a
+  // model. Prose above is for people; this is for replay. Credentials stay as
+  // {{TEST_EMAIL}}/{{TEST_PASSWORD}} placeholders. NULL when the step reported
+  // nothing executable (a read-only observation) or predates the column.
+  actions String?
 
   evidence   Evidence[]
 

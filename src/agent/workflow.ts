@@ -26,11 +26,12 @@ import { parseJson } from "@/lib/json";
 import type { RunEvent, RunPhase } from "@/lib/types";
 import { makeAgentEnv, putText, type AgentBindings, type AgentEnv } from "./env";
 import { makeLlm, type UsageTotals } from "./llm";
-import { launchAgentBrowser, surfaceScan } from "./browser";
+import { agentContextOptions, launchAgentBrowser, surfaceScan } from "./browser";
 import { LlmBudgetError } from "./core";
 import { dedupKeyForFinding } from "@/lib/tracker/file";
 import { discoverApp, type ProposedJourney, type RunInput } from "./discovery";
 import { walkOneJourney, type WalkRun } from "./execution";
+import { parseActions, replayJourney, type ReplayResult } from "./journey-replay";
 import { synthesizeVerdict, type SynthesizedFinding } from "./synthesis";
 import { autoFileFindings } from "./autofile";
 import { fileCapabilityGaps } from "./capability-gaps";
@@ -692,6 +693,31 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
         await step.do("notify", () => notifyVerdictReady(env, this.env, run, verdict));
       }
 
+      // CHE-129 spike — redo each walked journey's recorded actions with no
+      // model in the loop and write down how far a browser got on its own. This
+      // is our measurement of whether walking can stop re-discovering
+      // yesterday's path; it is not news about the customer's product, so it
+      // appends no events and touches nothing the verdict, the findings, the
+      // cost ledger or the email read. It sits HERE, not after walking, because
+      // the owner's rule is that no optimisation may move the verdict time: by
+      // now the run is completed and the email is out, so up to three minutes
+      // per journey costs the customer nothing — and it sits BEFORE cleanup
+      // because that step clears the test password on one-off runs, and a
+      // sign-in replay needs it. Only journeys walked THIS run are measured: a
+      // carried journey has nothing new to reproduce. Every failure ends up in
+      // replayStatus, never in the run.
+      for (const { order } of walkList) {
+        await step.do(`replay-audit-${order}`, async () => {
+          try {
+            await auditJourneyReplay(env, walkRun, order);
+          } catch (err) {
+            console.warn(
+              `[replay-audit] journey ${order}: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+        });
+      }
+
       // Privacy: clear test credentials after a terminal completion, unless a
       // Watch retains them for recurring runs.
       await step.do("cleanup", async () => {
@@ -740,6 +766,57 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
       throw err;
     }
   }
+}
+
+// ─── Replay audit (CHE-129 spike) ────────────────────────────────────────────
+// Loads what the walk recorded for one journey, replays it, and stores the
+// outcome on the journey. Never throws past its own catch: a Browser Rendering
+// hiccup, a bad column, a D1 timeout — all of it becomes replayStatus
+// "errored" with the message in the note. A journey with nothing executable
+// is written "no_actions" without launching a browser.
+
+async function auditJourneyReplay(env: AgentEnv, run: WalkRun, order: number): Promise<void> {
+  const journey = await env.db.journey.findFirst({
+    where: { runId: run.id, order, carriedFromRunId: null },
+    select: {
+      id: true,
+      title: true,
+      steps: { orderBy: { order: "asc" }, select: { order: true, label: true, actions: true } },
+    },
+  });
+  if (!journey) return;
+
+  const write = (r: Pick<ReplayResult, "status" | "note">) =>
+    env.db.journey.update({
+      where: { id: journey.id },
+      data: { replayStatus: r.status, replayNote: r.note.slice(0, 500) },
+    });
+
+  if (!journey.steps.some((s) => parseActions(s.actions).length > 0)) {
+    const n = journey.steps.length;
+    await write({
+      status: "no_actions",
+      note: `no recorded actions on any of ${n} step${n === 1 ? "" : "s"}`,
+    });
+    return;
+  }
+
+  let result: Pick<ReplayResult, "status" | "note">;
+  try {
+    const browser = await launchAgentBrowser(env);
+    try {
+      result = await replayJourney(env, browser, run, journey, agentContextOptions(browser));
+    } finally {
+      await browser.close().catch(() => {});
+    }
+  } catch (err) {
+    result = {
+      status: "errored",
+      note: `replay errored: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+  await write(result);
+  console.log(`[replay-audit] journey ${order} "${journey.title}": ${result.status} — ${result.note}`);
 }
 
 // ─── Mode-ladder event trail (CHE-51 + CHE-57) ───────────────────────────────
