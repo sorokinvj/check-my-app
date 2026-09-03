@@ -36,6 +36,8 @@ jobs:
       - run: npm run verify:survey
       # CHE-133: discovery confirms the known map on watched apps instead of remapping.
       - run: npm run verify:known-map
+      # CHE-134: a walk wraps up after the spec; its cap is sized to the journey; focus journeys walk first.
+      - run: npm run verify:walk-limits
       # Smoke-build the web worker via OpenNext (catches bundle/runtime issues).
       - run: npx opennextjs-cloudflare build
 

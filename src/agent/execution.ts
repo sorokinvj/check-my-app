@@ -14,6 +14,7 @@ import { putScreenshot, putText, walkImageWindow, type AgentEnv } from "./env";
 import { originOf, type ProposedJourney, type RunInput } from "./discovery";
 import { emptyUsage, isVisionModel, mergeUsage, type LlmConfig, type UsageTotals } from "./llm";
 import { credentialsAlreadyRejected, recordCredentialRejection } from "./credentials";
+import { WALK_WRAP_UP_ITERATIONS, walkingIterationCap } from "./limits";
 
 export interface WalkRun extends RunInput {
   id: string;
@@ -198,7 +199,24 @@ export async function walkOneJourney(args: {
         task: `Target app: ${run.targetUrl}\nWalk the journey now. Navigate to the target first.`,
         env: toolEnv,
         llm,
-        maxIterations: 50,
+        // CHE-134: sized to the journey. The cap was a flat 50 whatever the
+        // journey's length, and walks ran 25–40 calls each, output-token
+        // dominated (COSTS.md). A 3-step journey gets 27, an 8-step one 50.
+        maxIterations: walkingIterationCap(proposed.steps.length),
+        // CHE-134: the spec is the last artefact a journey produces; after it
+        // the walk got no further evidence, only the bill. Three more turns
+        // cover cleanup (a create_cleanup walk must delete its record and
+        // call record_deleted before finishing, CHE-90) and the summary.
+        // Model-facing only: report_step is untouched, so nothing here can
+        // reach Step.attempted/observed or any other customer-facing text.
+        wrapUpAfter: {
+          tool: "write_e2e_test",
+          extraIterations: WALK_WRAP_UP_ITERATIONS,
+          note:
+            "The journey is recorded. Wrap up now: if you created anything, delete it " +
+            "and call record_deleted; then reply with the 1-2 sentence summary and make " +
+            "no further tool calls.",
+        },
         // E3 (CHE-58): walking is act/observe, not deep reasoning — drop
         // adaptive thinking to cut output tokens/call. Verdict calibration
         // still happens in synthesis (Opus, thinking on).
