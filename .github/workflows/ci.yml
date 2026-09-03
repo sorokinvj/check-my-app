@@ -38,6 +38,8 @@ jobs:
       - run: npm run verify:known-map
       # CHE-134: a walk wraps up after the spec; its cap is sized to the journey; focus journeys walk first.
       - run: npm run verify:walk-limits
+      # CHE-135: discovery runs lean — thinking off, no screenshots in context — behind DISCOVERY_LEAN.
+      - run: npm run verify:discovery-lean
       # Smoke-build the web worker via OpenNext (catches bundle/runtime issues).
       - run: npx opennextjs-cloudflare build
 

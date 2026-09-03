@@ -14,7 +14,8 @@ import {
   discoverySystem,
   type KnownMap,
 } from "./instructions";
-import { putScreenshot, type AgentEnv } from "./env";
+import { discoveryLeanEnabled, putScreenshot, type AgentEnv } from "./env";
+import { discoveryLoopMode } from "./discovery-mode";
 import { emptyUsage, isVisionModel, mergeUsage, type LlmConfig, type UsageTotals } from "./llm";
 import { credentialsAlreadyRejected, recordCredentialRejection } from "./credentials";
 
@@ -95,13 +96,24 @@ export async function discoverApp(args: {
     notes.push(text);
   };
 
+  // CHE-135: discovery is exploration, not reasoning-critical — its output is
+  // validated by the structured extraction below regardless of how the
+  // exploration went. Lean mode drops adaptive thinking and keeps screenshot
+  // JPEGs out of the context (E5 in COSTS.md, the discovery counterpart of E3
+  // and CHE-130). DISCOVERY_LEAN=off restores the previous behaviour for the
+  // A/B without a deploy.
+  const mode = discoveryLoopMode(discoveryLeanEnabled(env.bindings), isVisionModel(llm.navModel));
+  if (mode.thinking === "off") {
+    console.log("[discovery] lean mode: thinking off, no screenshots in context");
+  }
+
   const context = await browser.newContext(agentContextOptions(browser));
   const page = await context.newPage();
 
   const toolEnv: ToolEnv = {
     page,
     targetOrigin: originOf(run.targetUrl),
-    visionScreenshots: isVisionModel(llm.navModel),
+    visionScreenshots: mode.visionScreenshots,
     // Discovery only maps the app — creation belongs to the walk.
     writeAllowed: false,
     testEmail: run.testEmail ?? undefined,
@@ -129,6 +141,8 @@ export async function discoverApp(args: {
       env: toolEnv,
       llm,
       maxIterations: known ? DISCOVERY_ITERATIONS_WITH_MEMORY : DISCOVERY_ITERATIONS,
+      thinking: mode.thinking,
+      imageWindow: mode.imageWindow,
       onProgress,
     });
 

@@ -23,8 +23,9 @@ export interface AgentLoopArgs {
   onProgress?: (note: string) => Promise<void>;
   // CHE-130: how many of the most recent screenshots stay in the conversation
   // as image blocks. Older ones are replaced with a text placeholder the moment
-  // they fall out of the window. `undefined` = never trim (discovery keeps the
-  // pre-CHE-130 behaviour; its own window is a later ticket, CHE-135).
+  // they fall out of the window. `undefined` = never trim (the pre-CHE-130
+  // behaviour, which discovery keeps only under DISCOVERY_LEAN=off — by default
+  // discovery runs image-free with a window of 0, CHE-135).
   imageWindow?: number;
   // CHE-134: once the model has called `tool` (for walking, write_e2e_test —
   // the spec is the last artefact a journey produces), the loop allows at most

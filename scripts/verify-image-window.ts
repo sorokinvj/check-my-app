@@ -148,7 +148,8 @@ function stubPage(): ToolEnv {
 async function main() {
   // 0 — through the loop itself: six screenshot turns with a window of 3 must
   // leave exactly the last three images in the returned conversation, and a
-  // loop without a window must leave all six (discovery's behaviour, CHE-135).
+  // loop without a window must leave all six (discovery's behaviour only under
+  // DISCOVERY_LEAN=off; by default it runs image-free, CHE-135).
   const walked = await runAgentLoop({
     system: "test",
     task: "walk",
