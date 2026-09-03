@@ -38,6 +38,7 @@ import { dedupKeyForFinding } from "@/lib/tracker/file";
 import { discoverApp, type KnownMap, type ProposedJourney, type RunInput } from "./discovery";
 import { loadKnownMap } from "./known-map";
 import { walkOneJourney, type WalkRun } from "./execution";
+import { orderByFocus } from "./limits";
 import { parseActions, replayJourney, type ReplayResult } from "./journey-replay";
 import { synthesizeVerdict, type SynthesizedFinding } from "./synthesis";
 import { autoFileFindings } from "./autofile";
@@ -473,7 +474,14 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
       // the picture the owner already knows.
       const walkList: Array<{ order: number; proposed: ProposedJourney }> = plan.taken
         ? plan.rewalk.map((r) => ({ order: r.order, proposed: { title: r.title, steps: r.steps } }))
-        : (discovery?.journeys ?? []).map((proposed, i) => ({ order: i, proposed }));
+        : // CHE-134: journeys covering the owner's focus areas walk first, so a
+          // budget cut (an iteration cap, a run time limit, a retry that gives
+          // up) lands on the journeys they did not single out. `order` is
+          // assigned after the sort: it is the walk position, 0..n-1.
+          orderByFocus(discovery?.journeys ?? [], run.focusAreas).map((proposed, i) => ({
+            order: i,
+            proposed,
+          }));
 
       await step.do("walking-start", async () => {
         await transition(env, runId, "walking", {

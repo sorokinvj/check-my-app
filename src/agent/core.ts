@@ -26,6 +26,14 @@ export interface AgentLoopArgs {
   // they fall out of the window. `undefined` = never trim (discovery keeps the
   // pre-CHE-130 behaviour; its own window is a later ticket, CHE-135).
   imageWindow?: number;
+  // CHE-134: once the model has called `tool` (for walking, write_e2e_test —
+  // the spec is the last artefact a journey produces), the loop allows at most
+  // `extraIterations` more turns and tells the model so by appending `note`
+  // to that tool's result. Walks used to keep exploring or re-reading pages
+  // after the spec until the cap, at 25–40 calls per journey (COSTS.md). The
+  // extra turns execute tools normally: a create_cleanup walk still has to
+  // delete what it created and call record_deleted (CHE-90).
+  wrapUpAfter?: { tool: string; extraIterations: number; note: string };
 }
 
 export interface AgentLoopResult {
@@ -74,6 +82,7 @@ export async function runAgentLoop(args: AgentLoopArgs): Promise<AgentLoopResult
     thinking = "adaptive",
     onProgress,
     imageWindow,
+    wrapUpAfter,
   } = args;
   const messages: Anthropic.MessageParam[] = [{ role: "user", content: task }];
   const transcript: TranscriptEntry[] = [];
@@ -81,8 +90,11 @@ export async function runAgentLoop(args: AgentLoopArgs): Promise<AgentLoopResult
   let finalText = "";
   let costUsd = 0;
   const usage = emptyUsage();
+  // CHE-134: the effective cap. Starts at maxIterations and only ever comes
+  // down — a second call to the wrap-up tool must not hand the loop new turns.
+  let cap = maxIterations;
 
-  while (iterations < maxIterations) {
+  while (iterations < cap) {
     iterations += 1;
 
     // Prompt caching: breakpoint on the system block caches tools+system
@@ -148,6 +160,18 @@ export async function runAgentLoop(args: AgentLoopArgs): Promise<AgentLoopResult
         detail: result.slice(0, 800),
       });
 
+      // CHE-134: the note rides after the truncation so it is never the part
+      // that gets cut; the transcript above keeps the tool's own result only.
+      let resultText = result.slice(0, MAX_TOOL_RESULT_CHARS);
+      if (wrapUpAfter && tool.name === wrapUpAfter.tool) {
+        resultText += `\n\n${wrapUpAfter.note}`;
+        const wrapCap = Math.min(cap, iterations + Math.max(0, wrapUpAfter.extraIterations));
+        if (wrapCap < cap) {
+          cap = wrapCap;
+          console.log(`[agent] wrap-up after ${tool.name}: ${cap - iterations} iterations left`);
+        }
+      }
+
       // Vision (CHE-70): a screenshot's JPEG rides along as an image block so
       // the model judges what it actually photographed, not just the DOM.
       const jpeg = env.pendingScreenshotJpegB64;
@@ -161,9 +185,9 @@ export async function runAgentLoop(args: AgentLoopArgs): Promise<AgentLoopResult
                 type: "image",
                 source: { type: "base64", media_type: "image/jpeg", data: jpeg },
               },
-              { type: "text", text: result.slice(0, MAX_TOOL_RESULT_CHARS) },
+              { type: "text", text: resultText },
             ]
-          : result.slice(0, MAX_TOOL_RESULT_CHARS),
+          : resultText,
       });
 
       if (tool.name === "report_step" && onProgress) {
