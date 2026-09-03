@@ -28,10 +28,14 @@ jobs:
   review:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # A review that can only read cannot leave a finding. The inline comments
+    # ARE the output here — the shepherd counts unresolved review threads and
+    # would read a silent, permission-denied run as a clean one, which is how a
+    # gate merges a change nobody judged (CHE-122, the merge gate).
     permissions:
       contents: read
-      pull-requests: read
-      issues: read
+      pull-requests: write
+      issues: write
       id-token: write
     steps:
       - uses: actions/checkout@v6
