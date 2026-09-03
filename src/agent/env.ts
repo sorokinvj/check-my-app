@@ -39,6 +39,12 @@ export interface AgentBindings {
   // the pre-CHE-133 behaviour — an A/B rollback without a deploy, the same
   // pattern as WALK_IMAGE_WINDOW (CHE-130). Anything else → on.
   DISCOVERY_MEMORY?: string;
+  // CHE-135: whether discovery runs lean — adaptive thinking off and no
+  // screenshot JPEG in the model's context. Unset → on. "off" → the pre-CHE-135
+  // discovery (thinking on, every screenshot in context) — the A/B rollback
+  // without a deploy, the same pattern as DISCOVERY_MEMORY (CHE-133) and
+  // WALK_IMAGE_WINDOW (CHE-130). Anything else → on.
+  DISCOVERY_LEAN?: string;
 }
 
 export interface AgentEnv {
@@ -67,6 +73,13 @@ export function walkImageWindow(bindings: Pick<AgentBindings, "WALK_IMAGE_WINDOW
 // a typo must not silently put every watch back on the 55-iteration map.
 export function discoveryMemoryEnabled(bindings: Pick<AgentBindings, "DISCOVERY_MEMORY">): boolean {
   return bindings.DISCOVERY_MEMORY?.trim().toLowerCase() !== "off";
+}
+
+// CHE-135: parse DISCOVERY_LEAN. Only an explicit "off" restores the heavier
+// discovery — a typo must not silently put thinking and screenshots back into
+// every discovery call.
+export function discoveryLeanEnabled(bindings: Pick<AgentBindings, "DISCOVERY_LEAN">): boolean {
+  return bindings.DISCOVERY_LEAN?.trim().toLowerCase() !== "off";
 }
 
 // Store a screenshot in R2, content-addressed. Returns the web evidence URL.
