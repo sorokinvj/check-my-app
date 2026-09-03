@@ -47,10 +47,32 @@ brakes are `doer:hold` for one ticket and `doer:stop` for all of them.
 It was opt-in until 2026-09-03, which made "stopped, waiting for a person" the
 loop's normal state — the same manual button we refused when we chose the PR
 handoff over the Linear one, moved to the end of the pipeline instead of the
-middle. The owner decided this work should happen when the ticket was filed;
-asking again at the merge asks twice for one decision. What the merge does not
-decide is whether the problem is gone: that is still the next CheckMyApp run,
-walking the deployed product from outside.
+middle.
+
+Three things carry the default, and none of them is anybody's approval:
+
+- **the problem is evidence, not opinion.** A ticket here comes from a
+  CheckMyApp run against the deployed product — CHE-88 came out of run #100 with
+  a screenshot and a repro. Nobody's judgement started it;
+- **the gate is arithmetic.** Work exists outside `.doer/`, every check green
+  for this head, a verdict published for this head, zero unresolved threads,
+  rounds ≤ 3. There is no opinion in that list, and a person reading the same
+  green ticks adds none;
+- **the merge decides nothing about the problem.** `resolved` still comes only
+  from a later run walking the deployed site from outside.
+
+The honest counter-argument is not that a human should approve. It is that an
+automated judge can fail silently — which happened four times on 2026-09-03, in
+four different ways. Every one of them published **nothing**, and the gate
+requires a published verdict, so the gate held each time. A person on a merge
+button would not have caught any of them; they see the same green ticks.
+
+An earlier version of this paragraph justified the default by saying the owner
+had already approved the work when he filed the ticket. He had not: the queue's
+issues were opened through his account by agents, minutes before the dispatcher
+claimed them. The claim was invented to make the argument close, and it is
+recorded here because a rule resting on a made-up premise is worth less than no
+rule.
 
 ## What blocks a tick, on purpose
 
