@@ -50,6 +50,26 @@ Paid is only required for sustained Browser Rendering (>10 min/day).
 
 ---
 
+## Fixed monthly subscriptions
+
+Named by the owner, 2026-09-03. They were missing from this ledger entirely,
+which made every per-run number look like the whole cost — the floor is paid
+before a single run happens.
+
+| Service | What it buys | $/mo |
+|---------|--------------|------|
+| Linear | the CHE board; also the tracker the product files into and reads back | 19 |
+| Resend | verdict emails to owners | ~19 |
+| Cloudflare Workers Paid | account base for both workers (browser hours on top) | 5 |
+| ChatGPT Pro | Codex, the implementer half of the doer loop | owner's plan |
+| Claude | the reviewer half, via subscription token rather than per-call API | owner's plan |
+
+**Consequence for pricing.** ~$43/mo of named floor before any run. At the
+Growth tier's ~$0.61/week for a healthy watched app, the floor is what the
+first paying customers cover — not the marginal run.
+
+---
+
 ## Running spend log
 
 Append actual measured spend here as milestones progress. Keep it terse.
