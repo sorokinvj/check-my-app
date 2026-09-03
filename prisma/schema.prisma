@@ -100,6 +100,10 @@ model Run {
   // sign-in attempt (five of them locked a customer's account once) and marks
   // everything behind that login missing_access rather than broken.
   credentialsRejected Boolean @default(false)
+  // CHE-132: the free page survey this run took before deciding its mode.
+  // A plain id, no relation: snapshots are the app's history and must outlive
+  // any one run.
+  snapshotId    String?
 
   // M3: owner-scoping. Anonymous runs keep these null and stay reachable only
   // by their unguessable publicId — the multi-tenant layer is additive.
@@ -566,4 +570,51 @@ model LlmUsage {
   createdAt DateTime @default(now())
 
   @@index([runId])
+}
+
+// ─── App snapshots (CHE-132) ─────────────────────────────────────────────────
+// What the app's pages looked like to a plain fetch — no browser, no model —
+// taken at the start of every run. Two of them answer "did the app change since
+// the last check?", and that answer, not the calendar, decides whether a run
+// walks everything again (owner decision, 2026-09-03). The 7-day fuse in
+// replay.ts applies only when two snapshots cannot be compared.
+
+model AppSnapshot {
+  id       String  @id @default(cuid())
+  appSlug  String
+  appId    String?
+  // The run that took it. A plain id, not a relation — see Run.snapshotId.
+  runId    String?
+  takenAt  DateTime @default(now())
+
+  // sha256 over the sorted per-page content hashes plus the bundle list: equal
+  // fingerprints mean nothing served differently, whatever order it was seen in.
+  fingerprint String
+  // JSON SurveyPage[] — { url, path, status, title, hash, forms, links }.
+  pages       String
+  // JSON string[] — script URLs (same-origin and first-party CDN), deduped, sorted.
+  bundles     String
+  // Next.js build id when the app exposes one; the cleanest "a deploy happened".
+  buildId     String?
+  // JSON string[] — the stack signals lib/tech-signals read off the fetch.
+  tech        String
+  sitemapUrls Int     @default(0)
+  // The homepage answered 403/429/503 or a bot challenge to a plain fetch:
+  // nothing comparable was seen, so no comparison is made against this row.
+  blocked     Boolean @default(false)
+  // The page cap or the deadline stopped the survey with pages still
+  // unvisited. An unvisited page is unknown, not removed — so this row is
+  // never compared either, or a slow app would read as "changed" every day
+  // and the calendar would be back as a daily full run.
+  truncated   Boolean @default(false)
+
+  // Comparison with the snapshot before it. changed NULL = not comparable
+  // (first snapshot, or a blocked side); diff is JSON
+  // { addedPaths, removedPaths, changedPaths, bundlesChanged, buildIdChanged }.
+  previousId String?
+  changed    Boolean?
+  diff       String?
+
+  @@index([appSlug, takenAt])
+  @@index([appId, takenAt])
 }

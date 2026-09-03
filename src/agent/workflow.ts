@@ -6,6 +6,12 @@
 // per journey) → anatomy → writing (LLM synthesis + findings). Browser sessions
 // are per-phase. Transcript (secret-free) → R2; cost rolled into Run.costUsd.
 //
+// Every run starts with a SURVEY (CHE-132, ./survey.ts + ./snapshot.ts): a
+// plain fetch of the app's pages, no browser, no model, that records what the
+// app looks like and whether it changed since the last snapshot. The ladder
+// below reads that answer — a full walk happens when the app changed, not
+// when a week has passed.
+//
 // Watch runs get a mode ladder in front of that, cheapest rung first:
 //   1. SMOKE (CHE-51, ./replay.ts) — a free pre-check that can complete the run
 //      before a single token is spent. See that file for what it does and does
@@ -43,6 +49,13 @@ import { deliverSlack } from "@/lib/notify/slack";
 import { decryptSecret } from "@/lib/crypto";
 import type { TranscriptEntry } from "./core";
 import { shortLabel, smokeReplay, SMOKE_COST_USD, type SmokeReport } from "./replay";
+import {
+  mergeSurveyedPages,
+  NO_SURVEY,
+  surveyEvent,
+  takeSnapshot,
+  type SurveyOutcome,
+} from "./snapshot";
 import {
   carryJourney,
   partialBottomLine,
@@ -100,6 +113,26 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
     // non-terminal status is worse than a failed one — the scheduler treats it
     // as still in flight and never fires that Watch again.
     try {
+      // Survey (CHE-132): what the app's pages look like to a plain fetch, and
+      // whether that differs from the last snapshot. Free, under a minute, and
+      // the input every mode decision below reads. Swallowed on error like the
+      // other pre-flight rungs: a survey that could not run leaves the ladder
+      // exactly as it was before this step existed, never a failed run.
+      const survey = await step.do("survey", async (): Promise<SurveyOutcome> => {
+        try {
+          return await takeSnapshot(env, run);
+        } catch (err) {
+          const text = err instanceof Error ? err.message : String(err);
+          console.warn(`[survey] ${run.appSlug}: ${text}`);
+          return NO_SURVEY;
+        }
+      });
+      if (run.watchId) {
+        await step.do("survey-log", async () => {
+          await appendEvent(env, runId, "replay", surveyEvent(survey));
+        });
+      }
+
       // Reverse sync (CHE-61): fold the tracker's verdicts back in before any
       // mode decision. Done tickets queue a targeted re-verification (and veto
       // the smoke shortcut below — a smoke pass can't confirm a fix); Canceled
@@ -142,7 +175,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
           };
         }
         try {
-          return await smokeReplay(env, run);
+          return await smokeReplay(env, run, survey);
         } catch (err) {
           const text = err instanceof Error ? err.message : String(err);
           console.warn(`[replay] smoke check errored: ${text}`);
@@ -167,7 +200,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
           return { taken: false, reason: "the smoke check found trouble — re-walking every journey" };
         }
         try {
-          return await planPartialRun(env, run);
+          return await planPartialRun(env, run, survey);
         } catch (err) {
           const text = err instanceof Error ? err.message : String(err);
           console.warn(`[partial] planning errored: ${text}`);
@@ -505,7 +538,14 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
         };
         const tech = { ...safe.tech };
         if (scan.techSignals.length && !tech.frontend) tech.frontend = scan.techSignals.join(" · ");
-        const merged: AppAnatomy = { ...safe, tech };
+        // CHE-132: the survey saw every page a sitemap or the homepage links
+        // to; discovery names the ones it judged worth a journey. The pages
+        // discovery left out are still the customer's product, and the
+        // coverage line (CHE-107) can only count what the map mentions — so
+        // they go in, in the label shape coverage.ts matches on. Only when
+        // discovery ran: a reused map is the baseline's, not this run's.
+        const pages = plan.taken ? safe.pages : mergeSurveyedPages(safe.pages, survey);
+        const merged: AppAnatomy = { ...safe, pages, tech };
         await env.db.run.update({ where: { id: runId }, data: { anatomy: JSON.stringify(merged) } });
         return merged;
       });
@@ -836,7 +876,11 @@ function modeEvents(
     const pages = smoke.probes.map((p) => shortLabel(p.url, targetUrl)).join(" · ");
     events.push({
       icon: "info",
-      text: `Smoke check: re-visiting ${smoke.probes.length} known pages — ${pages}`,
+      text:
+        `Smoke check: re-visiting ${smoke.probes.length} known pages — ${pages}` +
+        (smoke.skipped > 0
+          ? ` (${smoke.skipped} more known page${smoke.skipped === 1 ? "" : "s"} left for the next check)`
+          : ""),
     });
     events.push(
       smoke.ok

@@ -28,6 +28,7 @@ export interface JanitorResult {
 
 export async function sweepTestAccounts(env: AgentEnv, now: Date = new Date()): Promise<JanitorResult> {
   const cutoff = new Date(now.getTime() - GRACE_HOURS * 60 * 60 * 1000);
+  await sweepOwnerlessSnapshots(env, cutoff);
   const stale = await env.db.app.findMany({
     where: { owner: { isTestAccount: true }, createdAt: { lt: cutoff } },
     select: { id: true, appSlug: true },
@@ -42,6 +43,11 @@ export async function sweepTestAccounts(env: AgentEnv, now: Date = new Date()): 
   await env.db.run.updateMany({ where: { appId: { in: ids } }, data: { appId: null, watchId: null } });
   await env.db.createdResource.updateMany({ where: { appId: { in: ids } }, data: { appId: null } });
   await env.db.issueLink.deleteMany({ where: { appId: { in: ids } } });
+  // CHE-132: the page snapshots are the app's baseline for "did it change?".
+  // Left behind, a re-registered self-check app would compare against a
+  // history that is not its own (rule 6: self-check state is disposable, in
+  // code).
+  await env.db.appSnapshot.deleteMany({ where: { appId: { in: ids } } });
   await env.db.watch.deleteMany({ where: { appId: { in: ids } } });
   await env.db.ticketPolicy.deleteMany({ where: { appId: { in: ids } } });
   await env.db.trackerIntegration.deleteMany({ where: { appId: { in: ids } } });
@@ -52,4 +58,28 @@ export async function sweepTestAccounts(env: AgentEnv, now: Date = new Date()): 
     `[janitor] removed ${stale.length} test-account app(s): ${stale.map((a) => a.appSlug).join(", ")}`,
   );
   return { appsRemoved: stale.length, watchesRemoved: watches, slugs: stale.map((a) => a.appSlug) };
+}
+
+// CHE-132: a signed-in one-off check has an owner but no App row, so the
+// snapshot it takes carries no appId and the app-keyed delete above never
+// reaches it. Those rows cannot be keyed by hostname either: rows without an
+// appId are the shared history of every anonymous check of that host, by
+// design, and deleting them by slug would erase other people's baselines. The
+// only key that is the test account's alone is the run that took the
+// snapshot. Bounded to runs that still point at one, and the pointer is
+// cleared afterwards so the set never grows.
+async function sweepOwnerlessSnapshots(env: AgentEnv, cutoff: Date): Promise<void> {
+  const runs = await env.db.run.findMany({
+    where: {
+      owner: { isTestAccount: true },
+      appId: null,
+      snapshotId: { not: null },
+      createdAt: { lt: cutoff },
+    },
+    select: { id: true },
+  });
+  if (runs.length === 0) return;
+  const runIds = runs.map((r) => r.id);
+  await env.db.appSnapshot.deleteMany({ where: { appId: null, runId: { in: runIds } } });
+  await env.db.run.updateMany({ where: { id: { in: runIds } }, data: { snapshotId: null } });
 }
