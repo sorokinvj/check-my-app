@@ -32,6 +32,7 @@
     "verify:machine": "node scripts/verify-machine.mjs",
     "verify:images": "tsx --tsconfig tsconfig.json scripts/verify-image-window.ts",
     "verify:replay": "tsx --tsconfig tsconfig.json scripts/verify-replay-actions.ts",
+    "verify:survey": "tsx --tsconfig tsconfig.json scripts/verify-survey.ts",
     "cost:trend": "node scripts/cost-trend.mjs"
   },
   "dependencies": {

@@ -24,12 +24,15 @@
 //     run we copied from — so a carry chain can never launder a two-week-old
 //     walk into "checked yesterday".
 //   - Carried evidence expires on the same clock as the smoke path
-//     (FULL_RUN_MAX_AGE_DAYS). One stale journey sends the whole run full.
+//     (FULL_RUN_MAX_AGE_DAYS) — and since CHE-132 on the same gate: an app the
+//     survey saw unchanged is never sent full for age alone, a changed one
+//     always is, and the clock applies only when nothing could be compared.
 //
 // Bias on every uncertainty, as in replay.ts: fall through to the full run.
 
 import type { AgentEnv } from "./env";
 import { FULL_RUN_MAX_AGE_DAYS, findLastWalkedRun } from "./replay";
+import { fullRunGate, gateInputFrom, type SurveyOutcome } from "./snapshot";
 
 // The only journey statuses worth carrying: "ok" (everything worked) and
 // "partial" (everything attempted worked, some steps went unverified). Anything
@@ -88,6 +91,7 @@ export type PartialDecision = PartialPlan | PartialSkipped;
 export async function planPartialRun(
   env: AgentEnv,
   run: { id: string; watchId: string | null },
+  survey?: SurveyOutcome | null,
   now: Date = new Date(),
 ): Promise<PartialDecision> {
   if (!run.watchId) return { taken: false, reason: "one-off check — nothing to carry forward" };
@@ -100,10 +104,14 @@ export async function planPartialRun(
     return { taken: false, reason: "no earlier walked run to build on" };
   }
   const baselineAge = ageInDays(baseline.completedAt, now);
-  if (baselineAge >= FULL_RUN_MAX_AGE_DAYS) {
+  const gate = fullRunGate(gateInputFrom(survey, baselineAge, FULL_RUN_MAX_AGE_DAYS));
+  if (gate.force) {
     return {
       taken: false,
-      reason: `the last real walk was ${Math.floor(baselineAge)} days ago — time for a full check`,
+      reason:
+        gate.cause === "stale"
+          ? `the last real walk was ${Math.floor(baselineAge)} days ago — time for a full check`
+          : gate.reason,
     };
   }
 
@@ -195,7 +203,9 @@ export async function planPartialRun(
       return { taken: false, reason: `couldn't date the evidence behind "${j.title}"` };
     }
     const age = ageInDays(source.completedAt, now);
-    if (age >= FULL_RUN_MAX_AGE_DAYS) {
+    // Same gate as above: only a journey whose evidence cannot be compared
+    // against anything expires on age.
+    if (fullRunGate(gateInputFrom(survey, age, FULL_RUN_MAX_AGE_DAYS)).force) {
       return {
         taken: false,
         reason:

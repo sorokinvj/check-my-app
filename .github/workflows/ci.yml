@@ -32,6 +32,8 @@ jobs:
       - run: npm run verify:images
       # CHE-129: recorded actions carry no secret and replay classifies honestly.
       - run: npm run verify:replay
+      # CHE-132: the page survey sees change and only change; a full walk is forced by change, not by the calendar.
+      - run: npm run verify:survey
       # Smoke-build the web worker via OpenNext (catches bundle/runtime issues).
       - run: npx opennextjs-cloudflare build
 

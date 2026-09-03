@@ -21,8 +21,9 @@
 //   3. every one of them must answer below HTTP 500 and actually load,
 //   4. no uncaught JS exceptions, no console-error burst.
 // It proves the app is up and its known pages still serve. It proves nothing
-// about whether the journeys still work — that's what the weekly forced full
-// run (and any red smoke) is for.
+// about whether the journeys still work — that's what a full run is for, and
+// since CHE-132 a full run is forced when the page survey says the app
+// changed, not on a weekly calendar.
 //
 // Bias on every uncertainty: fall through to the full run. A false alarm costs
 // $0.53; a missed regression costs the owner's trust.
@@ -34,16 +35,22 @@ import { normalizeAnatomy } from "@/lib/anatomy";
 import { parseJson } from "@/lib/json";
 import { agentContextOptions, applyNameShim, launchAgentBrowser } from "./browser";
 import { putScreenshot, type AgentEnv } from "./env";
+import { fullRunGate, gateInputFrom, smokeTargetsFromSnapshot, type SurveyOutcome } from "./snapshot";
 
 // Browser-time only — no tokens are spent on a smoke pass. Recorded so a run's
 // cost column is never a lie by omission and the ledger still sums correctly.
 export const SMOKE_COST_USD = 0.01;
 
-// Drift can't hide behind green smoke forever: once the last real walk is this
-// old, the next watch run is a full one no matter how healthy the pages look.
-// Shared with the partial mode (CHE-57), which carries journeys forward off the
-// same evidence and must expire on the same clock — one drift bound for the
-// whole mode ladder, not two that can disagree.
+// The fuse (CHE-132). Until 2026-09-03 this was the calendar: once the last
+// real walk was this old, the next watch run was a full one no matter how
+// healthy the pages looked. The owner's decision is that a full walk happens
+// when the app CHANGED, and the page survey (survey.ts / snapshot.ts) now
+// answers that from a plain fetch — so this bound applies only when two
+// snapshots cannot be compared: the first snapshot of an app, a blocked
+// homepage, a survey that errored. Still shared with the partial mode
+// (CHE-57), which carries journeys forward off the same evidence and must
+// expire on the same clock — one drift bound for the whole ladder, not two
+// that can disagree.
 export const FULL_RUN_MAX_AGE_DAYS = 7;
 // How far back to look for that last real walk. Comfortably more than
 // FULL_RUN_MAX_AGE_DAYS of daily runs, so the search never ends early on a
@@ -56,9 +63,13 @@ const FULL_RUN_LOOKBACK = 12;
 // is not a baseline.
 const REPLAYABLE_VERDICTS: Verdict[] = ["all_good", "mostly_ok"];
 
-// Time budget: homepage + this many pages at ~20s worst case keeps the single
-// Browser Rendering session inside a couple of minutes.
-const MAX_SMOKE_PAGES = 6;
+// Time budget. The survey (CHE-132) hands the smoke pass every page it saw
+// serve, so the cap is by pages AND by wall clock: the ladder was six pages
+// at ~20 s worst case, and thirty pages at that worst case would move the
+// verdict email, which the owner ruled out. Probing stops when the budget is
+// spent; the pages left over are counted, never claimed healthy.
+const MAX_SMOKE_PAGES = 30;
+const PROBE_BUDGET_MS = 90_000;
 const HOME_TIMEOUT_MS = 30_000;
 const PAGE_TIMEOUT_MS = 20_000;
 // Let the homepage's JS actually run before we judge its console.
@@ -102,6 +113,8 @@ export interface SmokeReport {
   appLens: string | null;
   anatomy: string | null;
   probes: PageProbe[];
+  /** Known pages left unvisited because the probe budget ran out (CHE-132). */
+  skipped: number;
   failures: string[];
   consoleErrors: number;
   pageErrors: number;
@@ -115,6 +128,7 @@ export type SmokeResult = SmokeSkipped | SmokeReport;
 export async function smokeReplay(
   env: AgentEnv,
   run: SmokeRun,
+  survey?: SurveyOutcome | null,
   now: Date = new Date(),
 ): Promise<SmokeResult> {
   if (!run.watchId) return { taken: false, reason: "one-off check — nothing to replay against" };
@@ -141,13 +155,12 @@ export async function smokeReplay(
   if (!full?.completedAt) {
     return { taken: false, reason: "no recent full agent check to carry forward" };
   }
+  // CHE-132: the survey decides. A changed app gets a full walk whatever its
+  // age; an unchanged one never gets one for age alone; with no comparison
+  // the seven-day fuse holds as it always did.
   const ageDays = (now.getTime() - full.completedAt.getTime()) / 86_400_000;
-  if (ageDays >= FULL_RUN_MAX_AGE_DAYS) {
-    return {
-      taken: false,
-      reason: `last full check was ${Math.floor(ageDays)} days ago — time for another one`,
-    };
-  }
+  const gate = fullRunGate(gateInputFrom(survey, ageDays, FULL_RUN_MAX_AGE_DAYS));
+  if (gate.force) return { taken: false, reason: gate.reason };
 
   // "Specs missing → full run": with nothing recorded there is nothing to
   // re-visit, and a homepage-only smoke pass would be worth less than its
@@ -162,11 +175,19 @@ export async function smokeReplay(
     return { taken: false, reason: "no recorded specs for this app yet" };
   }
 
-  const targets = smokeTargets(
-    run.targetUrl,
-    specs.map((s) => s.content),
-    normalizeAnatomy(parseJson<unknown>(full.anatomy)),
-  );
+  // Specs and anatomy say where the journeys went; the survey says what else
+  // serves. Union, deduped, specs first so the pages a journey depends on are
+  // probed before the budget can run out.
+  const targets = [
+    ...new Set([
+      ...smokeTargets(
+        run.targetUrl,
+        specs.map((s) => s.content),
+        normalizeAnatomy(parseJson<unknown>(full.anatomy)),
+      ),
+      ...smokeTargetsFromSnapshot(survey?.snapshot, run.targetUrl),
+    ]),
+  ].slice(0, MAX_SMOKE_PAGES);
   // Specs that navigate nowhere we can pin down (and an anatomy we couldn't
   // read paths out of) leave only the homepage. Same reasoning as no specs at
   // all: "the front door opens" is not enough to skip a day's check on.
@@ -306,6 +327,7 @@ function rebase(raw: string, origin: string): string | null {
 
 interface ProbeOutcome {
   probes: PageProbe[];
+  skipped: number;
   failures: string[];
   consoleErrors: number;
   pageErrors: number;
@@ -347,7 +369,12 @@ async function probePages(
       }
     }
 
+    // The budget is wall clock from the first navigation. A page that is not
+    // probed is not counted anywhere but `skipped` — "N pages healthy" names
+    // only pages actually visited.
+    const startedAt = Date.now();
     for (const url of targets) {
+      if (Date.now() - startedAt >= PROBE_BUDGET_MS) break;
       probes.push(await probe(page, url, PAGE_TIMEOUT_MS));
     }
   } finally {
@@ -368,7 +395,14 @@ async function probePages(
     failures.push(`${consoleErrors} console errors while loading the pages`);
   }
 
-  return { probes, failures, consoleErrors, pageErrors: uncaught.length, screenshotUrl };
+  return {
+    probes,
+    skipped: targets.length - (probes.length - 1),
+    failures,
+    consoleErrors,
+    pageErrors: uncaught.length,
+    screenshotUrl,
+  };
 }
 
 async function probe(page: Page, url: string, timeout: number): Promise<PageProbe> {

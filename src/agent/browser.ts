@@ -6,6 +6,7 @@
 
 import { launch } from "@cloudflare/playwright";
 import type { Browser, Page } from "@cloudflare/playwright";
+import { detectTech } from "@/lib/tech-signals";
 import { putScreenshot, type AgentEnv } from "./env";
 
 export async function launchAgentBrowser(env: AgentEnv): Promise<Browser> {
@@ -42,26 +43,6 @@ export interface SurfaceScanResult {
   screenshotUrl: string | null;
 }
 
-const HEADER_SIGNALS: Array<[string, RegExp, string]> = [
-  ["x-powered-by", /next\.js/i, "Next.js"],
-  ["server", /vercel/i, "Vercel"],
-  ["server", /cloudflare/i, "Cloudflare"],
-  ["x-vercel-id", /.+/, "Vercel"],
-  ["cf-ray", /.+/, "Cloudflare"],
-];
-
-const HTML_SIGNALS: Array<[RegExp, string]> = [
-  [/__NEXT_DATA__|\/_next\//, "Next.js"],
-  [/data-reactroot|react-dom/i, "React"],
-  [/__NUXT__/, "Nuxt"],
-  [/ng-version/, "Angular"],
-  [/cdn\.tailwindcss|tailwind/i, "Tailwind"],
-  [/supabase/i, "Supabase"],
-  [/firebaseapp|firebaseio/i, "Firebase"],
-  [/js\.stripe\.com/i, "Stripe"],
-  [/posthog/i, "Posthog"],
-];
-
 export async function surfaceScan(
   env: AgentEnv,
   browser: Browser,
@@ -72,13 +53,10 @@ export async function surfaceScan(
   await applyNameShim(page);
   try {
     const response = await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
-    const signals = new Set<string>();
-    const headers = response?.headers() ?? {};
-    for (const [h, test, label] of HEADER_SIGNALS) {
-      if (headers[h] && test.test(headers[h])) signals.add(label);
-    }
-    const html = await page.content();
-    for (const [test, label] of HTML_SIGNALS) if (test.test(html)) signals.add(label);
+    // The signal tables live in lib/tech-signals (CHE-132) so the free page
+    // survey reads the same stack off a plain fetch that this scan reads off
+    // the browser response.
+    const signals = detectTech(response?.headers() ?? {}, await page.content());
 
     const origin = new URL(targetUrl).origin;
     const internalLinkCount = await page
@@ -106,7 +84,7 @@ export async function surfaceScan(
 
     return {
       status: response?.status() ?? null,
-      techSignals: [...signals],
+      techSignals: signals,
       internalLinkCount,
       screenshotUrl,
     };
