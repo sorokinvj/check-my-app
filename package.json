@@ -36,6 +36,7 @@
     "verify:known-map": "tsx --tsconfig tsconfig.json scripts/verify-known-map.ts",
     "verify:walk-limits": "tsx --tsconfig tsconfig.json scripts/verify-walk-limits.ts",
     "verify:discovery-lean": "tsx --tsconfig tsconfig.json scripts/verify-discovery-lean.ts",
+    "verify:knowledge": "tsx --tsconfig tsconfig.json scripts/verify-knowledge.ts",
     "cost:trend": "node scripts/cost-trend.mjs"
   },
   "dependencies": {
