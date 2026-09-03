@@ -8,7 +8,12 @@ import type { AppAnatomy } from "@/lib/types";
 import { runAgentLoop, finalizeStructured, type TranscriptEntry } from "./core";
 import { prepareAgentPage, type ToolEnv } from "./tools";
 import { agentContextOptions } from "./browser";
-import { discoverySystem } from "./instructions";
+import {
+  DISCOVERY_ITERATIONS,
+  DISCOVERY_ITERATIONS_WITH_MEMORY,
+  discoverySystem,
+  type KnownMap,
+} from "./instructions";
 import { putScreenshot, type AgentEnv } from "./env";
 import { emptyUsage, isVisionModel, mergeUsage, type LlmConfig, type UsageTotals } from "./llm";
 import { credentialsAlreadyRejected, recordCredentialRejection } from "./credentials";
@@ -34,6 +39,12 @@ export interface ProposedJourney {
   title: string;
   steps: string[];
 }
+
+// CHE-133: the map from the last full check of a watched app, and the two
+// iteration budgets (55 from scratch, 20 when confirming). They live in
+// instructions.ts because that module is pure and the verify script asserts on
+// them from Node; re-exported here so discovery's contract stays in one place.
+export { DISCOVERY_ITERATIONS, DISCOVERY_ITERATIONS_WITH_MEMORY, type KnownMap };
 
 export interface DiscoveryResult {
   journeys: ProposedJourney[];
@@ -61,10 +72,15 @@ export async function discoverApp(args: {
   llm: LlmConfig;
   browser: Browser;
   run: RunInput;
+  // CHE-133: when present, discovery confirms this map instead of redrawing
+  // it — a shorter prompt-driven pass and a smaller iteration budget. The
+  // extraction ladder below is unchanged: the model's output is validated the
+  // same way whether it explored from zero or from memory.
+  known?: KnownMap;
   onLiveScreenshot?: (url: string) => Promise<void>;
   onProgress?: (note: string) => Promise<void>;
 }): Promise<DiscoveryResult> {
-  const { env, llm, browser, run, onLiveScreenshot, onProgress } = args;
+  const { env, llm, browser, run, known, onLiveScreenshot, onProgress } = args;
   const empty: DiscoveryResult = {
     journeys: [],
     anatomy: { pages: [], actions: [], services: [], tech: {} },
@@ -108,11 +124,11 @@ export async function discoverApp(args: {
 
   try {
     const result = await runAgentLoop({
-      system: discoverySystem(run),
+      system: discoverySystem(run, known),
       task: `Target app: ${run.targetUrl}\nStart by navigating there, read the page, then explore.`,
       env: toolEnv,
       llm,
-      maxIterations: 55,
+      maxIterations: known ? DISCOVERY_ITERATIONS_WITH_MEMORY : DISCOVERY_ITERATIONS,
       onProgress,
     });
 

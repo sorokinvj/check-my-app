@@ -34,6 +34,11 @@ export interface AgentBindings {
   // can be rolled back with a var change instead of a deploy. A positive
   // integer → that many. Anything else → the default 3.
   WALK_IMAGE_WINDOW?: string;
+  // CHE-133: whether a full run of a watched app gives discovery the map from
+  // the last full check. Unset → on. "off" → every full run maps from scratch,
+  // the pre-CHE-133 behaviour — an A/B rollback without a deploy, the same
+  // pattern as WALK_IMAGE_WINDOW (CHE-130). Anything else → on.
+  DISCOVERY_MEMORY?: string;
 }
 
 export interface AgentEnv {
@@ -56,6 +61,12 @@ export function walkImageWindow(bindings: Pick<AgentBindings, "WALK_IMAGE_WINDOW
   if (raw.toLowerCase() === "off") return undefined;
   const n = Number(raw);
   return Number.isInteger(n) && n > 0 ? n : DEFAULT_WALK_IMAGE_WINDOW;
+}
+
+// CHE-133: parse DISCOVERY_MEMORY. Only an explicit "off" disables memory —
+// a typo must not silently put every watch back on the 55-iteration map.
+export function discoveryMemoryEnabled(bindings: Pick<AgentBindings, "DISCOVERY_MEMORY">): boolean {
+  return bindings.DISCOVERY_MEMORY?.trim().toLowerCase() !== "off";
 }
 
 // Store a screenshot in R2, content-addressed. Returns the web evidence URL.

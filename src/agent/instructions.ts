@@ -1,4 +1,6 @@
 import { CUSTOMER_LANGUAGE_RULES } from "@/lib/verdict-language";
+import type { AppAnatomy } from "@/lib/types";
+import type { ProposedJourney } from "./discovery";
 
 // System-prompt assembly. The worker's contract is textual: the standing
 // mission + the client's own instructions (scope hints, notes) compose into the
@@ -21,6 +23,38 @@ type Run = {
   writeAllowed?: boolean;
   testMarker?: string;
 };
+
+// CHE-133: what the last full check of a watched app already established. A
+// full run used to start discovery from zero every time — up to 55 iterations,
+// ~9% of the run — although the app was mapped yesterday. With the map in the
+// prompt, discovery's job is to confirm it, not redraw it.
+//
+// Defined here rather than in discovery.ts because this module is pure:
+// discovery.ts reaches `cloudflare:workers` through the browser launcher and
+// cannot be loaded by the Node verify script that asserts on these values.
+// discovery.ts re-exports them, so callers see them where they expect to.
+export interface KnownMap {
+  runNumber: number;
+  walkedAt: string;
+  anatomy: AppAnatomy;
+  journeys: ProposedJourney[];
+}
+
+// Iteration budget for the discovery loop: mapping from scratch vs confirming
+// a known map. 20 leaves room for the 8-15 tool calls the prompt asks for plus
+// the closing JSON turn.
+export const DISCOVERY_ITERATIONS = 55;
+export const DISCOVERY_ITERATIONS_WITH_MEMORY = 20;
+
+// What the block shows the model. Anatomy lists are LLM-written and can run
+// long on a big app; the caps keep the prompt a map, not an inventory.
+export const KNOWN_MAP_CAPS = {
+  pages: 40,
+  actions: 30,
+  services: 15,
+  journeys: 5,
+  steps: 12,
+} as const;
 
 const MISSION = `You are the CheckMyApp agent — a product mirror with QA fallout.
 You explore a web app the way a curious, competent first-time user would, then
@@ -186,7 +220,68 @@ export function clientInstructionBlock(run: Pick<Run, "scopeHints" | "userNotes"
   return `\n\nThe client gave these instructions. They override your defaults — follow them strictly:\n\n${parts.join("\n\n")}`;
 }
 
-export function discoverySystem(run: Run): string {
+// Mapping from scratch: the budget discovery has always had.
+const EXPLORATION_BUDGET = `EXPLORATION BUDGET: explore the main surfaces with roughly 15-25 tool calls,
+then STOP and emit the JSON below. Do NOT over-explore — you do not need to
+visit every page; once you can name 3-5 coherent journeys and the key services,
+output the JSON immediately. Always finish with the JSON, never with a plan to
+"explore more".`;
+
+// CHE-133: the known map, rendered for the prompt, with the instruction that
+// replaces EXPLORATION_BUDGET. Pure: anatomy and journeys are prose the model
+// wrote on an earlier run, nothing here is substituted or interpolated beyond
+// the run number and date — a `{{TEST_PASSWORD}}` that somehow ended up in a
+// step label passes through as that literal string, exactly as every other
+// prompt block treats it (the fill tool substitutes, the prompt never does).
+export function knownMapBlock(known: KnownMap): string {
+  const { anatomy } = known;
+  const lines: string[] = [];
+  const list = (items: string[]) => items.map((item) => `- ${item}`).join("\n");
+
+  lines.push(
+    `KNOWN MAP — what we mapped on the last full check, Run #${known.runNumber}` +
+      ` (walked ${known.walkedAt.slice(0, 10)}):`,
+  );
+  const pages = anatomy.pages.slice(0, KNOWN_MAP_CAPS.pages);
+  if (pages.length) lines.push(`Pages:\n${list(pages)}`);
+  const actions = anatomy.actions.slice(0, KNOWN_MAP_CAPS.actions);
+  if (actions.length) lines.push(`Actions:\n${list(actions)}`);
+  const services = anatomy.services
+    .slice(0, KNOWN_MAP_CAPS.services)
+    .map((s) => (s.role ? `${s.name} — ${s.role}` : s.name));
+  if (services.length) lines.push(`External services:\n${list(services)}`);
+  const tech = Object.entries(anatomy.tech)
+    .filter((pair): pair is [string, string] => typeof pair[1] === "string" && pair[1].length > 0)
+    .map(([k, v]) => `${k}: ${v}`);
+  if (tech.length) lines.push(`Tech:\n${list(tech)}`);
+  const journeys = known.journeys.slice(0, KNOWN_MAP_CAPS.journeys);
+  if (journeys.length) {
+    lines.push(
+      "Journeys walked then:\n" +
+        journeys
+          .map((j, i) => {
+            const steps = j.steps.slice(0, KNOWN_MAP_CAPS.steps);
+            const head = `${i + 1}. "${j.title}"`;
+            return steps.length
+              ? `${head}\n${steps.map((s, n) => `   ${n + 1}) ${s}`).join("\n")}`
+              : head;
+          })
+          .join("\n"),
+    );
+  }
+
+  lines.push(`This map is known to be accurate as of that run. CONFIRM it with a short pass
+rather than mapping the app again: open the homepage and the pages the journeys
+start from, read them, and glance at anything new in the navigation. Then output
+the journeys: keep the known ones whose surfaces still exist (adapt their steps
+to what you see now), replace any whose surface is gone, and add at most 2 for
+genuinely new surfaces. Budget 8-15 tool calls, then STOP and emit the JSON
+below. Always finish with the JSON, never with a plan to "explore more".`);
+
+  return lines.join("\n\n");
+}
+
+export function discoverySystem(run: Run, known?: KnownMap): string {
   return `${MISSION}
 
 CURRENT PHASE: Discovery.
@@ -198,11 +293,7 @@ and forms (do not submit anything irreversible). Identify:
 - tech stack signals,
 - up to 5 coherent user journeys (4-10 steps each) that represent real user goals.
 
-EXPLORATION BUDGET: explore the main surfaces with roughly 15-25 tool calls,
-then STOP and emit the JSON below. Do NOT over-explore — you do not need to
-visit every page; once you can name 3-5 coherent journeys and the key services,
-output the JSON immediately. Always finish with the JSON, never with a plan to
-"explore more".
+${known ? knownMapBlock(known) : EXPLORATION_BUDGET}
 
 When done, respond with ONLY a JSON object, no prose:
 {"journeys":[{"title":"...","steps":["...", "..."]}],
