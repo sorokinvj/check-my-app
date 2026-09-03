@@ -21,6 +21,11 @@ export interface AgentLoopArgs {
   thinking?: "adaptive" | "off";
   // Called after each iteration with a short progress note (for the live feed).
   onProgress?: (note: string) => Promise<void>;
+  // CHE-130: how many of the most recent screenshots stay in the conversation
+  // as image blocks. Older ones are replaced with a text placeholder the moment
+  // they fall out of the window. `undefined` = never trim (discovery keeps the
+  // pre-CHE-130 behaviour; its own window is a later ticket, CHE-135).
+  imageWindow?: number;
 }
 
 export interface AgentLoopResult {
@@ -60,7 +65,16 @@ export class LlmBudgetError extends Error {
 }
 
 export async function runAgentLoop(args: AgentLoopArgs): Promise<AgentLoopResult> {
-  const { system, task, env, llm, maxIterations = 40, thinking = "adaptive", onProgress } = args;
+  const {
+    system,
+    task,
+    env,
+    llm,
+    maxIterations = 40,
+    thinking = "adaptive",
+    onProgress,
+    imageWindow,
+  } = args;
   const messages: Anthropic.MessageParam[] = [{ role: "user", content: task }];
   const transcript: TranscriptEntry[] = [];
   let iterations = 0;
@@ -158,9 +172,61 @@ export async function runAgentLoop(args: AgentLoopArgs): Promise<AgentLoopResult
     }
 
     messages.push({ role: "user", content: results });
+
+    // CHE-130: every screenshot used to stay in context for the whole walk and
+    // was re-read on every iteration — a full joblander walk cost $2.31 with
+    // vision nav against $0.91 text-only (COSTS.md, runs #74 vs #67).
+    if (imageWindow !== undefined && Number.isFinite(imageWindow) && imageWindow >= 0) {
+      const trimmed = trimImageBlocks(messages, imageWindow);
+      if (trimmed > 0) {
+        console.log(`[agent] trimmed ${trimmed} screenshot(s) from context (window=${imageWindow})`);
+      }
+    }
   }
 
   return { finalText, iterations, transcript, messages, costUsd, usage };
+}
+
+const OMITTED_SCREENSHOT: Anthropic.TextBlockParam = {
+  type: "text",
+  text: "[screenshot omitted — an earlier step; its evidence URL is in this result's text]",
+};
+
+// CHE-130: keep only the last `keep` image blocks in the conversation, in
+// conversation order (top-level blocks and blocks nested inside tool_result
+// content arrays alike), and replace every older one with a text placeholder.
+// Returns how many blocks it replaced.
+//
+// Mutates `messages` IN PLACE on purpose. A screenshot is replaced once, at the
+// moment it falls out of the window, and the conversation then carries the
+// placeholder for good. Rebuilding a trimmed copy every iteration would work
+// too, but the prompt-cache prefix would then differ from the previous call
+// exactly where the cached bytes used to be — each iteration would re-derive the
+// same substitution and pay to re-cache the prefix. Mutating means the prefix
+// changes once per screenshot, not once per iteration. Idempotent: a placeholder
+// is a text block, so it is neither counted nor touched on later passes; text
+// blocks are never modified.
+export function trimImageBlocks(messages: Anthropic.MessageParam[], keep: number): number {
+  // Both a message's content array and a tool_result's content array accept a
+  // text block, which is all the replacement needs to write.
+  type ImageSite = { parent: Anthropic.TextBlockParam[]; index: number };
+  const sites: ImageSite[] = [];
+  for (const m of messages) {
+    if (!Array.isArray(m.content)) continue;
+    m.content.forEach((block, i) => {
+      if (block.type === "image") {
+        sites.push({ parent: m.content as Anthropic.TextBlockParam[], index: i });
+      } else if (block.type === "tool_result" && Array.isArray(block.content)) {
+        const inner = block.content;
+        inner.forEach((c, j) => {
+          if (c.type === "image") sites.push({ parent: inner as Anthropic.TextBlockParam[], index: j });
+        });
+      }
+    });
+  }
+  const toReplace = keep >= sites.length ? [] : sites.slice(0, sites.length - keep);
+  for (const { parent, index } of toReplace) parent[index] = { ...OMITTED_SCREENSHOT };
+  return toReplace.length;
 }
 
 // Append a closing instruction to a conversation in a role-valid way. The agent
