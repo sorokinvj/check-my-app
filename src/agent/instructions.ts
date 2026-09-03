@@ -1,6 +1,7 @@
 import { CUSTOMER_LANGUAGE_RULES } from "@/lib/verdict-language";
 import type { AppAnatomy } from "@/lib/types";
 import type { ProposedJourney } from "./discovery";
+import type { AppKnowledge } from "./knowledge";
 
 // System-prompt assembly. The worker's contract is textual: the standing
 // mission + the client's own instructions (scope hints, notes) compose into the
@@ -281,7 +282,106 @@ below. Always finish with the JSON, never with a plan to "explore more".`);
   return lines.join("\n\n");
 }
 
-export function discoverySystem(run: Run, known?: KnownMap): string {
+// CHE-136: what the block shows of the app's history. Settled lines are
+// already capped by composeKnowledge; these bound the other two lists.
+export const KNOWLEDGE_CAPS = {
+  changedPaths: 10,
+  journeys: 5,
+} as const;
+
+// CHE-136: the AppKnowledge rendered for one of the three prompts. Pure —
+// titles are prose an earlier run wrote or the owner marked, passed through
+// verbatim; a `{{TEST_PASSWORD}}` in one stays that literal string, exactly as
+// every other block treats it. Empty string when there is nothing to know.
+//
+// Two kinds of settled line, and they must not share a sentence: a finding the
+// owner marked or the tracker canceled is a known condition and is never filed
+// again; a finding whose fix was CONFIRMED from outside (reconcile.ts) is the
+// opposite — if the symptom is back it is a regression, and the closing half
+// of the tracker loop depends on synthesis writing it down so autofile can
+// refile it. Telling the model "never file" about a confirmed fix would hide
+// exactly the reappearance that loop exists to catch.
+export function knowledgeBlock(
+  k: AppKnowledge | null,
+  phase: "discovery" | "walking" | "synthesis",
+): string {
+  if (!k) return "";
+  const line = (s: { title: string; category: string | null }) =>
+    `- ${s.title}${s.category ? ` (${s.category})` : ""}`;
+  const settled = k.settled.filter((s) => s.why !== "resolved");
+  const fixed = k.settled.filter((s) => s.why === "resolved");
+  const changed = k.changedPaths.slice(0, KNOWLEDGE_CAPS.changedPaths);
+  const sections: string[] = [];
+
+  if (phase === "synthesis") {
+    if (settled.length) {
+      sections.push(
+        "SETTLED BY THE OWNER — never file these as findings again, whatever the steps say; " +
+          "if the same symptom is present, one clause in bottomLine ('a known condition') is " +
+          "the most it gets:\n" +
+          settled.map(line).join("\n"),
+      );
+    }
+    if (fixed.length) {
+      sections.push(
+        "CONFIRMED FIXED on an earlier check — if the same symptom is present again it is a " +
+          "regression: file it as a finding like any other, never soften it as a known condition:\n" +
+          fixed.map(line).join("\n"),
+      );
+    }
+    if (changed.length) {
+      sections.push(
+        "The following pages changed since the last check; findings there are new by default: " +
+          changed.join(", "),
+      );
+    }
+    return sections.join("\n\n");
+  }
+
+  sections.push("KNOWN ABOUT THIS APP:");
+  if (settled.length) {
+    sections.push(
+      "Settled — already ruled by the owner or confirmed fixed; do NOT spend steps proving these " +
+        "again. If you meet one, report the step as ok/skipped with one line saying it is a " +
+        "known condition, and move on:\n" +
+        settled.map(line).join("\n"),
+    );
+  }
+  if (fixed.length) {
+    sections.push(
+      "Confirmed fixed on an earlier check — walk these normally; if the symptom is back, " +
+        "report it as you would any failure:\n" +
+        fixed.map(line).join("\n"),
+    );
+  }
+  if (changed.length) {
+    sections.push(
+      "Changed since the last check — give these pages attention first:\n" +
+        changed.map((p) => `- ${p}`).join("\n"),
+    );
+  }
+  if (phase === "discovery" && k.journeys.length) {
+    sections.push(
+      "Last check's journeys and how they ended:\n" +
+        k.journeys
+          .slice(0, KNOWLEDGE_CAPS.journeys)
+          .map((j) => `- "${j.title}" — ${j.status} (${j.walkedAt.slice(0, 10)})`)
+          .join("\n"),
+    );
+  }
+  // A heading with nothing under it says nothing.
+  return sections.length > 1 ? sections.join("\n\n") : "";
+}
+
+// The block as it lands in the discovery/walking prompts: after the client's
+// own instructions, or nothing at all — the prompt without knowledge is
+// byte-identical to the prompt before knowledge existed.
+function knowledgeTail(k: AppKnowledge | null | undefined, phase: "discovery" | "walking"): string {
+  const block = knowledgeBlock(k ?? null, phase);
+  return block ? `\n\n${block}` : "";
+}
+
+export function discoverySystem(run: Run, known?: KnownMap, knowledge?: AppKnowledge | null): string {
   return `${MISSION}
 
 CURRENT PHASE: Discovery.
@@ -309,10 +409,15 @@ When done, respond with ONLY a JSON object, no prose:
       ? "\n\nBecause test credentials are provided, one of your proposed journeys MUST be" +
         " signing in with them and reaching the core authenticated flow."
       : ""
-  }${clientInstructionBlock(run)}`;
+  }${clientInstructionBlock(run)}${knowledgeTail(knowledge, "discovery")}`;
 }
 
-export function walkingSystem(run: Run, journeyTitle: string, steps: string[]): string {
+export function walkingSystem(
+  run: Run,
+  journeyTitle: string,
+  steps: string[],
+  knowledge?: AppKnowledge | null,
+): string {
   return `${MISSION}
 
 CURRENT PHASE: Walking a journey.
@@ -336,5 +441,5 @@ with label="...", getByPlaceholder for placeholder="..." fields.
 
 Finish with a 1-2 sentence summary of what you found (plain text). If anything
 was not ok, the FIRST sentence names the problem — the summary's job is "what's
-wrong", never a recap of what works.${focusBlock(run)}${credentialsBlock(run)}${crudBlock(run)}${clientInstructionBlock(run)}`;
+wrong", never a recap of what works.${focusBlock(run)}${credentialsBlock(run)}${crudBlock(run)}${clientInstructionBlock(run)}${knowledgeTail(knowledge, "walking")}`;
 }

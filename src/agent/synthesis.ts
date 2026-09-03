@@ -9,13 +9,15 @@ import { addUsage, costOf, emptyUsage, mergeUsage, type LlmConfig, type UsageTot
 import { finalizeStructured } from "./core";
 import type { AgentEnv } from "./env";
 import type { ProposedJourney } from "./discovery";
+import { knowledgeBlock } from "./instructions";
+import type { AppKnowledge } from "./knowledge";
 import {
   CUSTOMER_LANGUAGE_RULES,
   hasEnvironmentLeak,
   stripEnvironmentLeak,
 } from "@/lib/verdict-language";
 
-const APP_LENS_SYSTEM = `You just observed a web app for a while. Produce two things.
+const APP_LENS_RULES = `You just observed a web app for a while. Produce two things.
 
 1. An "App Lens": (1) what this app does in one sentence, (2) who it's for,
 (3) core value, (4) business model, (5) tech surface, (6) critical paths to
@@ -83,15 +85,24 @@ coverage clause ("we could not confirm X this run"). Never extrapolate it into
 HTTP 429 / "rate limit" responses are self-induced by our own request volume.
 They are never a finding and never belong in the bottom line.
 
-${CUSTOMER_LANGUAGE_RULES}
+${CUSTOMER_LANGUAGE_RULES}`;
 
-Respond with ONLY JSON:
+const APP_LENS_CONTRACT = `Respond with ONLY JSON:
 {"oneLiner":"...","whoFor":"...","coreValue":"...","businessModel":"...",
  "techSurface":"...","criticalPaths":["..."],"ifItBreaks":"...","bottomLine":"...",
  "findings":[{"title":"...","category":"broken|risky|confusing|polish|exposed",
   "severity":"high|medium|low",
   "detail":{"where":"...","whatWeTried":["..."],"whatHappened":"...","whyItMatters":"..."},
   "stepRef":{"journeyIndex":0,"stepIndex":0}}]}`;
+
+// CHE-136: what the owner already settled sits between the rules and the JSON
+// contract, so a finding they marked "that's fine" is not written again and
+// then merely inherited a mark after the fact. Without knowledge the prompt is
+// byte-identical to what it was before knowledge existed.
+export function synthesisSystem(knowledge?: AppKnowledge | null): string {
+  const block = knowledgeBlock(knowledge ?? null, "synthesis");
+  return [APP_LENS_RULES, block, APP_LENS_CONTRACT].filter(Boolean).join("\n\n");
+}
 
 export interface SynthesizedFinding {
   title: string;
@@ -106,6 +117,8 @@ export async function synthesizeVerdict(args: {
   llm: LlmConfig;
   runId: string;
   anatomy: AppAnatomy;
+  // CHE-136: findings the owner settled and pages that changed, for the prompt.
+  knowledge?: AppKnowledge | null;
 }): Promise<{
   appLens: AppLens;
   verdict: Verdict;
@@ -114,7 +127,8 @@ export async function synthesizeVerdict(args: {
   costUsd: number;
   usage: UsageTotals;
 }> {
-  const { env, llm, runId, anatomy } = args;
+  const { env, llm, runId, anatomy, knowledge } = args;
+  const system = synthesisSystem(knowledge);
 
   // CHE-81: the owner's priority concerns ride into the observation so the
   // bottom line speaks to them explicitly.
@@ -176,7 +190,7 @@ export async function synthesizeVerdict(args: {
     model: llm.synthModel,
     max_tokens: 8_000,
     thinking: { type: "adaptive" },
-    system: APP_LENS_SYSTEM,
+    system,
     messages: [{ role: "user", content: observation }],
   });
 
@@ -200,7 +214,7 @@ export async function synthesizeVerdict(args: {
       >(
         llm,
         [
-          { role: "user", content: `${APP_LENS_SYSTEM}\n\nOBSERVATION:\n${observation}` },
+          { role: "user", content: `${system}\n\nOBSERVATION:\n${observation}` },
           { role: "assistant", content: assistantText.trim() || "(no analysis was produced)" },
         ],
         "Your analysis above did not include the required JSON object. Output it now — " +

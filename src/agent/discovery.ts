@@ -16,6 +16,7 @@ import {
 } from "./instructions";
 import { discoveryLeanEnabled, putScreenshot, type AgentEnv } from "./env";
 import { discoveryLoopMode } from "./discovery-mode";
+import type { AppKnowledge } from "./knowledge";
 import { emptyUsage, isVisionModel, mergeUsage, type LlmConfig, type UsageTotals } from "./llm";
 import { credentialsAlreadyRejected, recordCredentialRejection } from "./credentials";
 
@@ -78,10 +79,13 @@ export async function discoverApp(args: {
   // extraction ladder below is unchanged: the model's output is validated the
   // same way whether it explored from zero or from memory.
   known?: KnownMap;
+  // CHE-136: what earlier runs settled about this app, rendered into the
+  // prompt after the client's instructions. Absent = the prompt as before.
+  knowledge?: AppKnowledge | null;
   onLiveScreenshot?: (url: string) => Promise<void>;
   onProgress?: (note: string) => Promise<void>;
 }): Promise<DiscoveryResult> {
-  const { env, llm, browser, run, known, onLiveScreenshot, onProgress } = args;
+  const { env, llm, browser, run, known, knowledge, onLiveScreenshot, onProgress } = args;
   const empty: DiscoveryResult = {
     journeys: [],
     anatomy: { pages: [], actions: [], services: [], tech: {} },
@@ -136,7 +140,7 @@ export async function discoverApp(args: {
 
   try {
     const result = await runAgentLoop({
-      system: discoverySystem(run, known),
+      system: discoverySystem(run, known, knowledge),
       task: `Target app: ${run.targetUrl}\nStart by navigating there, read the page, then explore.`,
       env: toolEnv,
       llm,

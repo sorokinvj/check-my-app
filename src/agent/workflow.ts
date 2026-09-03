@@ -37,6 +37,7 @@ import { LlmBudgetError } from "./core";
 import { dedupKeyForFinding } from "@/lib/tracker/file";
 import { discoverApp, type KnownMap, type ProposedJourney, type RunInput } from "./discovery";
 import { loadKnownMap } from "./known-map";
+import { loadAppKnowledge, type AppKnowledge } from "./knowledge";
 import { walkOneJourney, type WalkRun } from "./execution";
 import { orderByFocus } from "./limits";
 import { parseActions, replayJourney, type ReplayResult } from "./journey-replay";
@@ -105,6 +106,8 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
           forceFull: true,
           smokeOnly: true,
           appId: true,
+          // CHE-136: tracker settlements are kept per owner (CHE-101).
+          ownerId: true,
         },
       });
       if (!r) throw new Error(`run ${runId} not found`);
@@ -152,6 +155,30 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
           const text = err instanceof Error ? err.message : String(err);
           console.warn(`[reconcile] tracker sync failed: ${text}`);
           return { notes: [], reverify: [] };
+        }
+      });
+
+      // AppKnowledge (CHE-136): what earlier runs settled about this app —
+      // findings the owner marked or the tracker canceled, fixes confirmed
+      // from outside, pages the survey saw change, the last walk's journeys —
+      // composed once and read by all three prompts. After reconcile on
+      // purpose, so a ticket canceled today counts today. A hint, never a
+      // reason: a failure to load it costs the prompts their memory, not the
+      // run. No feed line — this is our machinery, not news about their app.
+      const knowledge = await step.do("knowledge", async (): Promise<AppKnowledge | null> => {
+        try {
+          const k = await loadAppKnowledge(env, run, survey);
+          if (k) {
+            console.log(
+              `[knowledge] ${k.settled.length} settled, ${k.changedPaths.length} changed paths, ` +
+                `${k.journeys.length} journeys`,
+            );
+          }
+          return k;
+        } catch (err) {
+          const text = err instanceof Error ? err.message : String(err);
+          console.warn(`[knowledge] unavailable: ${text}`);
+          return null;
         }
       });
 
@@ -443,6 +470,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
             browser,
             run: { ...run, userNotes } as RunInput,
             known: known ?? undefined,
+            knowledge,
             onLiveScreenshot: (url) => setLive(env, runId, { liveScreenshotUrl: url }),
             onProgress: (note) => setLive(env, runId, { currentAction: note }),
           }).catch(rethrowBudgetNonRetryable);
@@ -517,6 +545,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
               run: walkRun,
               proposed,
               index: order,
+              knowledge,
               onLiveScreenshot: (url) => setLive(env, runId, { liveScreenshotUrl: url }),
               onProgress: (note) => setLive(env, runId, { currentAction: note }),
             }).catch(rethrowBudgetNonRetryable);
@@ -579,7 +608,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
       // Phase 6 — Writing (LLM synthesis + findings + verdict).
       const verdict = await step.do("writing", async () => {
         await transition(env, runId, "writing", { icon: "info", text: "Writing your verdict" });
-        const synth = await synthesizeVerdict({ env, llm, runId, anatomy }).catch(
+        const synth = await synthesizeVerdict({ env, llm, runId, anatomy, knowledge }).catch(
           rethrowBudgetNonRetryable,
         );
         await recordUsage(env, runId, "synthesis", llm.synthModel, synth.usage);

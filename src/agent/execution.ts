@@ -10,6 +10,7 @@ import { LlmBudgetError, runAgentLoop, finalizeJson, type TranscriptEntry } from
 import { prepareAgentPage, type RecordedAction, type ToolEnv } from "./tools";
 import { agentContextOptions } from "./browser";
 import { walkingSystem } from "./instructions";
+import type { AppKnowledge } from "./knowledge";
 import { putScreenshot, putText, walkImageWindow, type AgentEnv } from "./env";
 import { originOf, type ProposedJourney, type RunInput } from "./discovery";
 import { emptyUsage, isVisionModel, mergeUsage, type LlmConfig, type UsageTotals } from "./llm";
@@ -89,10 +90,13 @@ export async function walkOneJourney(args: {
   run: WalkRun;
   proposed: ProposedJourney;
   index: number;
+  // CHE-136: settled findings and changed pages, so the walk stops proving a
+  // known condition again. Absent = the prompt as before.
+  knowledge?: AppKnowledge | null;
   onLiveScreenshot?: (url: string) => Promise<void>;
   onProgress?: (note: string) => Promise<void>;
 }): Promise<{ transcript: TranscriptEntry[]; costUsd: number; usage: UsageTotals }> {
-  const { env, llm, browser, run, proposed, index, onLiveScreenshot, onProgress } = args;
+  const { env, llm, browser, run, proposed, index, knowledge, onLiveScreenshot, onProgress } = args;
   const transcripts: TranscriptEntry[] = [];
   let costUsd = 0;
   const usage = emptyUsage();
@@ -195,7 +199,7 @@ export async function walkOneJourney(args: {
 
     try {
       const result = await runAgentLoop({
-        system: walkingSystem(run, proposed.title, proposed.steps),
+        system: walkingSystem(run, proposed.title, proposed.steps, knowledge),
         task: `Target app: ${run.targetUrl}\nWalk the journey now. Navigate to the target first.`,
         env: toolEnv,
         llm,

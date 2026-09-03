@@ -40,6 +40,8 @@ jobs:
       - run: npm run verify:walk-limits
       # CHE-135: discovery runs lean — thinking off, no screenshots in context — behind DISCOVERY_LEAN.
       - run: npm run verify:discovery-lean
+      # CHE-136: the three prompts read what earlier runs settled — settled findings, changed pages, last journeys.
+      - run: npm run verify:knowledge
       # Smoke-build the web worker via OpenNext (catches bundle/runtime issues).
       - run: npx opennextjs-cloudflare build
 
