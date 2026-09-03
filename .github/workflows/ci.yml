@@ -34,6 +34,8 @@ jobs:
       - run: npm run verify:replay
       # CHE-132: the page survey sees change and only change; a full walk is forced by change, not by the calendar.
       - run: npm run verify:survey
+      # CHE-133: discovery confirms the known map on watched apps instead of remapping.
+      - run: npm run verify:known-map
       # Smoke-build the web worker via OpenNext (catches bundle/runtime issues).
       - run: npx opennextjs-cloudflare build
 

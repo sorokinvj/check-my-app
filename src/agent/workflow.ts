@@ -30,12 +30,13 @@ import { normalizeAnatomy } from "@/lib/anatomy";
 import { coverageSentence, unreachedPages } from "@/lib/coverage";
 import { parseJson } from "@/lib/json";
 import type { RunEvent, RunPhase } from "@/lib/types";
-import { makeAgentEnv, putText, type AgentBindings, type AgentEnv } from "./env";
+import { discoveryMemoryEnabled, makeAgentEnv, putText, type AgentBindings, type AgentEnv } from "./env";
 import { makeLlm, type UsageTotals } from "./llm";
 import { agentContextOptions, launchAgentBrowser, surfaceScan } from "./browser";
 import { LlmBudgetError } from "./core";
 import { dedupKeyForFinding } from "@/lib/tracker/file";
-import { discoverApp, type ProposedJourney, type RunInput } from "./discovery";
+import { discoverApp, type KnownMap, type ProposedJourney, type RunInput } from "./discovery";
+import { loadKnownMap } from "./known-map";
 import { walkOneJourney, type WalkRun } from "./execution";
 import { parseActions, replayJourney, type ReplayResult } from "./journey-replay";
 import { synthesizeVerdict, type SynthesizedFinding } from "./synthesis";
@@ -416,7 +417,23 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
         });
       }
       const discovery = plan.taken ? null : await step.do("discovery", async () => {
-        await transition(env, runId, "discovery", { icon: "info", text: "Mapping your app" });
+        // CHE-133: a watched app was mapped on its last full check; hand that
+        // map to discovery so it confirms rather than redraws. Same swallow
+        // contract as the other cheap rungs — a failure to load memory costs
+        // a from-scratch map, never the run.
+        let known: KnownMap | null = null;
+        if (discoveryMemoryEnabled(this.env)) {
+          try {
+            known = await loadKnownMap(env, run);
+          } catch (err) {
+            const text = err instanceof Error ? err.message : String(err);
+            console.warn(`[discovery] known map unavailable: ${text}`);
+          }
+        }
+        await transition(env, runId, "discovery", {
+          icon: "info",
+          text: known ? `Confirming the map from Run #${known.runNumber}` : "Mapping your app",
+        });
         const browser = await launchAgentBrowser(env);
         try {
           const d = await discoverApp({
@@ -424,6 +441,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
             llm,
             browser,
             run: { ...run, userNotes } as RunInput,
+            known: known ?? undefined,
             onLiveScreenshot: (url) => setLive(env, runId, { liveScreenshotUrl: url }),
             onProgress: (note) => setLive(env, runId, { currentAction: note }),
           }).catch(rethrowBudgetNonRetryable);
