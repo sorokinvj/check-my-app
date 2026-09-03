@@ -58,7 +58,15 @@ jobs:
           plugin_marketplaces: "https://github.com/anthropics/claude-code.git"
           plugins: "code-review@claude-code-plugins"
           prompt: "/code-review:code-review --comment ${{ github.repository }}/pull/${{ github.event.pull_request.number }}"
-          claude_args: '--allowedTools "mcp__github_inline_comment__create_inline_comment"'
+          # --allowedTools is an exhaustive allowlist, not an addition. Naming
+          # only the inline-comment tool denied `Skill`, which is how the
+          # code-review plugin is invoked — so on 2026-09-03 two runs reported
+          # "permission_denied: Execute skill: code-review:code-review", spawned
+          # a background agent to check the PR's state, announced they would
+          # wait for it, and exited. The job went green having reviewed nothing.
+          # Read as a clean review by anything downstream, which is precisely
+          # the absence the merge gate must never mistake for a verdict.
+          claude_args: '--allowedTools "Skill,Task,Read,Grep,Glob,Bash,mcp__github_inline_comment__create_inline_comment"'
           # The action refuses a bot actor by default, so that bots cannot
           # trigger each other in a loop. On a doer PR the pushes come from
           # Codex, which is precisely the case this review exists for — so that
