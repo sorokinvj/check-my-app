@@ -30,6 +30,8 @@ jobs:
       - run: npm run verify:machine
       # CHE-130: the walking context keeps only the last N screenshots.
       - run: npm run verify:images
+      # CHE-129: recorded actions carry no secret and replay classifies honestly.
+      - run: npm run verify:replay
       # Smoke-build the web worker via OpenNext (catches bundle/runtime issues).
       - run: npx opennextjs-cloudflare build
 

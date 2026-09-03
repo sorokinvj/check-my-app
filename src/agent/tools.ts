@@ -43,6 +43,42 @@ export interface ToolEnv {
   // login may be reported as the product's fault.
   credentials?: { rejected: boolean };
   onCredentialRejected?: (signature: string) => Promise<void>;
+  // CHE-129: the machine actions that actually ran since the last report_step.
+  // Only navigate/click/fill go here, and only after every refusal gate has let
+  // them through and Playwright has done the thing — a refused or errored call
+  // never happened, so a replay must not redo it. The step handler drains this
+  // into Step.actions.
+  actionTrail?: RecordedAction[];
+}
+
+// CHE-129: what a browser can redo without a model. Inputs are the tool's own
+// arguments (the fill value keeps its {{TEST_EMAIL}}/{{TEST_PASSWORD}}
+// placeholders — the real value is substituted at execution time and is never
+// written down), outcome is what the walk observed so a replay can tell
+// whether it landed in the same place.
+export type RecordedAction =
+  | {
+      kind: "navigate";
+      url: string;
+      outcome: { urlAfter: string; status: number | null };
+    }
+  | {
+      kind: "click";
+      role?: string;
+      name?: string;
+      selector?: string;
+      outcome: { urlAfter: string; navigated: boolean; requests: number; mutations: number };
+    }
+  | {
+      kind: "fill";
+      label?: string;
+      selector?: string;
+      value: string;
+      outcome: { urlAfter: string };
+    };
+
+function recordAction(env: ToolEnv, action: RecordedAction): void {
+  env.actionTrail?.push(action);
 }
 
 // Strip any occurrence of the real test credentials from text leaving the tool
@@ -310,7 +346,15 @@ async function navigate(env: ToolEnv, url: string): Promise<string> {
   // Give client JS a real chance to hydrate: clicking a not-yet-interactive
   // button is the #1 source of false "broken" findings on React/Next targets.
   await waitForHydration(env.page, 3_000);
-  return `Navigated to ${env.page.url()} (status ${res?.status() ?? "?"})`;
+  const status = res?.status() ?? null;
+  // Resolved, not as the model typed it: a relative URL only means something
+  // next to the page it was typed on, and a replay starts from a blank one.
+  recordAction(env, {
+    kind: "navigate",
+    url: target.toString(),
+    outcome: { urlAfter: env.page.url(), status },
+  });
+  return `Navigated to ${env.page.url()} (status ${status ?? "?"})`;
 }
 
 // Hydration gate before interacting: full load, then a double-rAF tick (lets
@@ -530,6 +574,22 @@ async function click(env: ToolEnv, input: Record<string, unknown>): Promise<stri
     }
   }
 
+  // CHE-129: the click happened (whatever the page made of it), so it is part
+  // of the path. Recorded before the rejection/inert returns below because
+  // those are readings of the outcome, not reasons the action did not run.
+  recordAction(env, {
+    kind: "click",
+    ...(input.role ? { role: String(input.role) } : {}),
+    ...(input.name ? { name: String(input.name) } : {}),
+    ...(input.selector ? { selector: String(input.selector) } : {}),
+    outcome: {
+      urlAfter: env.page.url(),
+      navigated: reaction.navigated,
+      requests: reaction.requests,
+      mutations: reaction.mutations,
+    },
+  });
+
   // CHE-100: before anything is said about the product, check whether what just
   // happened was our own credential being turned away. Sliced from the tail so
   // the rolling window's trim can never shift the range.
@@ -578,6 +638,10 @@ async function click(env: ToolEnv, input: Record<string, unknown>): Promise<stri
 
 async function fill(env: ToolEnv, input: Record<string, unknown>): Promise<string> {
   let value = String(input.value);
+  // CHE-129: what gets recorded is the value as the model wrote it, placeholders
+  // intact, scrubbed once more in case the model pasted a real value it had
+  // seen echoed by the page. The substituted value below is never written down.
+  const recordedValue = scrubSecrets(env, value);
   const usedSecret = /\{\{TEST_(EMAIL|PASSWORD)\}\}/.test(value);
   // Never type real credentials into an off-origin form (prompt-injection
   // exfiltration): the substituted value would be the decrypted password.
@@ -646,6 +710,13 @@ async function fill(env: ToolEnv, input: Record<string, unknown>): Promise<strin
     await env.page.waitForTimeout(600);
     await field.fill(value, { timeout: 8_000 });
   }
+  recordAction(env, {
+    kind: "fill",
+    ...(label ? { label } : {}),
+    ...(input.selector ? { selector: String(input.selector) } : {}),
+    value: recordedValue,
+    outcome: { urlAfter: env.page.url() },
+  });
   return usedSecret ? "Filled (credential substituted server-side)." : "Filled.";
 }
 
