@@ -325,3 +325,34 @@ the GLM vision variants ignore `output_config` json_schema.
   usage meters. Snapshot into the log table above at each milestone gate.
 - **Optimization projects** start by quoting the relevant row here as the
   before-number, and add an after-number on completion.
+
+## Image window in the walking context (CHE-130, deployed 2026-09-03)
+
+The first lever of the run-economics program (Notion «Экономика рана — Starter
+$29»; tickets CHE-129…137). `src/agent/core.ts` now keeps only the last
+`WALK_IMAGE_WINDOW` screenshots (default 3, `off` = the old behaviour) as image
+blocks in the walking conversation; older ones become a text placeholder, once,
+in place, so the prompt-cache prefix changes once per screenshot rather than
+once per iteration. Discovery is untouched (CHE-135 is its ticket).
+
+**A/B, same target, forced full walk, vision nav (`glm-5v-turbo`), Opus synthesis:**
+
+| Run | Date | Window | Run.costUsd | Ledger Σ | Walking (completed attempts) | Σ walking input tok | Σ walking cache-read tok | Calls / journey | Verdict | Journeys |
+|-----|------|--------|-------------|----------|------------------------------|---------------------|--------------------------|-----------------|---------|----------|
+| #74 | 2026-08-25 | none | **$2.31** | $2.35 | $2.09 (5 journeys) | 1,030,846 | 3,060,104 | 39.6 | mostly_ok | 5 walked, LiveKit call ok |
+| #137 | 2026-09-03 | 3 | **$0.80** | $1.35 (see note) | $0.67 (5 journeys) | 174,720 | 1,540,608 | 29.8 | all_good | 5 walked (4 ok, 1 partial), LiveKit call ok |
+
+Walking −68%, run −65% against the criterion of ≤ $1.20. Non-cached input
+tokens per walked journey fell ~6× (the images were being re-sent, not only
+re-read from cache); cache reads halved because the growing context is half the
+size. Verdict quality held: the same five journeys, the live WebRTC coaching
+call reported ok, the previously reported PATCH /user 401 confirmed fixed.
+n=1 on one app — the fleet number comes from `npm run cost:trend` after a week
+of watch runs (CHE-131), which is the check that E3/E4 taught us to wait for.
+
+Note on the ledger: #137's `LlmUsage` carries two extra walking rows ($0.55)
+under journey ids that no longer exist — two `walk-N` steps were retried by the
+Workflows engine, almost certainly because the CHE-129 deploy landed at 21:33
+UTC while this run was walking (deploying mid-run restarts in-flight steps).
+`Run.costUsd` counts only the attempts that completed; the ledger counts what
+was billed. Both are recorded above; the discrepancy class is CHE-145.
