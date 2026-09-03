@@ -10,7 +10,7 @@ import { LlmBudgetError, runAgentLoop, finalizeJson, type TranscriptEntry } from
 import { prepareAgentPage, type ToolEnv } from "./tools";
 import { agentContextOptions } from "./browser";
 import { walkingSystem } from "./instructions";
-import { putScreenshot, putText, type AgentEnv } from "./env";
+import { putScreenshot, putText, walkImageWindow, type AgentEnv } from "./env";
 import { originOf, type ProposedJourney, type RunInput } from "./discovery";
 import { emptyUsage, isVisionModel, mergeUsage, type LlmConfig, type UsageTotals } from "./llm";
 import { credentialsAlreadyRejected, recordCredentialRejection } from "./credentials";
@@ -198,6 +198,10 @@ export async function walkOneJourney(args: {
         // still happens in synthesis (Opus, thinking on).
         thinking: "off",
         onProgress,
+        // CHE-130: screenshots accumulated in the walking context and were
+        // re-read every iteration — a full joblander walk went $0.91 → $2.31
+        // when vision nav landed. Keep only the last few in view.
+        imageWindow: walkImageWindow(env.bindings),
       });
       transcripts.push(...result.transcript);
       costUsd += result.costUsd;
