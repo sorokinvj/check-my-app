@@ -125,16 +125,46 @@ if (!DRY) {
 }
 run("git", ["config", "user.name", "checkmyapp-doer"]);
 run("git", ["config", "user.email", "doer@checkmyapp.dev"]);
+// A branch left behind by a failed claim is invisible to the eligibility check,
+// which counts open PRs — so the tick claims the same ticket again, and the push
+// fails as a non-fast-forward every two hours forever. That is what happened on
+// 2026-09-03: the 16:23 tick pushed doer/6, could not open the PR, and left the
+// branch; every tick after it died on the push instead of naming the real cause.
+//
+// Deleting it is safe by construction: a doer branch with no PR carries one
+// commit, the claim, and the claim is what this tick is about to write again.
+if (!DRY) {
+  try {
+    execFileSync("git", ["ls-remote", "--exit-code", "--heads", "origin", branch], { stdio: "ignore" });
+    say(`Found a leftover ${branch} with no PR — removing it before claiming again.`);
+    run("git", ["push", "origin", "--delete", branch]);
+  } catch {
+    // exit code 2 means no such branch, which is the normal case.
+  }
+}
+
 run("git", ["checkout", "-b", branch]);
 run("git", ["add", "-f", ".doer/TICKET.md"]);
 run("git", ["commit", "-m", `doer: claim #${issue.number} — ${issue.title}`]);
 run("git", ["push", "-u", "origin", branch]);
 
-run("gh", [
-  "pr", "create", "--repo", REPO, "--base", BASE, "--head", branch,
-  "--title", `[doer] ${issue.title}`,
-  "--body", `Claimed from #${issue.number}. The implementer works on this branch; the merge gate and a later CheckMyApp run decide the rest.\n\nCloses #${issue.number}`,
-]);
+// If the PR cannot be opened, take the branch back down. A pushed branch with no
+// PR is the orphan above — it poisons every later tick on the same ticket, and
+// the failure it produces then names the push rather than the reason the PR could
+// not be created. Fail loudly at the real cause instead.
+try {
+  run("gh", [
+    "pr", "create", "--repo", REPO, "--base", BASE, "--head", branch,
+    "--title", `[doer] ${issue.title}`,
+    "--body", `Claimed from #${issue.number}. The implementer works on this branch; the merge gate and a later CheckMyApp run decide the rest.\n\nCloses #${issue.number}`,
+  ]);
+} catch (err) {
+  if (!DRY) {
+    say(`Could not open the pull request — removing ${branch} so the next tick is not blocked by it.`);
+    try { execFileSync("git", ["push", "origin", "--delete", branch], { stdio: "inherit" }); } catch {}
+  }
+  throw err;
+}
 const prNumber = DRY ? "(dry-run)" : gh(["pr", "view", branch, "--repo", REPO, "--json", "number"]).number;
 say(`PR opened: #${prNumber}`);
 
