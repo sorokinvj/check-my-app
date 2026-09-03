@@ -64,3 +64,14 @@ jobs:
           # Codex, which is precisely the case this review exists for — so that
           # one bot is named, and no others.
           allowed_bots: "chatgpt-codex-connector[bot]"
+          # A review that finds nothing leaves no inline comment and no formal
+          # review, so from outside it is indistinguishable from a review that
+          # never ran — and the merge gate reads silence as "nobody objects".
+          # The first real review (head 7715aa0, 2026-09-03) came back in 23
+          # seconds over 6 turns with one permission denial and published
+          # nothing at all, and there was no way to tell which of those it was.
+          # The report in the step summary is that missing trace. It is
+          # Claude-authored text, which the action warns about; this repository
+          # reviews only its own code, and the alternative is a gate judging on
+          # an absence.
+          display_report: true
