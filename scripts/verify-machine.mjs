@@ -1,5 +1,5 @@
 import { decidePr, MAX_ROUNDS } from "./doer/machine.mjs";
-const base = { headSha: "aaaaaaa1", checks: [], reviewReportedForHead: false, unresolvedFindings: 0, roundsUsed: 0, mayMerge: false };
+const base = { headSha: "aaaaaaa1", checks: [], reviewReportedForHead: false, unresolvedFindings: 0, roundsUsed: 0, mayMerge: false, hasImplementerWork: true };
 const green = [{ name: "check", conclusion: "success", headSha: "aaaaaaa1" }, { name: "deploy", conclusion: "skipped", headSha: "aaaaaaa1" }];
 const cases = [
   ["нет проверок вовсе", { ...base }, "waitingForChecks"],
@@ -13,6 +13,10 @@ const cases = [
   ["чисто, но мерж не разрешён", { ...base, checks: green, reviewReportedForHead: true }, "awaitingOwner"],
   ["чисто и разрешено", { ...base, checks: green, reviewReportedForHead: true, mayMerge: true }, "merging"],
   ["skipped не провал", { ...base, checks: [{ name: "deploy", conclusion: "skipped", headSha: "aaaaaaa1" }], reviewReportedForHead: true, mayMerge: true }, "merging"],
+  // The claim-only PR: green, clean, zero findings — every later guard says
+  // merge. Without the first guard this closes the ticket having done nothing.
+  ["заявка без работы не мержится", { ...base, hasImplementerWork: false, checks: green, reviewReportedForHead: true, mayMerge: true }, "waitingForImplementer"],
+  ["заявка без работы не идёт даже на ревью", { ...base, hasImplementerWork: false }, "waitingForImplementer"],
   ["cancelled блокирует", { ...base, checks: [{ name: "check", conclusion: "cancelled", headSha: "aaaaaaa1" }], roundsUsed: 3 }, "blocked"],
 ];
 let bad = 0;

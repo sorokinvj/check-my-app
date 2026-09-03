@@ -68,6 +68,32 @@ function unresolvedFindings(prNumber) {
   }
 }
 
+// Does this PR change anything a user could feel, or is it still just the claim?
+// The dispatcher opens the PR carrying one file, .doer/TICKET.md, and only then
+// asks the implementer. Until real files move, there is nothing to review and
+// nothing to merge — and the later guards would all say yes, because green CI
+// and a clean review are exactly what an empty diff produces.
+//
+// The same rule gates the reviewer (claude-review.yml paths-ignore), so the two
+// halves cannot disagree about whether this PR contains work.
+function hasImplementerWork(prNumber) {
+  try {
+    const files = gh([
+      // One page, not --paginate: with --jq gh emits one array PER page, which
+      // is not parseable JSON. A hundred files is far past the point where the
+      // first non-.doer name has already appeared.
+      "api", `repos/${REPO}/pulls/${prNumber}/files?per_page=100`,
+      "--jq", "[.[] | .filename]",
+    ]) ?? [];
+    return files.some((f) => !f.startsWith(".doer/"));
+  } catch (err) {
+    // Fail closed, as everywhere else in this gate: an unreadable diff is not a
+    // diff we may merge.
+    console.warn(`[shepherd] could not read files for #${prNumber}: ${err.message}`);
+    return false;
+  }
+}
+
 // Did a reviewer finish on THIS head? A verdict about an earlier push was about
 // a different diff. Counted from both formal reviews and the review comments
 // that the inline-comment reviewers leave.
@@ -124,6 +150,7 @@ for (const pr of prs) {
   const facts = {
     headSha: pr.headRefOid,
     checks,
+    hasImplementerWork: hasImplementerWork(pr.number),
     reviewReportedForHead: reviewReportedForHead(pr.number, pr.headRefOid),
     unresolvedFindings: unresolvedFindings(pr.number),
     roundsUsed,

@@ -17,6 +17,13 @@ name: Claude review
 on:
   pull_request:
     types: [opened, synchronize, ready_for_review, reopened]
+    # The dispatcher opens every doer PR carrying one file — .doer/TICKET.md —
+    # and only then asks the implementer. Reviewing that is reviewing a ticket,
+    # and worse: a clean review of an empty diff is what the merge gate reads as
+    # "nobody objects". A PR that touches nothing else never reaches a reviewer;
+    # the state machine refuses it on the same rule (scripts/doer/machine.mjs).
+    paths-ignore:
+      - ".doer/**"
 
 # One review per head. A second push supersedes the first, and a verdict about
 # an older push is not a verdict — the doer's merge gate enforces the same rule.

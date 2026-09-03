@@ -40,6 +40,7 @@ const PASSING = new Set(["success", "neutral", "skipped"]);
  * @property {number} unresolvedFindings open, non-outdated review threads
  * @property {number} roundsUsed fix rounds already spent on this PR
  * @property {boolean} mayMerge the owner opted this one in
+ * @property {boolean} hasImplementerWork does the PR change anything outside .doer/
  */
 
 export const prMachine = createMachine({
@@ -51,6 +52,15 @@ export const prMachine = createMachine({
     // the outcomes, so a tick is always a transition and never a mystery.
     judging: {
       always: [
+        // Before anything else: is there work here at all? The dispatcher opens
+        // the PR with one file — .doer/TICKET.md — and only then asks the
+        // implementer. On that PR CI is green (nothing to break), a review is
+        // clean (nothing to judge) and findings are zero, so every later guard
+        // says yes and the gate would merge a claim that did nothing — closing
+        // the ticket, because the PR body says "Closes #N". Codex reacted twice
+        // on 2026-09-03 and published nothing both times, which is exactly the
+        // shape that would have hit this.
+        { target: "waitingForImplementer", guard: "noWorkYet" },
         { target: "waitingForChecks", guard: "checksIncomplete" },
         { target: "fixing", guard: "checksFailedAndRoundsLeft" },
         { target: "blocked", guard: "checksFailed" },
@@ -65,6 +75,8 @@ export const prMachine = createMachine({
     // head abc" is — it has an owner and something that would end it.
     waitingForChecks: { type: "final" },
     waitingForReview: { type: "final" },
+    /** The PR is still only the claim; the implementer has published nothing. */
+    waitingForImplementer: { type: "final" },
     /** Hand back to the doer for another round. */
     fixing: { type: "final" },
     /** Three rounds spent, or a failure no round can fix. A person looks. */
@@ -76,6 +88,10 @@ export const prMachine = createMachine({
   },
 }).provide({
   guards: {
+    // Deliberately "changes a file outside .doer/", not "has a second commit":
+    // the same signal gates the reviewer (claude-review.yml paths-ignore), so
+    // the two halves cannot disagree about whether this PR contains work.
+    noWorkYet: ({ context: c }) => c.hasImplementerWork !== true,
     checksIncomplete: ({ context: c }) => {
       const forHead = c.checks.filter((x) => x.headSha === c.headSha);
       // No checks at all is not success — absence of a verdict is not a verdict.
@@ -115,6 +131,7 @@ export function decidePr(facts) {
     waitingForChecks: forHead.length
       ? `waiting on ${running.join(", ")} for head ${facts.headSha.slice(0, 7)}`
       : `no checks have reported for head ${facts.headSha.slice(0, 7)} yet`,
+    waitingForImplementer: "the PR is still only the claim — the implementer has published nothing",
     waitingForReview: `waiting for a review of head ${facts.headSha.slice(0, 7)}`,
     fixing: failed.length
       ? `round ${facts.roundsUsed + 1} of ${MAX_ROUNDS}: failing ${failed.join(", ")}`
