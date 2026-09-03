@@ -66,13 +66,18 @@ jobs:
           # wait for it, and exited. The job went green having reviewed nothing.
           # Read as a clean review by anything downstream, which is precisely
           # the absence the merge gate must never mistake for a verdict.
-          # Task is deliberately absent. With it, the code-review skill spawns
-          # BACKGROUND subagents, says "I'll wait for both before proceeding"
-          # and ends its turn — which in an interactive session is a pause and
-          # here is the end of the process. Run 33751163757 finished in 13
-          # seconds that way, green, having reviewed nothing. Without Task the
-          # skill has no way to defer and must do the reading itself.
-          claude_args: '--allowedTools "Skill,Read,Grep,Glob,Bash,mcp__github_inline_comment__create_inline_comment"'
+          # Deferral is forbidden, not merely unlisted. The code-review skill
+          # spawns BACKGROUND subagents, says "I'll wait for both before
+          # proceeding" and ends its turn — a pause in an interactive session,
+          # the end of the process here. Runs 33751163757 and 33751477127 both
+          # went green in under 17 seconds that way, having read nothing.
+          # Omitting the tool was not enough: --allowedTools gates Skill but not
+          # Agent, so the skill kept spawning; it has to be denied by name.
+          # ScheduleWakeup is denied for the same reason — the skill reached for
+          # it too, and there is no later turn here to wake into.
+          claude_args: >-
+            --allowedTools "Skill,Read,Grep,Glob,Bash,mcp__github_inline_comment__create_inline_comment"
+            --disallowedTools "Agent,Task,ScheduleWakeup"
           # The action refuses a bot actor by default, so that bots cannot
           # trigger each other in a loop. On a doer PR the pushes come from
           # Codex, which is precisely the case this review exists for — so that
