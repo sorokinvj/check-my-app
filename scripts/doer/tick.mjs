@@ -18,7 +18,8 @@
 
 import { execFileSync } from "node:child_process";
 import { writeFileSync, mkdirSync } from "node:fs";
-import { decideTick, branchFor, STOP_LABEL } from "./eligibility.mjs";
+import { decideTick, branchFor, isDoerBranch, STOP_LABEL } from "./eligibility.mjs";
+import { shadowRun } from "./shadow.mjs";
 
 const DRY = process.argv.includes("--dry-run");
 const REPO = process.env.DOER_REPO ?? "sorokinvj/check-my-app";
@@ -94,7 +95,7 @@ const openPrs = gh([
   "--json", "number,headRefName,headRefOid",
 ]);
 const openDoerPrs = openPrs
-  .filter((p) => p.headRefName.startsWith("doer/"))
+  .filter((p) => isDoerBranch(p.headRefName))
   .map((p) => ({ number: p.number, headRef: p.headRefName, headSha: p.headRefOid }));
 
 const stopped = issues.some((i) => i.labels.includes(STOP_LABEL));
@@ -170,3 +171,14 @@ say(`PR opened: #${prNumber}`);
 
 run("gh", ["pr", "comment", String(prNumber), "--repo", REPO, "--body", taskComment(issue)]);
 say("Handed to the implementer. This tick is done — nothing here decides whether it worked.");
+
+// ─── The same ticket, a second implementer (CHE-128) ─────────────────────────
+//
+// Strictly after everything above, and unable to affect any of it. Comparing
+// two implementers on two different tickets measures the tickets; this puts
+// both on one. What comes out is a draft on journeyman/*, which the shepherd
+// cannot see (it reads doer/* and skips drafts) and the queue does not count.
+//
+// It runs last and its result is ignored on purpose: a measurement that can
+// take production down with it is not a measurement, it is a dependency.
+shadowRun({ repo: REPO, issueNumber: issue.number, dry: DRY, say });
