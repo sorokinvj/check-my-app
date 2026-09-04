@@ -119,10 +119,16 @@ function hasImplementerWork(prNumber) {
 // counted. That is the same rule as the other two, expressed with the only
 // evidence this shape offers.
 function reviewReportedForHead(prNumber, headSha) {
-  const reviews = gh([
+  // A review by github-actions[bot] is never a verdict. Enabling Actions to
+  // create pull requests also grants it the right to approve them, so a
+  // workflow could otherwise approve the branch a workflow just pushed — the
+  // author grading its own work, which rule §8 forbids and which this whole
+  // loop exists to prevent. The permission was enabled on 2026-09-04 because
+  // the doer cannot open a PR without it; this line is what makes that safe.
+  const reviews = (gh([
     "api", `repos/${REPO}/pulls/${prNumber}/reviews`,
-    "--jq", "[.[] | {sha:.commit_id, state:.state}]",
-  ]) ?? [];
+    "--jq", "[.[] | {sha:.commit_id, state:.state, who:.user.login}]",
+  ]) ?? []).filter((r) => r.who !== "github-actions[bot]");
   if (reviews.some((r) => r.sha === headSha)) return true;
 
   const comments = gh([
