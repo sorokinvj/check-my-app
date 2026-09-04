@@ -116,6 +116,13 @@ export default async function VerdictPage({
         include: { repo: { select: { repoFullName: true } } },
       })
     : null;
+  // A visitor who OWNS this target sees all controls; a signed-in stranger sees
+  // nothing that acts on the product (CHE-108). Anonymous visitors still see
+  // everything (the conversion path from a shared verdict to enabling a watch).
+  const isOwner = viewer !== null && viewerApp !== null;
+  // Anonymous visitors (viewer === null) still see controls — the path from a
+  // shared verdict to enabling a watch is the product's conversion (CHE-108).
+  const showActions = isOwner || viewer === null;
   // CHE-108: what a run cost us, which models produced it and which deploy it
   // ran against are OUR operating figures, and they belong to nobody outside
   // this business — not a stranger who opened a shared link, and not the
@@ -199,14 +206,20 @@ export default async function VerdictPage({
               )}
             </div>
             <div className="flex shrink-0 items-center gap-2.5">
-              <RecheckButton runId={run.publicId} />
-              <FullRecheckButton runId={run.publicId} />
-              <EnableWatchButton
-                runId={run.publicId}
-                hasWatch={hasWatch}
-                appSlug={run.appSlug}
-                variant="outline"
-              />
+              {showActions && (
+                <>
+                  <RecheckButton runId={run.publicId} />
+                  <FullRecheckButton runId={run.publicId} />
+                </>
+              )}
+              {showActions && (
+                <EnableWatchButton
+                  runId={run.publicId}
+                  hasWatch={hasWatch}
+                  appSlug={run.appSlug}
+                  variant="outline"
+                />
+              )}
             </div>
           </div>
 
@@ -248,7 +261,7 @@ export default async function VerdictPage({
           )}
         </header>
 
-        <FindingsList findings={run.findings} />
+        <FindingsList findings={run.findings} showActions={showActions} />
         <AppLensSection
           runId={run.publicId}
           appSlug={run.appSlug}
@@ -276,7 +289,9 @@ export default async function VerdictPage({
               Daily Watch — we re-run this every 24h, alert on regressions.
             </p>
           </div>
-          <EnableWatchButton runId={run.publicId} hasWatch={hasWatch} appSlug={run.appSlug} />
+          {showActions && (
+            <EnableWatchButton runId={run.publicId} hasWatch={hasWatch} appSlug={run.appSlug} />
+          )}
         </footer>
 
         {(generatedTests.length > 0 || run.transcriptUrl) && (

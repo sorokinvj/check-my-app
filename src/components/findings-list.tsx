@@ -29,7 +29,7 @@ const MARK_LABEL: Record<FindingMark, string | null> = {
 // a verdict is opened to learn what's wrong — the mirror follows). Grouped by
 // category; each finding expands to full detail + evidence + triage actions
 // (Loop C — marks feed the Daily Check noise filter).
-export function FindingsList({ findings }: { findings: FindingWithEvidence[] }) {
+export function FindingsList({ findings, showActions = true }: { findings: FindingWithEvidence[]; showActions?: boolean }) {
   const counts = CATEGORY_ORDER.filter(
     (c) => findings.some((f) => f.category === c),
   )
@@ -65,7 +65,7 @@ export function FindingsList({ findings }: { findings: FindingWithEvidence[] }) 
               </summary>
               <ul className="space-y-2 border-t border-ink-700 p-4">
                 {group.map((f) => (
-                  <FindingRow key={f.id} finding={f} />
+                  <FindingRow key={f.id} finding={f} showActions={showActions} />
                 ))}
               </ul>
             </details>
@@ -79,7 +79,7 @@ export function FindingsList({ findings }: { findings: FindingWithEvidence[] }) 
   );
 }
 
-function FindingRow({ finding }: { finding: FindingWithEvidence }) {
+function FindingRow({ finding, showActions }: { finding: FindingWithEvidence; showActions: boolean }) {
   const [mark, setMark] = useState<FindingMark>(finding.mark as FindingMark);
   const [busy, setBusy] = useState(false);
   const [ticket, setTicket] = useState<{ id: string; url?: string } | null>(null);
@@ -211,6 +211,7 @@ function FindingRow({ finding }: { finding: FindingWithEvidence }) {
         </div>
       </details>
 
+      {showActions && (
       <div className="flex flex-wrap items-center gap-2 border-t border-ink-700 px-4 py-3">
         {/* Loop C triage: "That's fine" mutes it for future runs (noise
             filter), "Watch it" makes the next run verify it FIRST, and
@@ -260,6 +261,7 @@ function FindingRow({ finding }: { finding: FindingWithEvidence }) {
         )}
         {ticketErr && <span className="text-xs text-status-broken">{ticketErr}</span>}
       </div>
+      )}
     </li>
   );
 }
