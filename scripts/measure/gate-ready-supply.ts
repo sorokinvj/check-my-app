@@ -1,6 +1,11 @@
 // Ticket supply (CHE-149): how many machine-gateable findings does CheckMyApp
 // produce per observed app per week?
 //
+// scripts/measure/ is for numbers about the business rather than checks on the
+// code: each file answers one question that gets recomputed later and compared
+// against its own earlier answer, so the question, the criterion and the query
+// have to travel together in one file.
+//
 // The cost of an automatic fix is measured ($0.48 per green PR, CHE-13x). What
 // is not measured is where the tickets come from. The M1 report found three
 // tickets of the right shape, not thirty — and the open question is whether
@@ -8,9 +13,13 @@
 // work a machine can pick up. If an app yields two a week, the constraint on
 // the product is raw material, not price and not model quality.
 //
-// Reads production through the wrangler CLI (this machine is authenticated;
-// there is deliberately no other credential path) and writes nothing —
-// to D1 or anywhere else.
+// Reads production through the wrangler CLI and writes nothing — not to D1, not
+// anywhere else; d1() below refuses any statement that is not a SELECT.
+//
+// Credentials come from wrangler's own resolution, which in this repo means
+// CLOUDFLARE_API_TOKEN out of the untracked .env. A git worktree does not have
+// that file, so run it from a checkout that does, or export the token first:
+// there is deliberately no credential path of this script's own.
 //
 // Usage:
 //   npm run supply                          # Markdown to stdout, last 30 days
@@ -18,7 +27,36 @@
 //   npm run supply -- --list                # every finding that cleared G1, with its verdict
 //   npm run supply -- --list all            # every finding in the window
 //   npm run supply -- --local               # the local D1 replica instead of prod
-//   npx tsx --tsconfig tsconfig.json scripts/supply.ts --json
+//   npx tsx --tsconfig tsconfig.json scripts/measure/gate-ready-supply.ts --json
+//
+// ─── Recounting this, and what makes a recount comparable ────────────────────
+//
+// The number is meant to be recomputed and compared, and the fragile part is
+// not the SQL — it is the criterion below. Two people counting "tickets a
+// machine could take to a decision" will count different things unless the
+// definition is one artefact with the query. That is why it lives in this file
+// and not in a report: a later recount that quietly used a different rule would
+// show a difference and it would be attributed to the business.
+//
+// So: recount by running the command, not by rewriting the rule. If the rule
+// has to change, change it here, say so in the commit, and re-run the OLD
+// window too — a rule change and a business change must never arrive as one
+// number.
+//
+//   npm run supply -- --since <same start> --until <new end>
+//
+// BASELINE, measured 2026-09-04 over the window 2026-08-04 → 2026-09-04:
+//
+//   customer apps under continuous observation:   2 (joblander.app, meetbashar.com)
+//   app-weeks of observation:                     3.9
+//   gate-ready tickets (G1 ∧ G2 ∧ G3):            3   → 0.78 per app per week
+//   evidence tier (G2 ∧ G3, label ignored):       4   → 1.04 per app per week
+//   our own product (checkmyapp.dev, separate):   1 gate-ready over 2.6 app-weeks
+//   raw customer findings that window:            178 → 3 distinct tickets (1.7%)
+//
+// Both observed apps belong to the owner; there is no external customer in that
+// sample. The number is an observation of two apps, not an estimate of a fleet,
+// and a recount that adds a third app changes what it is measuring.
 //
 // ─── What counts as gate-ready ───────────────────────────────────────────────
 //
@@ -58,10 +96,10 @@
 // one ticket, not ten, and the supply question is about tickets.
 
 import { execFileSync } from "node:child_process";
-import { requestSignature } from "../src/lib/dedup";
-import { dedupKeyForFinding } from "../src/lib/tracker/file";
-import { parseJson } from "../src/lib/json";
-import type { FindingDetail } from "../src/lib/types";
+import { requestSignature } from "../../src/lib/dedup";
+import { dedupKeyForFinding } from "../../src/lib/tracker/file";
+import { parseJson } from "../../src/lib/json";
+import type { FindingDetail } from "../../src/lib/types";
 
 const args = process.argv.slice(2);
 const flag = (name: string): string | undefined => {
