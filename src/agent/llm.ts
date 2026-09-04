@@ -21,6 +21,11 @@ export interface LlmConfig {
   // prose), so structured calls route to the text sibling instead.
   structClient: Anthropic;
   structModel: string;
+  // CHE-168: whether the nav model is sent screenshots. Decided once in makeLlm
+  // — the ANTHROPIC_NAV_VISION override, else the isVisionModel heuristic — so
+  // a spike can flip a candidate between vision and text with a secret change
+  // instead of a deploy. Every reader of "does nav see images" uses this field.
+  navVision: boolean;
 }
 
 function clientFor(model: string, env: AgentBindings): Anthropic {
@@ -37,16 +42,42 @@ function clientFor(model: string, env: AgentBindings): Anthropic {
 }
 
 // Which models can accept image blocks (CHE-70). Claude models all can; on
-// OpenRouter only the GLM vision variants (glm-5v-*, glm-4.6v, glm-4.5v) do —
+// OpenRouter the GLM vision variants (glm-5v-*, glm-4.6v, glm-4.5v) and the
+// DeepSeek V4 Flash vision variant (deepseek-v4-flash-vision*, CHE-168) do —
 // sending an image to a text-only model errors the request.
 export function isVisionModel(model: string): boolean {
-  return model.startsWith("claude") || /glm-5v|glm-4\.[56]v/.test(model);
+  return model.startsWith("claude") || /glm-5v|glm-4\.[56]v|deepseek-v4-flash-vision/.test(model);
+}
+
+// CHE-168: the nav vision decision. "on"/"off" override the heuristic in either
+// direction — a spike can run a vision-capable candidate text-only to price the
+// two modes against each other, or force images onto a model the heuristic does
+// not know yet. Anything else (unset, a typo) falls to the heuristic, so a
+// misspelt secret cannot silently send images to a text-only model.
+export function navVisionFor(navModel: string, override: string | undefined): boolean {
+  const raw = override?.trim().toLowerCase();
+  if (raw === "on") return true;
+  if (raw === "off") return false;
+  return isVisionModel(navModel);
+}
+
+// Structured extraction routing (finalizeStructured). The GLM vision variants
+// ignore output_config json_schema (run #73), so a vision nav model routes
+// structured calls to its text sibling; the DeepSeek vision variant is routed
+// the same way on the same assumption until a run shows otherwise (CHE-168).
+// ANTHROPIC_STRUCT_MODEL names the sibling explicitly and wins when set.
+export function structModelFor(navModel: string, override: string | undefined): string {
+  const explicit = override?.trim();
+  if (explicit) return explicit;
+  if (/glm-5v|glm-4\.[56]v/.test(navModel)) return "z-ai/glm-5.2";
+  if (/deepseek-v4-flash-vision/.test(navModel)) return "deepseek/deepseek-v4-flash";
+  return navModel;
 }
 
 export function makeLlm(env: AgentBindings): LlmConfig {
   const navModel = env.ANTHROPIC_NAV_MODEL ?? "claude-sonnet-4-6";
   const synthModel = env.ANTHROPIC_SYNTH_MODEL ?? "claude-opus-4-8";
-  const structModel = /glm-5v|glm-4\.[56]v/.test(navModel) ? "z-ai/glm-5.2" : navModel;
+  const structModel = structModelFor(navModel, env.ANTHROPIC_STRUCT_MODEL);
   return {
     navClient: clientFor(navModel, env),
     synthClient: clientFor(synthModel, env),
@@ -54,6 +85,7 @@ export function makeLlm(env: AgentBindings): LlmConfig {
     synthModel,
     structClient: clientFor(structModel, env),
     structModel,
+    navVision: navVisionFor(navModel, env.ANTHROPIC_NAV_VISION),
   };
 }
 

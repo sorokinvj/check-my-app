@@ -74,6 +74,7 @@ function scriptedLlm(opts: { writeOn: number; deleteOn: number }) {
     navModel: "scripted",
     synthModel: "scripted",
     structModel: "scripted",
+    navVision: false,
   };
   return { llm, seen, calls: () => call };
 }
@@ -242,6 +243,7 @@ async function main() {
         navModel: "scripted",
         synthModel: "scripted",
         structModel: "scripted",
+        navVision: false,
       },
       thinking: "off",
       maxIterations: 50,

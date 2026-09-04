@@ -42,6 +42,8 @@ jobs:
       - run: npm run verify:discovery-lean
       # CHE-136: the three prompts read what earlier runs settled — settled findings, changed pages, last journeys.
       - run: npm run verify:knowledge
+      # CHE-168: nav vision and structured-extraction routing are decided by secrets, not by a deploy.
+      - run: npm run verify:nav-vision
       # Smoke-build the web worker via OpenNext (catches bundle/runtime issues).
       - run: npx opennextjs-cloudflare build
 
