@@ -356,3 +356,26 @@ Workflows engine, almost certainly because the CHE-129 deploy landed at 21:33
 UTC while this run was walking (deploying mid-run restarts in-flight steps).
 `Run.costUsd` counts only the attempts that completed; the ledger counts what
 was billed. Both are recorded above; the discrepancy class is CHE-145.
+
+**Correction (2026-09-04).** The −65% above is against the ticket's named
+reference, #74 — and #74 was an outlier, not the norm. Same-target vision full
+walks since then, completed attempts only:
+
+| Run | Run.costUsd | Walking $ | Iterations | Walking input tok | Input tok / iteration |
+|-----|-------------|-----------|------------|-------------------|-----------------------|
+| #74 | 2.31 | 2.09 | 198 | 1,030,846 | 5,206 |
+| #99 | 1.13 | 0.97 | 158 | 365,008 | 2,310 |
+| #117 | 0.83 | 0.72 | 143 | 195,082 | 1,364 |
+| #121 | 0.72 | 0.59 | 128 | 138,817 | 1,084 |
+| #124 | 1.23 | 1.11 | 206 | 334,781 | 1,625 |
+| #137 (window=3) | 0.80 | 0.67 | 149 | 174,720 | 1,173 |
+
+Against the four unforced fulls before it (#117/#121/#124/#128, mean ≈ $0.84,
+mean input/iteration ≈ 1.35k), #137 is ~10% cheaper per run and ~13% cheaper
+per iteration — real, but not the number the A/B against #74 suggests. Two
+things follow: (1) the window is worth keeping, and the fleet figure from
+`cost:trend` after a week is the one to quote; (2) a joblander full walk still
+costs ~$0.7–0.8 against the program's ≤ $0.40–0.50 target, so the remaining
+distance has to come from CHE-133/134/135 (deployed 2026-09-03, unmeasured)
+and, if the replay spike (CHE-129) reproduces enough journeys, from walking
+without a model at all.
