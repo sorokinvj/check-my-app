@@ -124,6 +124,7 @@ function scriptedLlm(turns: number): LlmConfig {
     navModel: "scripted",
     synthModel: "scripted",
     structModel: "scripted",
+    navVision: false,
   };
 }
 

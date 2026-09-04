@@ -20,6 +20,14 @@ export interface AgentBindings {
   // Cheap-model epic: models with a provider prefix ("z-ai/glm-5.2") route
   // through OpenRouter's Anthropic-compatible endpoint with this key.
   OPENROUTER_API_KEY?: string;
+  // CHE-168: nav model routing without a deploy, so a candidate model can be
+  // spiked in production by changing secrets. ANTHROPIC_NAV_VISION "on" sends
+  // the nav model screenshots, "off" keeps them out of its context, unset →
+  // the isVisionModel heuristic in llm.ts. ANTHROPIC_STRUCT_MODEL names the
+  // model structured extraction runs on; unset → the text sibling of a vision
+  // nav model, else the nav model itself.
+  ANTHROPIC_NAV_VISION?: string;
+  ANTHROPIC_STRUCT_MODEL?: string;
   // Linear OAuth app creds (CHE-68): freshLinearToken refreshes the owner's
   // 24h access tokens with these. Absent = tokens die a day after connect.
   LINEAR_CLIENT_ID?: string;

@@ -79,6 +79,7 @@ function scriptedLlm(turns: number, imagesSeen: number[]): LlmConfig {
     navModel: "scripted",
     synthModel: "scripted",
     structModel: "scripted",
+    navVision: false,
   };
 }
 

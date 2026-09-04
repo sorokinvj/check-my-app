@@ -13,7 +13,7 @@ import { walkingSystem } from "./instructions";
 import type { AppKnowledge } from "./knowledge";
 import { putScreenshot, putText, walkImageWindow, type AgentEnv } from "./env";
 import { originOf, type ProposedJourney, type RunInput } from "./discovery";
-import { emptyUsage, isVisionModel, mergeUsage, type LlmConfig, type UsageTotals } from "./llm";
+import { emptyUsage, mergeUsage, type LlmConfig, type UsageTotals } from "./llm";
 import { credentialsAlreadyRejected, recordCredentialRejection } from "./credentials";
 import { WALK_WRAP_UP_ITERATIONS, walkingIterationCap } from "./limits";
 
@@ -122,7 +122,7 @@ export async function walkOneJourney(args: {
     const toolEnv: ToolEnv = {
       page,
       targetOrigin: originOf(run.targetUrl),
-      visionScreenshots: isVisionModel(llm.navModel),
+      visionScreenshots: llm.navVision,
       // CHE-90: creation is allowed only when the owner enabled it, and every
       // created record lands in the ledger the moment it exists.
       writeAllowed: run.writeAllowed ?? false,

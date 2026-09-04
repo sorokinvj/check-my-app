@@ -17,7 +17,7 @@ import {
 import { discoveryLeanEnabled, putScreenshot, type AgentEnv } from "./env";
 import { discoveryLoopMode } from "./discovery-mode";
 import type { AppKnowledge } from "./knowledge";
-import { emptyUsage, isVisionModel, mergeUsage, type LlmConfig, type UsageTotals } from "./llm";
+import { emptyUsage, mergeUsage, type LlmConfig, type UsageTotals } from "./llm";
 import { credentialsAlreadyRejected, recordCredentialRejection } from "./credentials";
 
 export interface RunInput {
@@ -106,7 +106,7 @@ export async function discoverApp(args: {
   // JPEGs out of the context (E5 in COSTS.md, the discovery counterpart of E3
   // and CHE-130). DISCOVERY_LEAN=off restores the previous behaviour for the
   // A/B without a deploy.
-  const mode = discoveryLoopMode(discoveryLeanEnabled(env.bindings), isVisionModel(llm.navModel));
+  const mode = discoveryLoopMode(discoveryLeanEnabled(env.bindings), llm.navVision);
   if (mode.thinking === "off") {
     console.log("[discovery] lean mode: thinking off, no screenshots in context");
   }
