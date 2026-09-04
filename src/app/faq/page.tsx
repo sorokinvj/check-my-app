@@ -1,12 +1,13 @@
-import type { Metadata } from "next";
 import Link from "next/link";
 import type { ReactNode } from "react";
+import { pageMetadata } from "@/lib/site-metadata";
 
-export const metadata: Metadata = {
-  title: "FAQ — CheckMyApp",
+export const metadata = pageMetadata({
+  title: "FAQ",
   description:
-    "How CheckMyApp explores your app, what it does with your credentials, and what you get back.",
-};
+    "What CheckMyApp does with your app, what it never touches, what happens to your test credentials, and what lands on your verdict page.",
+  path: "/faq",
+});
 
 // Public FAQ · /faq (CHE-63). Answers must stay accurate — no overpromising.
 // API access is a Business-tier feature; trackers are Linear-only today.

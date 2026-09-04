@@ -12,6 +12,7 @@ import { EnableWatchButton, FullRecheckButton, RecheckButton } from "@/component
 import { ExportSpecs } from "@/components/export-specs";
 import { getOptionalUser } from "@/lib/auth";
 import type { AppLens, RunEvent } from "@/lib/types";
+import { OG_IMAGE } from "@/lib/site-metadata";
 
 export const dynamic = "force-dynamic";
 
@@ -46,11 +47,13 @@ export async function generateMetadata({ params }: { params: Promise<{ id: strin
 
   const title = label ? `${run.appSlug} — ${label}` : run.appSlug;
   const description = `${found} Open the check to see what a visitor to ${run.appSlug} runs into, and where.`;
+  // The image travels with the page: Next replaces the layout's openGraph
+  // object wholesale, so leaving `images` out here meant no og:image at all.
   return {
     title,
     description,
-    openGraph: { title, description, type: "article" },
-    twitter: { card: "summary_large_image" as const, title, description },
+    openGraph: { title, description, type: "article", images: [OG_IMAGE] },
+    twitter: { card: "summary_large_image" as const, title, description, images: [OG_IMAGE.url] },
   };
 }
 

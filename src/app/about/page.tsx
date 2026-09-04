@@ -1,10 +1,12 @@
-import type { Metadata } from "next";
 import Link from "next/link";
+import { pageMetadata } from "@/lib/site-metadata";
 
-export const metadata: Metadata = {
-  title: "About — CheckMyApp",
-  description: "Who builds CheckMyApp and how to reach them.",
-};
+export const metadata = pageMetadata({
+  title: "About",
+  description:
+    "CheckMyApp is built and run by one independent developer, and it checks its own product the same way it checks yours. Who is behind it and how to reach them.",
+  path: "/about",
+});
 
 // About / imprint (owner request 2026-08-22): an independent-developer project,
 // with the legal details a paying customer or tax authority would look for.

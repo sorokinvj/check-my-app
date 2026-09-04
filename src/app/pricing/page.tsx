@@ -1,11 +1,13 @@
-import type { Metadata } from "next";
 import Link from "next/link";
 import { UpgradeCta } from "@/components/upgrade-cta";
+import { pageMetadata } from "@/lib/site-metadata";
 
-export const metadata: Metadata = {
-  title: "Pricing — CheckMyApp",
-  description: "Free first check. Daily Watch from $29/mo per app.",
-};
+export const metadata = pageMetadata({
+  title: "Pricing",
+  description:
+    "First check is free, no signup. Daily Watch from $29/mo per app: your app checked every day, and you hear the moment something breaks.",
+  path: "/pricing",
+});
 
 // Pricing · /pricing (CHE-40 phases 2a + 3). Starter/Growth CTAs go through
 // <UpgradeCta>: signed-out → /sign-in, signed-in → Stripe Checkout (or a quiet
