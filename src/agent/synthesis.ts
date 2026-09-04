@@ -7,7 +7,7 @@ import type { Verdict, StepStatus } from "@/lib/enums";
 import type Anthropic from "@anthropic-ai/sdk";
 import { addUsage, costOf, emptyUsage, mergeUsage, type LlmConfig, type UsageTotals } from "./llm";
 import { finalizeStructured } from "./core";
-import type { AgentEnv } from "./env";
+import { harnessMode, type AgentEnv } from "./env";
 import type { ProposedJourney } from "./discovery";
 import { knowledgeBlock } from "./instructions";
 import type { AppKnowledge } from "./knowledge";
@@ -220,6 +220,9 @@ export async function synthesizeVerdict(args: {
         "Your analysis above did not include the required JSON object. Output it now — " +
           "the App Lens fields, bottomLine, and the findings — based ONLY on the observation.",
         SYNTH_RETRY_SCHEMA,
+        // CHE-169: under the judge tier the forced retry gets one more chance
+        // on the judge model before the placeholder verdict ships.
+        { judgeFallback: harnessMode(env.bindings).judge },
       );
       costUsd += forced.costUsd;
       mergeUsage(usage, forced.usage);

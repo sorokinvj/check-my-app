@@ -160,6 +160,10 @@ const rows = runRows
     const discUsd = sum(phase("discovery"), "costUsd");
     const walkUsd = sum(walking, "costUsd");
     const synthUsd = sum(phase("synthesis"), "costUsd");
+    // CHE-169: the second opinion on negative steps, its own phase so its
+    // price sits next to the walk it adjudicated. Blank until a run under
+    // HARNESS_TIER=judge exists.
+    const judgeUsd = sum(phase("judge"), "costUsd");
     const walkCalls = sum(walking, "iterations");
     const walkOut = sum(walking, "outputTokens");
     const usd = r.costUsd == null ? null : Number(r.costUsd);
@@ -204,6 +208,7 @@ const rows = runRows
       discUsd,
       walkUsd,
       synthUsd,
+      judgeUsd,
       walkCalls,
       walkRows: walking.length,
       walkOutputTokens: walkOut,
@@ -392,6 +397,7 @@ for (const a of order) {
         "disc$",
         "walk$",
         "synth$",
+        "judge$",
         "¢/journey",
         "calls/journey",
         "vision",
@@ -405,6 +411,7 @@ for (const a of order) {
         money(r.discUsd || null),
         money(r.walkUsd || null),
         money(r.synthUsd || null),
+        money(r.judgeUsd || null),
         cents(r.centsPerJourney),
         one(r.callsPerJourney),
         r.navModel ? (r.vision ? "yes" : "no") : "",

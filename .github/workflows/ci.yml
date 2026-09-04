@@ -44,6 +44,8 @@ jobs:
       - run: npm run verify:knowledge
       # CHE-168: nav vision and structured-extraction routing are decided by secrets, not by a deploy.
       - run: npm run verify:nav-vision
+      # CHE-169: vision on demand and a judge at the moment of judgment, behind HARNESS_TIER; unset = today's walk.
+      - run: npm run verify:harness
       # Smoke-build the web worker via OpenNext (catches bundle/runtime issues).
       - run: npx opennextjs-cloudflare build
 

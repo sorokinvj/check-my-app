@@ -26,6 +26,15 @@ export interface LlmConfig {
   // a spike can flip a candidate between vision and text with a secret change
   // instead of a deploy. Every reader of "does nav see images" uses this field.
   navVision: boolean;
+  // CHE-169: the second opinion. The judge sees one step — its evidence, the
+  // request tail, a screenshot — and answers defect / not defect / cannot
+  // tell, so the expensive model is paid for at the moment of judgment and
+  // nowhere else. Unset → the nav model itself, on the nav client: a second
+  // look from the same model with a focused prompt, no new provider. Optional
+  // in the type so every LlmConfig built before this field existed still
+  // type-checks; makeLlm always fills both.
+  judgeClient?: Anthropic;
+  judgeModel?: string;
 }
 
 function clientFor(model: string, env: AgentBindings): Anthropic {
@@ -74,18 +83,30 @@ export function structModelFor(navModel: string, override: string | undefined): 
   return navModel;
 }
 
+// The GLM vision variants ignore output_config json_schema (run #73). Any call
+// that needs schema-valid JSON must not be routed to one of them.
+export function ignoresJsonSchema(model: string): boolean {
+  return /glm-5v|glm-4\.[56]v/.test(model);
+}
+
 export function makeLlm(env: AgentBindings): LlmConfig {
   const navModel = env.ANTHROPIC_NAV_MODEL ?? "claude-sonnet-4-6";
   const synthModel = env.ANTHROPIC_SYNTH_MODEL ?? "claude-opus-4-8";
   const structModel = structModelFor(navModel, env.ANTHROPIC_STRUCT_MODEL);
+  const navClient = clientFor(navModel, env);
+  // CHE-169: the judge defaults to the nav model on the nav client, so with
+  // ANTHROPIC_JUDGE_MODEL unset no second provider or key is involved.
+  const judgeModel = env.ANTHROPIC_JUDGE_MODEL?.trim() || navModel;
   return {
-    navClient: clientFor(navModel, env),
+    navClient,
     synthClient: clientFor(synthModel, env),
     navModel,
     synthModel,
     structClient: clientFor(structModel, env),
     structModel,
     navVision: navVisionFor(navModel, env.ANTHROPIC_NAV_VISION),
+    judgeClient: judgeModel === navModel ? navClient : clientFor(judgeModel, env),
+    judgeModel,
   };
 }
 

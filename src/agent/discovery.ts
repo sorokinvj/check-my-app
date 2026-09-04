@@ -14,7 +14,7 @@ import {
   discoverySystem,
   type KnownMap,
 } from "./instructions";
-import { discoveryLeanEnabled, putScreenshot, type AgentEnv } from "./env";
+import { discoveryLeanEnabled, harnessMode, putScreenshot, type AgentEnv } from "./env";
 import { discoveryLoopMode } from "./discovery-mode";
 import type { AppKnowledge } from "./knowledge";
 import { emptyUsage, mergeUsage, type LlmConfig, type UsageTotals } from "./llm";
@@ -111,6 +111,11 @@ export async function discoverApp(args: {
     console.log("[discovery] lean mode: thinking off, no screenshots in context");
   }
 
+  // CHE-169: under the judge tier, an extraction the struct model could not
+  // produce is retried once on the judge model instead of falling to the
+  // free-text scrape. Off by default — the ladder below is unchanged.
+  const structOptions = { judgeFallback: harnessMode(env.bindings).judge };
+
   const context = await browser.newContext(agentContextOptions(browser));
   const page = await context.newPage();
 
@@ -173,6 +178,7 @@ export async function discoverApp(args: {
           "app anatomy (pages, actions, external services, tech as key/value pairs). Every app " +
           "has at least one core journey — never return an empty journeys array.",
         DISCOVERY_SCHEMA,
+        structOptions,
       );
       costUsd += extracted.costUsd;
       mergeUsage(usage, extracted.usage);
@@ -202,6 +208,7 @@ export async function discoverApp(args: {
           "You proposed no user journeys — that is wrong. Propose 3-5 user journeys a real " +
             "user would take, based only on what you saw. Each is a title plus ordered steps.",
           JOURNEYS_SCHEMA,
+          structOptions,
         );
         costUsd += j.costUsd;
         mergeUsage(usage, j.usage);
