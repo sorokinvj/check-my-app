@@ -203,8 +203,14 @@ function openPrs(repo) {
 /**
  * Draft it and label it. Neither is what keeps it away from the gate — the
  * branch prefix does that — so a failure here is loud but not fatal.
+ *
+ * Exported because it is the one half of this file no fixture can prove: it
+ * only does anything against a real pull request. Run against #14 on
+ * 2026-09-04, which journeyman had left open, non-draft and unlabelled since
+ * before any of this existed — it is now a draft carrying `shadow`, and the
+ * shepherd's next dry run listed only #20.
  */
-function markAsShadow(repo, prNumber, say) {
+export function markAsShadow(repo, prNumber, say = console.log) {
   try {
     execFileSync("gh", [
       "label", "create", SHADOW_LABEL, "--repo", repo,
