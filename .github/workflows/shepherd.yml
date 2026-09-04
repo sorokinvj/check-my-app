@@ -30,6 +30,11 @@ permissions:
   contents: write
   pull-requests: write
   issues: write
+  # CHE-153: releasing a workflow run this repository parked on one of our own
+  # branches. Public repositories hold a first-time contributor's run for
+  # approval, and a pull request opened by our bot is one — so without this the
+  # checks the merge gate waits for never start, and no doer PR can ever merge.
+  actions: write
 
 jobs:
   shepherd:

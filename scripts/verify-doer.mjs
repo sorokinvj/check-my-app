@@ -25,6 +25,7 @@ import {
   findJourneymanHome,
   SHADOW_BRANCH_PREFIX,
 } from "./doer/shadow.mjs";
+import { mayUnpark, unparkOurRuns, DOER_PR_AUTHOR, PARKED_STATUS } from "./doer/unpark.mjs";
 
 let bad = 0;
 const check = (name, ok, detail = "") => {
@@ -290,6 +291,132 @@ const approved = [{ state: "APPROVED", headSha: "aaa" }];
     noPrExplanation({ row: null }).includes("no attempt"));
   check("a rehearsal is working as intended",
     noPrExplanation({ row: { verdict: "green" }, rehearse: true }).includes("rehearsal"));
+}
+
+// ── releasing a parked run (CHE-153) ─────────────────────────────────────────
+//
+// This repository is public, and the only thing standing between a stranger's
+// fork and this repository's compute is the approval GitHub parks their run
+// for. These cases are that boundary. The three conditions are required
+// together, so each one is tested by removing exactly that one from an
+// otherwise releasable run.
+{
+  const REPO = "sorokinvj/check-my-app";
+  const ourPr = { headRef: "doer/6-x", headRepo: REPO, author: DOER_PR_AUTHOR };
+  // The shape GitHub actually reports, taken from a real parked run rather than
+  // imagined: run 33872669967 on 2026-09-04 came back as a COMPLETED run whose
+  // conclusion is that a person must act. Written as `status: "action_required"`
+  // — the reading the field name invites — this fixture passed while the sweep
+  // skipped every real parked run and reported success having released nothing.
+  const parked = {
+    id: 1, status: "completed", conclusion: PARKED_STATUS,
+    headBranch: "doer/6-x", headRepository: REPO,
+  };
+
+  check("our own parked run is released", mayUnpark({ run: parked, prs: [ourPr], repo: REPO }).unpark === true);
+  check("a run parked in the status field is released too",
+    mayUnpark({
+      run: { ...parked, status: PARKED_STATUS, conclusion: null },
+      prs: [ourPr], repo: REPO,
+    }).unpark === true);
+
+  {
+    // The whole reason the policy exists. A fork may name its branch anything,
+    // `doer/6-x` included; the head repository is the part it cannot forge.
+    const fork = { ...parked, headRepository: "stranger/check-my-app" };
+    const d = mayUnpark({
+      run: fork,
+      prs: [{ headRef: "doer/6-x", headRepo: "stranger/check-my-app", author: DOER_PR_AUTHOR }],
+      repo: REPO,
+    });
+    check("a fork's run stays parked even on a doer/* branch", d.unpark === false, d.reason);
+  }
+  {
+    const d = mayUnpark({
+      run: { ...parked, headBranch: "feature/whatever" },
+      prs: [{ headRef: "feature/whatever", headRepo: REPO, author: DOER_PR_AUTHOR }],
+      repo: REPO,
+    });
+    check("a branch outside doer/* and journeyman/* stays parked", d.unpark === false, d.reason);
+  }
+  {
+    // Write access here is enough to push a `doer/*` branch, so the prefix alone
+    // is not proof of authorship — the pull request's author is.
+    const d = mayUnpark({
+      run: parked,
+      prs: [{ headRef: "doer/6-x", headRepo: REPO, author: "someone-else" }],
+      repo: REPO,
+    });
+    check("a doer/* branch somebody else opened the PR for stays parked", d.unpark === false, d.reason);
+  }
+  {
+    const d = mayUnpark({ run: parked, prs: [], repo: REPO });
+    check("a parked run with no open pull request stays parked", d.unpark === false, d.reason);
+  }
+  {
+    const d = mayUnpark({
+      run: { ...parked, headBranch: "journeyman/7-x" },
+      prs: [{ headRef: "journeyman/7-x", headRepo: REPO, author: DOER_PR_AUTHOR }],
+      repo: REPO,
+    });
+    check("the shadow leg's own branch is released too", d.unpark === true, d.reason);
+  }
+  {
+    const d = mayUnpark({
+      run: { ...parked, status: "completed", conclusion: "success" }, prs: [ourPr], repo: REPO,
+    });
+    check("a run that is not parked is left alone", d.unpark === false, d.reason);
+  }
+
+  // ── the sweep around that decision ─────────────────────────────────────────
+  const fakeGh = ({ runs = [], prs = [], prsThrow = false }) => (args) => {
+    const url = args[1] ?? "";
+    if (url.includes("/actions/runs")) return runs;
+    if (url.includes("/pulls")) {
+      if (prsThrow) throw new Error("gh: 502 Bad Gateway");
+      return prs;
+    }
+    throw new Error(`unexpected call: ${args.join(" ")}`);
+  };
+  const quiet = () => {};
+  {
+    const approved = [];
+    const r = unparkOurRuns({
+      repo: REPO,
+      gh: fakeGh({ runs: [parked, { ...parked, id: 2, headRepository: "stranger/x" }], prs: [ourPr] }),
+      approve: (id) => approved.push(id),
+      say: quiet,
+    });
+    check("the sweep releases ours and skips the rest",
+      approved.join() === "1" && r.released.join() === "1" && r.skipped.length === 1,
+      `approved=${approved.join()} skipped=${r.skipped.length}`);
+  }
+  {
+    // Fail closed. Without the pull requests, ownership cannot be established,
+    // and an unverifiable claim of ownership releases nothing.
+    const approved = [];
+    const r = unparkOurRuns({
+      repo: REPO,
+      gh: fakeGh({ runs: [parked], prsThrow: true }),
+      approve: (id) => approved.push(id),
+      say: quiet,
+    });
+    check("unreadable pull requests release nothing", approved.length === 0 && r.released.length === 0);
+  }
+  {
+    // If GitHub refuses a workflow token this permission, the loop stops at a
+    // button again — and it must never stop there silently.
+    const said = [];
+    const r = unparkOurRuns({
+      repo: REPO,
+      gh: fakeGh({ runs: [parked], prs: [ourPr] }),
+      approve: () => { throw new Error("Resource not accessible by integration"); },
+      say: (s) => said.push(s),
+    });
+    check("a refused approval is reported, not swallowed",
+      r.failed.length === 1 && said.some((s) => s.includes("FAILED")),
+      said.join(" | "));
+  }
 }
 
 console.log(bad === 0 ? "\nall pass" : `\n${bad} FAILED`);
