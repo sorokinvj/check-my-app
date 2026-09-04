@@ -46,6 +46,8 @@ jobs:
       - run: npm run verify:nav-vision
       # CHE-169: vision on demand and a judge at the moment of judgment, behind HARNESS_TIER; unset = today's walk.
       - run: npm run verify:harness
+      # CHE-108: the verdict page offers each owner control exactly when the server would honour it.
+      - run: npm run verify:viewer
       # Smoke-build the web worker via OpenNext (catches bundle/runtime issues).
       - run: npx opennextjs-cloudflare build
 

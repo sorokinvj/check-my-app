@@ -29,7 +29,19 @@ const MARK_LABEL: Record<FindingMark, string | null> = {
 // a verdict is opened to learn what's wrong — the mirror follows). Grouped by
 // category; each finding expands to full detail + evidence + triage actions
 // (Loop C — marks feed the Daily Check noise filter).
-export function FindingsList({ findings }: { findings: FindingWithEvidence[] }) {
+//
+// CHE-108: the triage row is the owner's. The page decides who gets it with
+// the same rules the API applies (src/lib/viewer-capabilities.ts) — this
+// component only renders what it is told the server would accept.
+export function FindingsList({
+  findings,
+  canMark,
+  canCreateTicket,
+}: {
+  findings: FindingWithEvidence[];
+  canMark: boolean;
+  canCreateTicket: boolean;
+}) {
   const counts = CATEGORY_ORDER.filter(
     (c) => findings.some((f) => f.category === c),
   )
@@ -65,7 +77,12 @@ export function FindingsList({ findings }: { findings: FindingWithEvidence[] }) 
               </summary>
               <ul className="space-y-2 border-t border-ink-700 p-4">
                 {group.map((f) => (
-                  <FindingRow key={f.id} finding={f} />
+                  <FindingRow
+                    key={f.id}
+                    finding={f}
+                    canMark={canMark}
+                    canCreateTicket={canCreateTicket}
+                  />
                 ))}
               </ul>
             </details>
@@ -79,7 +96,15 @@ export function FindingsList({ findings }: { findings: FindingWithEvidence[] }) 
   );
 }
 
-function FindingRow({ finding }: { finding: FindingWithEvidence }) {
+function FindingRow({
+  finding,
+  canMark,
+  canCreateTicket,
+}: {
+  finding: FindingWithEvidence;
+  canMark: boolean;
+  canCreateTicket: boolean;
+}) {
   const [mark, setMark] = useState<FindingMark>(finding.mark as FindingMark);
   const [busy, setBusy] = useState(false);
   const [ticket, setTicket] = useState<{ id: string; url?: string } | null>(null);
@@ -211,55 +236,62 @@ function FindingRow({ finding }: { finding: FindingWithEvidence }) {
         </div>
       </details>
 
-      <div className="flex flex-wrap items-center gap-2 border-t border-ink-700 px-4 py-3">
-        {/* Loop C triage: "That's fine" mutes it for future runs (noise
-            filter), "Watch it" makes the next run verify it FIRST, and
-            "Create Ticket" files it into the owner's Linear with the
-            onboarding TicketPolicy parameters. */}
-        <TriageButton
-          active={mark === "known"}
-          disabled={busy}
-          onClick={() => setMarkRemote(mark === "known" ? "none" : "known")}
-        >
-          That&apos;s fine
-        </TriageButton>
-        <TriageButton
-          active={mark === "watch"}
-          disabled={busy}
-          onClick={() => setMarkRemote(mark === "watch" ? "none" : "watch")}
-        >
-          Watch it
-        </TriageButton>
-        <TriageButton
-          active={mark === "fixed"}
-          disabled={busy}
-          onClick={() => setMarkRemote(mark === "fixed" ? "none" : "fixed")}
-        >
-          Mark as fixed
-        </TriageButton>
-        <TriageButton
-          active={mark === "false_positive"}
-          disabled={busy}
-          onClick={() => setMarkRemote(mark === "false_positive" ? "none" : "false_positive")}
-        >
-          Dispute
-        </TriageButton>
-        {ticket ? (
-          <a
-            href={ticket.url}
-            target="_blank"
-            rel="noreferrer"
-            className="rounded-md border border-accent/40 bg-accent/10 px-2.5 py-1 font-mono text-xs text-accent"
-          >
-            ✓ {ticket.id}
-          </a>
-        ) : (
-          <TriageButton active={false} disabled={busy} onClick={createTicket}>
-            Create Ticket
-          </TriageButton>
-        )}
-        {ticketErr && <span className="text-xs text-status-broken">{ticketErr}</span>}
-      </div>
+      {(canMark || canCreateTicket) && (
+        <div className="flex flex-wrap items-center gap-2 border-t border-ink-700 px-4 py-3">
+          {/* Loop C triage: "That's fine" mutes it for future runs (noise
+              filter), "Watch it" makes the next run verify it FIRST, and
+              "Create Ticket" files it into the owner's Linear with the
+              onboarding TicketPolicy parameters. */}
+          {canMark && (
+            <>
+              <TriageButton
+                active={mark === "known"}
+                disabled={busy}
+                onClick={() => setMarkRemote(mark === "known" ? "none" : "known")}
+              >
+                That&apos;s fine
+              </TriageButton>
+              <TriageButton
+                active={mark === "watch"}
+                disabled={busy}
+                onClick={() => setMarkRemote(mark === "watch" ? "none" : "watch")}
+              >
+                Watch it
+              </TriageButton>
+              <TriageButton
+                active={mark === "fixed"}
+                disabled={busy}
+                onClick={() => setMarkRemote(mark === "fixed" ? "none" : "fixed")}
+              >
+                Mark as fixed
+              </TriageButton>
+              <TriageButton
+                active={mark === "false_positive"}
+                disabled={busy}
+                onClick={() => setMarkRemote(mark === "false_positive" ? "none" : "false_positive")}
+              >
+                Dispute
+              </TriageButton>
+            </>
+          )}
+          {canCreateTicket &&
+            (ticket ? (
+              <a
+                href={ticket.url}
+                target="_blank"
+                rel="noreferrer"
+                className="rounded-md border border-accent/40 bg-accent/10 px-2.5 py-1 font-mono text-xs text-accent"
+              >
+                ✓ {ticket.id}
+              </a>
+            ) : (
+              <TriageButton active={false} disabled={busy} onClick={createTicket}>
+                Create Ticket
+              </TriageButton>
+            ))}
+          {ticketErr && <span className="text-xs text-status-broken">{ticketErr}</span>}
+        </div>
+      )}
     </li>
   );
 }

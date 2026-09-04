@@ -10,7 +10,8 @@ import { AppAnatomySection } from "@/components/app-anatomy";
 import { FindingsList } from "@/components/findings-list";
 import { EnableWatchButton, FullRecheckButton, RecheckButton } from "@/components/verdict-actions";
 import { ExportSpecs } from "@/components/export-specs";
-import { getOptionalUser } from "@/lib/auth";
+import { canMutateOwned, getOptionalUser } from "@/lib/auth";
+import { viewerCapabilities } from "@/lib/viewer-capabilities";
 import type { AppLens, RunEvent } from "@/lib/types";
 import { OG_IMAGE } from "@/lib/site-metadata";
 
@@ -119,6 +120,17 @@ export default async function VerdictPage({
         include: { repo: { select: { repoFullName: true } } },
       })
     : null;
+  // CHE-108: a verdict link is public, and the owner's controls used to render
+  // for whoever opened it — the server refused the click, which is a button
+  // that does nothing, on our own page. Each control now appears only when the
+  // server would honour it, computed with the same helpers the routes use
+  // (rules in src/lib/viewer-capabilities.ts).
+  const caps = viewerCapabilities({
+    run: { ownerId: run.ownerId, hasWatch },
+    viewer,
+    viewerApp,
+    canMutate: await canMutateOwned(prisma, run.ownerId),
+  });
   // CHE-108: what a run cost us, which models produced it and which deploy it
   // ran against are OUR operating figures, and they belong to nobody outside
   // this business — not a stranger who opened a shared link, and not the
@@ -201,16 +213,20 @@ export default async function VerdictPage({
                 </p>
               )}
             </div>
-            <div className="flex shrink-0 items-center gap-2.5">
-              <RecheckButton runId={run.publicId} />
-              <FullRecheckButton runId={run.publicId} />
-              <EnableWatchButton
-                runId={run.publicId}
-                hasWatch={hasWatch}
-                appSlug={run.appSlug}
-                variant="outline"
-              />
-            </div>
+            {(caps.recheck || caps.fullRecheck || caps.enableWatch || caps.watchSettings) && (
+              <div className="flex shrink-0 items-center gap-2.5">
+                {caps.recheck && <RecheckButton runId={run.publicId} />}
+                {caps.fullRecheck && <FullRecheckButton runId={run.publicId} />}
+                {(caps.enableWatch || caps.watchSettings) && (
+                  <EnableWatchButton
+                    runId={run.publicId}
+                    hasWatch={hasWatch}
+                    appSlug={run.appSlug}
+                    variant="outline"
+                  />
+                )}
+              </div>
+            )}
           </div>
 
           {recheckNotice && (
@@ -251,7 +267,11 @@ export default async function VerdictPage({
           )}
         </header>
 
-        <FindingsList findings={run.findings} />
+        <FindingsList
+          findings={run.findings}
+          canMark={caps.markFindings}
+          canCreateTicket={caps.createTicket}
+        />
         <AppLensSection
           runId={run.publicId}
           appSlug={run.appSlug}
@@ -270,17 +290,19 @@ export default async function VerdictPage({
         />
         <AppAnatomySection anatomy={normalizeAnatomy(parseJson<unknown>(run.anatomy))} />
 
-        <footer className="card flex flex-wrap items-center justify-between gap-4 p-6">
-          <div>
-            <p className="font-medium text-fg">
-              Want us to keep watching {run.appSlug}?
-            </p>
-            <p className="mt-0.5 text-sm text-fg-muted">
-              Daily Watch — we re-run this every 24h, alert on regressions.
-            </p>
-          </div>
-          <EnableWatchButton runId={run.publicId} hasWatch={hasWatch} appSlug={run.appSlug} />
-        </footer>
+        {(caps.enableWatch || caps.watchSettings) && (
+          <footer className="card flex flex-wrap items-center justify-between gap-4 p-6">
+            <div>
+              <p className="font-medium text-fg">
+                Want us to keep watching {run.appSlug}?
+              </p>
+              <p className="mt-0.5 text-sm text-fg-muted">
+                Daily Watch — we re-run this every 24h, alert on regressions.
+              </p>
+            </div>
+            <EnableWatchButton runId={run.publicId} hasWatch={hasWatch} appSlug={run.appSlug} />
+          </footer>
+        )}
 
         {(generatedTests.length > 0 || run.transcriptUrl) && (
           <section className="card p-6">
@@ -336,7 +358,7 @@ export default async function VerdictPage({
                 </a>
               </p>
             )}
-            {generatedTests.length > 0 && (
+            {generatedTests.length > 0 && caps.exportSpecs && (
               <ExportSpecs
                 runId={run.publicId}
                 connectedRepo={viewerApp?.repo?.repoFullName ?? null}
@@ -346,7 +368,11 @@ export default async function VerdictPage({
         )}
 
         <p className="text-center font-mono text-[11px] uppercase tracking-[0.18em] text-fg-faint">
-          run #{run.runNumber} · permalink · privacy: private
+          {/* CHE-108: "private" was false on every verdict — the route is not
+              login-gated, anonymous verdicts are public by owner decision, and
+              an owned one loads for anyone holding the link. Say which. */}
+          run #{run.runNumber} · permalink · privacy:{" "}
+          {run.ownerId ? "unlisted link" : "public"}
         </p>
       </div>
     </main>
