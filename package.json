@@ -37,7 +37,8 @@
     "verify:walk-limits": "tsx --tsconfig tsconfig.json scripts/verify-walk-limits.ts",
     "verify:discovery-lean": "tsx --tsconfig tsconfig.json scripts/verify-discovery-lean.ts",
     "verify:knowledge": "tsx --tsconfig tsconfig.json scripts/verify-knowledge.ts",
-    "cost:trend": "node scripts/cost-trend.mjs"
+    "cost:trend": "node scripts/cost-trend.mjs",
+    "supply": "tsx --tsconfig tsconfig.json scripts/supply.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.104.1",
