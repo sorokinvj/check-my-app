@@ -554,6 +554,19 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
               select: { id: true },
             });
             await recordUsage(env, runId, "walking", llm.navModel, r.usage, journey?.id ?? null);
+            // CHE-169: the judge is its own phase in the ledger, so
+            // `npm run cost:trend` can show what the second opinion costs
+            // next to what it adjudicated. No row when it was never called.
+            if (r.judgeUsage) {
+              await recordUsage(
+                env,
+                runId,
+                "judge",
+                llm.judgeModel ?? llm.navModel,
+                r.judgeUsage,
+                journey?.id ?? null,
+              );
+            }
             // Persist the walking transcript per journey (CHE-58): the run-level
             // transcript only kept discovery, so walking — 90% of the calls and
             // the most useful audit + cost-analysis artifact — was invisible.

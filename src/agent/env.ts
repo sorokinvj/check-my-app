@@ -53,6 +53,19 @@ export interface AgentBindings {
   // without a deploy, the same pattern as DISCOVERY_MEMORY (CHE-133) and
   // WALK_IMAGE_WINDOW (CHE-130). Anything else → on.
   DISCOVERY_LEAN?: string;
+  // CHE-169: the smart harness tier. Unset or "off" → today's walk byte for
+  // byte (every screenshot in context when the nav model can see, no second
+  // opinion). "vision-on-demand" → the walk runs text-only and a screenshot
+  // enters the model's context only at a moment of judgment (an inert click,
+  // an error response, a media page, or the model asking to look).
+  // "judge" → that, plus a second model call on every broken / exposed /
+  // confusing step before it is written. Anything else → off: a typo must
+  // not silently change what a customer is told.
+  HARNESS_TIER?: string;
+  // CHE-169: the model that gives the second opinion. Unset → the nav model
+  // (no new provider, no new key). Set to a Claude id to judge on Anthropic
+  // while navigating on OpenRouter.
+  ANTHROPIC_JUDGE_MODEL?: string;
 }
 
 export interface AgentEnv {
@@ -88,6 +101,27 @@ export function discoveryMemoryEnabled(bindings: Pick<AgentBindings, "DISCOVERY_
 // every discovery call.
 export function discoveryLeanEnabled(bindings: Pick<AgentBindings, "DISCOVERY_LEAN">): boolean {
   return bindings.DISCOVERY_LEAN?.trim().toLowerCase() !== "off";
+}
+
+// CHE-169: what the harness spends on. Two independent switches, ordered as
+// tiers because the second only makes sense on top of the first: a judge that
+// never gets to see the page is a judge with one eye closed.
+export interface HarnessMode {
+  // Screenshots enter the model's context on demand, not on every capture.
+  visionOnDemand: boolean;
+  // A second model call adjudicates every negative step before it is written.
+  judge: boolean;
+}
+
+// CHE-169: parse HARNESS_TIER. Only the two exact tier names turn anything on
+// — the default is the walk as it runs today, so an unset var, a typo or a
+// stray value all leave the product exactly as it was (the WALK_IMAGE_WINDOW
+// pattern, CHE-130, applied to a switch that changes what the customer reads).
+export function harnessMode(bindings: Pick<AgentBindings, "HARNESS_TIER">): HarnessMode {
+  const raw = bindings.HARNESS_TIER?.trim().toLowerCase() ?? "";
+  if (raw === "vision-on-demand") return { visionOnDemand: true, judge: false };
+  if (raw === "judge") return { visionOnDemand: true, judge: true };
+  return { visionOnDemand: false, judge: false };
 }
 
 // Store a screenshot in R2, content-addressed. Returns the web evidence URL.

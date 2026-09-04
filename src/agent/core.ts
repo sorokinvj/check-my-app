@@ -6,8 +6,17 @@
 // transcript. No BullMQ, no Prisma — portable to Cloudflare Workflows as-is.
 
 import Anthropic from "@anthropic-ai/sdk";
-import { addUsage, costOf, emptyUsage, isVisionModel, type LlmConfig, type UsageTotals } from "./llm";
-import { BROWSER_TOOLS, executeTool, type ToolEnv } from "./tools";
+import {
+  addUsage,
+  costOf,
+  emptyUsage,
+  ignoresJsonSchema,
+  isVisionModel,
+  mergeUsage,
+  type LlmConfig,
+  type UsageTotals,
+} from "./llm";
+import { browserToolsFor, executeTool, type ToolEnv } from "./tools";
 
 export interface AgentLoopArgs {
   system: string;
@@ -94,6 +103,9 @@ export async function runAgentLoop(args: AgentLoopArgs): Promise<AgentLoopResult
   // CHE-134: the effective cap. Starts at maxIterations and only ever comes
   // down — a second call to the wrap-up tool must not hand the loop new turns.
   let cap = maxIterations;
+  // CHE-169: the screenshot tool carries `look` only under vision on demand;
+  // with the harness off this is BROWSER_TOOLS, byte for byte.
+  const tools = browserToolsFor(env);
 
   while (iterations < cap) {
     iterations += 1;
@@ -114,7 +126,7 @@ export async function runAgentLoop(args: AgentLoopArgs): Promise<AgentLoopResult
         ...(thinking === "adaptive" ? { thinking: { type: "adaptive" as const } } : {}),
         cache_control: { type: "ephemeral" },
         system: [{ type: "text", text: system, cache_control: { type: "ephemeral" } }],
-        tools: BROWSER_TOOLS,
+        tools,
         messages,
       }),
     );
@@ -341,33 +353,75 @@ function stripImageBlocks(messages: Anthropic.MessageParam[]): Anthropic.Message
   });
 }
 
+export interface StructuredOptions {
+  // CHE-169: when the struct model returns nothing parseable, retry once on
+  // the judge model — a stronger model at the one moment the cheap one failed.
+  // On only under HARNESS_TIER=judge; the cost lands in the returned usage.
+  judgeFallback?: boolean;
+}
+
 export async function finalizeStructured<T>(
   llm: LlmConfig,
+  messages: Anthropic.MessageParam[],
+  instruction: string,
+  schema: Record<string, unknown>,
+  options: StructuredOptions = {},
+): Promise<StructuredResult<T>> {
+  const first = await structuredCall<T>(
+    llm.structClient,
+    llm.structModel,
+    messages,
+    instruction,
+    schema,
+  );
+  if (first.parsed || !options.judgeFallback) return first;
+  // A judge that is the struct model itself, or one of the GLM vision variants
+  // that ignore json_schema (run #73), would only repeat the failure.
+  const { judgeClient, judgeModel } = llm;
+  if (!judgeClient || !judgeModel || judgeModel === llm.structModel || ignoresJsonSchema(judgeModel)) {
+    return first;
+  }
+  console.warn(`[agent] structured extraction on ${llm.structModel} returned nothing — retrying on ${judgeModel}`);
+  const second = await structuredCall<T>(judgeClient, judgeModel, messages, instruction, schema);
+  const usage = emptyUsage();
+  mergeUsage(usage, first.usage);
+  mergeUsage(usage, second.usage);
+  return {
+    parsed: second.parsed,
+    note: second.parsed ? null : `${first.note}; then ${second.note}`,
+    costUsd: first.costUsd + second.costUsd,
+    usage,
+  };
+}
+
+async function structuredCall<T>(
+  client: Anthropic,
+  model: string,
   messages: Anthropic.MessageParam[],
   instruction: string,
   schema: Record<string, unknown>,
 ): Promise<StructuredResult<T>> {
   // The struct model may be text-only while the exploration ran on a vision
   // nav model (CHE-70) — image blocks in the transcript would error the call.
-  const safeMessages = isVisionModel(llm.structModel) ? messages : stripImageBlocks(messages);
+  const safeMessages = isVisionModel(model) ? messages : stripImageBlocks(messages);
   const response = await createWithRetry(() =>
-    llm.structClient.messages.create({
-      model: llm.structModel,
+    client.messages.create({
+      model,
       max_tokens: 16_000,
       output_config: { format: { type: "json_schema", schema } },
       messages: appendInstruction(safeMessages, instruction),
     }),
   );
-  const costUsd = costOf(llm.structModel, response.usage);
+  const costUsd = costOf(model, response.usage);
   const usage = emptyUsage();
-  addUsage(usage, llm.structModel, response.usage);
+  addUsage(usage, model, response.usage);
   const nothing = (note: string): StructuredResult<T> => ({ parsed: null, note, costUsd, usage });
 
   const text = response.content.find((b) => b.type === "text");
   if (!text || text.type !== "text") {
     const u = response.usage;
     return nothing(
-      `${llm.structModel} returned no text block (stop=${response.stop_reason ?? "?"}, ` +
+      `${model} returned no text block (stop=${response.stop_reason ?? "?"}, ` +
         `in=${u?.input_tokens ?? 0} out=${u?.output_tokens ?? 0} tokens)`,
     );
   }
@@ -375,11 +429,11 @@ export async function finalizeStructured<T>(
     return { parsed: JSON.parse(text.text) as T, note: null, costUsd, usage };
   } catch {
     const m = text.text.match(/\{[\s\S]*\}/);
-    if (!m) return nothing(`${llm.structModel} answered with prose, not JSON`);
+    if (!m) return nothing(`${model} answered with prose, not JSON`);
     try {
       return { parsed: JSON.parse(m[0]) as T, note: null, costUsd, usage };
     } catch {
-      return nothing(`${llm.structModel} emitted unparseable JSON (${text.text.length} chars)`);
+      return nothing(`${model} emitted unparseable JSON (${text.text.length} chars)`);
     }
   }
 }
@@ -388,7 +442,8 @@ export async function finalizeStructured<T>(
 // mid-run would still throw and lose the whole journey. Retry transient errors
 // (429/500/529) up to 5 times with capped exponential backoff, honoring
 // retry-after when present. Non-transient errors (400/401) rethrow immediately.
-async function createWithRetry(
+// Exported for the judge (CHE-169), which makes its one call the same way.
+export async function createWithRetry(
   fn: () => Promise<Anthropic.Message>,
   attempts = 5,
 ): Promise<Anthropic.Message> {

@@ -38,6 +38,7 @@
     "verify:discovery-lean": "tsx --tsconfig tsconfig.json scripts/verify-discovery-lean.ts",
     "verify:knowledge": "tsx --tsconfig tsconfig.json scripts/verify-knowledge.ts",
     "verify:nav-vision": "tsx --tsconfig tsconfig.json scripts/verify-nav-vision.ts",
+    "verify:harness": "tsx --tsconfig tsconfig.json scripts/verify-harness.ts",
     "cost:trend": "node scripts/cost-trend.mjs",
     "supply": "tsx --tsconfig tsconfig.json scripts/measure/gate-ready-supply.ts"
   },

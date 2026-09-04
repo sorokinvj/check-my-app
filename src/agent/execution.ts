@@ -7,15 +7,17 @@ import type { Browser } from "@cloudflare/playwright";
 import { decryptSecret } from "@/lib/crypto";
 import type { StepStatus } from "@/lib/enums";
 import { LlmBudgetError, runAgentLoop, finalizeJson, type TranscriptEntry } from "./core";
-import { prepareAgentPage, type RecordedAction, type ToolEnv } from "./tools";
+import { prepareAgentPage, scrubSecrets, type RecordedAction, type ToolEnv } from "./tools";
 import { agentContextOptions } from "./browser";
 import { walkingSystem } from "./instructions";
 import type { AppKnowledge } from "./knowledge";
-import { putScreenshot, putText, walkImageWindow, type AgentEnv } from "./env";
+import { harnessMode, putScreenshot, putText, walkImageWindow, type AgentEnv } from "./env";
 import { originOf, type ProposedJourney, type RunInput } from "./discovery";
 import { emptyUsage, mergeUsage, type LlmConfig, type UsageTotals } from "./llm";
 import { credentialsAlreadyRejected, recordCredentialRejection } from "./credentials";
 import { WALK_WRAP_UP_ITERATIONS, walkingIterationCap } from "./limits";
+import { walkingVision } from "./harness";
+import { adjudicateStep } from "./judge";
 
 export interface WalkRun extends RunInput {
   id: string;
@@ -95,11 +97,25 @@ export async function walkOneJourney(args: {
   knowledge?: AppKnowledge | null;
   onLiveScreenshot?: (url: string) => Promise<void>;
   onProgress?: (note: string) => Promise<void>;
-}): Promise<{ transcript: TranscriptEntry[]; costUsd: number; usage: UsageTotals }> {
+}): Promise<{
+  transcript: TranscriptEntry[];
+  // Everything this journey cost, the judge included — what Run.costUsd sums.
+  costUsd: number;
+  // The walking loop's own tokens: the "walking" LlmUsage row.
+  usage: UsageTotals;
+  // CHE-169: the judge's tokens, its own "judge" row. Null when no judge call
+  // was made, so the ledger carries no empty rows for walks that needed none.
+  judgeUsage: UsageTotals | null;
+}> {
   const { env, llm, browser, run, proposed, index, knowledge, onLiveScreenshot, onProgress } = args;
   const transcripts: TranscriptEntry[] = [];
   let costUsd = 0;
   const usage = emptyUsage();
+  // CHE-169: the tier decides how the walk sees and whether a negative step
+  // gets a second opinion. With HARNESS_TIER unset both are today's walk.
+  const harness = harnessMode(env.bindings);
+  const vision = walkingVision(harness, llm.navVision);
+  const judgeUsage = emptyUsage();
 
   await env.db.journey.deleteMany({ where: { runId: run.id, order: index } });
 
@@ -122,7 +138,12 @@ export async function walkOneJourney(args: {
     const toolEnv: ToolEnv = {
       page,
       targetOrigin: originOf(run.targetUrl),
-      visionScreenshots: llm.navVision,
+      // CHE-168 decides whether the nav model sees at all (llm.navVision);
+      // CHE-169 decides when — every capture, or only at a judgment moment.
+      visionScreenshots: vision.visionScreenshots,
+      // CHE-169: present only under vision on demand, so the ToolEnv with the
+      // harness off is the object it was before the field existed.
+      ...(vision.visionTriggers ? { visionTriggers: true } : {}),
       // CHE-90: creation is allowed only when the owner enabled it, and every
       // created record lands in the ledger the moment it exists.
       writeAllowed: run.writeAllowed ?? false,
@@ -162,7 +183,19 @@ export async function walkOneJourney(args: {
         await onLiveScreenshot?.(stored.storageUrl);
         return stored.storageUrl;
       },
-      onReportStep: async (step) => {
+      onReportStep: async (reported) => {
+        // CHE-169: a negative step gets its second opinion BEFORE anything is
+        // written — the status that lands in the row is the adjudicated one.
+        // With the judge off this returns the step untouched.
+        const step = await adjudicateStep({
+          llm,
+          enabled: harness.judge,
+          step: reported,
+          page,
+          networkLog: toolEnv.networkLog,
+          scrub: (text) => scrubSecrets(toolEnv, text),
+          usage: judgeUsage,
+        });
         stepStatuses.push(step.status as StepStatus);
         const trail = actionTrail.splice(0);
         await env.db.step.create({
@@ -288,7 +321,15 @@ export async function walkOneJourney(args: {
     }
   }
 
-  return { transcript: transcripts, costUsd, usage };
+  // The judge's cost belongs to the journey's total (Run.costUsd), but to its
+  // own ledger row — the walking row must keep meaning "the walking loop".
+  costUsd += judgeUsage.costUsd;
+  return {
+    transcript: transcripts,
+    costUsd,
+    usage,
+    judgeUsage: judgeUsage.iterations > 0 ? judgeUsage : null,
+  };
 }
 
 // Generated specs: versioned in D1 (served by /api/tests/{id}) + a copy in R2

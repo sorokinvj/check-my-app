@@ -30,6 +30,13 @@ export interface ToolEnv {
   // Off for text-only nav models — the image would be rejected.
   visionScreenshots?: boolean;
   pendingScreenshotJpegB64?: string;
+  // CHE-169: vision on demand. With this on (and visionScreenshots off) the
+  // screenshot tool parks no JPEG by itself; the harness parks one only at a
+  // moment of judgment — an inert click or one that needed a fallback, an
+  // error response from the target in the last action's requests (or a 429
+  // from anywhere), a page with media/WebRTC signals, or the model asking to
+  // look (screenshot with look=true). Set only for nav models that can see.
+  visionTriggers?: boolean;
   // CRUD lifecycle checking (CHE-90). writeAllowed comes from App.writeMode;
   // marker is the string every created record must carry so cleanup can only
   // ever touch our own rows.
@@ -256,6 +263,36 @@ export const BROWSER_TOOLS: Anthropic.Tool[] = [
   },
 ];
 
+// CHE-169: the same tool list with `look` on the screenshot tool. A separate
+// list rather than a flag on BROWSER_TOOLS so that with the harness off the
+// request the model receives — tools included, which sit at the head of the
+// prompt-cache prefix — is byte for byte what it is today.
+const SCREENSHOT_TOOL_VISION_ON_DEMAND: Anthropic.Tool = {
+  name: "screenshot",
+  description:
+    "Capture a screenshot of the current page as evidence. Returns a storage URL. Use at meaningful " +
+    "moments (step completed, something looks broken). Set look=true when you need to SEE the page " +
+    "to judge a step — costs more, use at judgment moments (an overlay, a media call, something that " +
+    "reads wrong in the digest).",
+  input_schema: {
+    type: "object",
+    properties: {
+      look: {
+        type: "boolean",
+        description: "true to have the image shown to you in the result, not just stored",
+      },
+    },
+  },
+};
+
+const BROWSER_TOOLS_VISION_ON_DEMAND: Anthropic.Tool[] = BROWSER_TOOLS.map((t) =>
+  t.name === "screenshot" ? SCREENSHOT_TOOL_VISION_ON_DEMAND : t,
+);
+
+export function browserToolsFor(env: Pick<ToolEnv, "visionTriggers">): Anthropic.Tool[] {
+  return env.visionTriggers ? BROWSER_TOOLS_VISION_ON_DEMAND : BROWSER_TOOLS;
+}
+
 // ─── Executor ────────────────────────────────────────────────────────────────
 
 export async function executeTool(
@@ -274,7 +311,7 @@ export async function executeTool(
       case "fill":
         return await fill(env, input);
       case "screenshot":
-        return await screenshot(env);
+        return await screenshot(env, input);
       case "get_network_log":
         return scrubSecrets(env, drainLogs(env));
       case "verify_links":
@@ -339,6 +376,7 @@ async function navigate(env: ToolEnv, url: string): Promise<string> {
   if (target.origin !== env.targetOrigin) {
     return `Refused: ${target.origin} is outside the target app (${env.targetOrigin}). Stay on the target.`;
   }
+  const logBefore = env.networkLog.length;
   const res = await env.page.goto(target.toString(), {
     waitUntil: "domcontentloaded",
     timeout: 20_000,
@@ -354,7 +392,100 @@ async function navigate(env: ToolEnv, url: string): Promise<string> {
     url: target.toString(),
     outcome: { urlAfter: env.page.url(), status },
   });
-  return `Navigated to ${env.page.url()} (status ${status ?? "?"})`;
+  // CHE-169: a page that answered with an error, or loaded a media/WebRTC
+  // surface, is a place where the digest alone has misled the walk before.
+  const looked = await lookIfJudgmentMoment(env, {
+    requests: env.networkLog.slice(logBefore),
+    status,
+  });
+  return `Navigated to ${env.page.url()} (status ${status ?? "?"})${looked}`;
+}
+
+// ─── CHE-169: vision on demand ───────────────────────────────────────────────
+// The JPEG the model sees. One capture, shared by the screenshot tool (CHE-70),
+// the on-demand triggers below and the judge (judge.ts): password fields are
+// blurred first, the quality matches the CHE-70 setting so the token cost per
+// image is the one COSTS.md measured.
+export async function captureJpeg(page: Pick<Page, "screenshot" | "evaluate">): Promise<string> {
+  await blurPasswordFields(page);
+  const jpeg = await page.screenshot({ fullPage: false, type: "jpeg", quality: 55 });
+  return Buffer.from(jpeg).toString("base64");
+}
+
+// Park a JPEG for the core loop to attach to the current tool's result, and
+// say why. Best-effort: a failed capture costs the model its look, never the
+// step. The returned suffix tells the model the image is there — a text-only
+// walk has no reason to expect one.
+async function attachLook(env: ToolEnv, reason: string): Promise<string> {
+  if (!env.visionTriggers) return "";
+  try {
+    env.pendingScreenshotJpegB64 = await captureJpeg(env.page);
+    console.log(`[harness] screenshot attached: ${reason}`);
+    return " The page as it looks right now is attached to this result — look at it before judging.";
+  } catch (err) {
+    console.warn(`[harness] screenshot capture failed (${reason}): ${err instanceof Error ? err.message : err}`);
+    return "";
+  }
+}
+
+// An error response in the requests the last action produced: a 429 from
+// anywhere (CLAUDE.md rule 3: our own volume, and the recovery UX is what the
+// model must judge by eye), or a 4xx/5xx from the target itself. The CHE-100
+// credential rejection is excluded — it has its own path and its own text.
+export function errorResponseIn(entries: string[], targetOrigin: string): string | null {
+  for (const line of entries) {
+    const m = line.match(/^([A-Z]+)\s+(\S+)\s+→\s+(\d{3})$/);
+    if (!m) continue;
+    const [, , url, status] = m;
+    const code = Number(status);
+    if (code === 429) return line;
+    if (code < 400) continue;
+    if (credentialRejection([line])) continue;
+    let origin = "";
+    try {
+      origin = new URL(url).origin;
+    } catch {
+      continue;
+    }
+    if (origin === targetOrigin) return line;
+  }
+  return null;
+}
+
+// Signs of a media or WebRTC surface: a <video>/<audio> element, or inline
+// script that reaches for the microphone/camera or a peer connection. Kept as
+// a plain string so esbuild cannot inject helpers into it (see
+// MUTATION_COUNTER_SCRIPT). Scripts loaded by URL have no text here, so this
+// is best-effort by design — the element check carries most real cases.
+const MEDIA_SIGNAL_SCRIPT = `(() => {
+  try {
+    if (document.querySelector('video, audio')) return true;
+    for (const s of Array.from(document.scripts)) {
+      const t = s.textContent || '';
+      if (/getUserMedia|RTCPeerConnection/.test(t)) return true;
+    }
+  } catch (e) {}
+  return false;
+})()`;
+
+async function mediaSignals(env: ToolEnv): Promise<boolean> {
+  const found = await env.page.evaluate(MEDIA_SIGNAL_SCRIPT).catch(() => false);
+  return found === true;
+}
+
+// After navigate/click: attach a look when the requests carried an error or
+// the page shows media signals. One image at most per action.
+async function lookIfJudgmentMoment(
+  env: ToolEnv,
+  action: { requests: string[]; status?: number | null },
+): Promise<string> {
+  if (!env.visionTriggers) return "";
+  const err =
+    errorResponseIn(action.requests, env.targetOrigin) ??
+    (action.status != null && action.status >= 400 ? `HTTP ${action.status} on navigate` : null);
+  if (err) return attachLook(env, `error response (${err})`);
+  if (await mediaSignals(env)) return attachLook(env, "media/WebRTC signals on the page");
+  return "";
 }
 
 // Hydration gate before interacting: full load, then a double-rAF tick (lets
@@ -613,6 +744,10 @@ async function click(env: ToolEnv, input: Record<string, unknown>): Promise<stri
 
   const observed = `${reaction.requests} network request${reaction.requests === 1 ? "" : "s"}, ${reaction.mutations} DOM mutation${reaction.mutations === 1 ? "" : "s"}${reaction.navigated ? ", navigated" : ""}`;
   if (isInert(reaction)) {
+    // CHE-169: an inert click is the judgment moment vision was turned on for
+    // (CHE-70) — an overlay, a consent layer, a media control that only looks
+    // dead. The model gets the page in front of it exactly here.
+    const looked = await attachLook(env, "inert click");
     // Honest zero-reaction signal (CHE-37): the model must see "the page did
     // nothing at all" instead of silence, and must not translate it straight
     // into "broken" — this environment is known to be ignored by some apps.
@@ -622,7 +757,7 @@ async function click(env: ToolEnv, input: Record<string, unknown>): Promise<stri
       `This is either a genuinely dead control or this test browser being ignored ` +
       `(overlay/consent layer, bot gating). Check for overlays with read_page/screenshot; ` +
       `if it stays inert while other JS on the page works, report it as unresponsive ` +
-      `IN THIS TEST BROWSER — not as broken for real users.`
+      `IN THIS TEST BROWSER — not as broken for real users.${looked}`
     );
   }
   const note =
@@ -633,7 +768,14 @@ async function click(env: ToolEnv, input: Record<string, unknown>): Promise<stri
     env.writeAllowed && label && CREATE_VERBS.test(label) && !SAFE_SUBMITS.test(label)
       ? ` If that created something, call record_created NOW (marker "${env.testMarker}") — before anything else.`
       : "";
-  return `Clicked (strategy: ${strategy}). Current URL: ${env.page.url()} (${observed}).${note}${ledgerNudge}`;
+  // CHE-169: a click that only a fallback strategy could land, an error in
+  // what it requested, or a media surface — each is a place the digest has
+  // misread before, so the model looks before it judges.
+  const looked =
+    strategy !== "trusted click"
+      ? await attachLook(env, `click needed a fallback (${strategy})`)
+      : await lookIfJudgmentMoment(env, { requests: fresh });
+  return `Clicked (strategy: ${strategy}). Current URL: ${env.page.url()} (${observed}).${note}${ledgerNudge}${looked}`;
 }
 
 async function fill(env: ToolEnv, input: Record<string, unknown>): Promise<string> {
@@ -744,7 +886,7 @@ async function resolveClickTarget(page: Page, input: Record<string, unknown>) {
 const CAPABILITY_PATTERNS =
   /(target=_?"?_blank|new tab|popup|pop-up|oauth|headless|our (test )?browser|verification code|2fa|mfa|camera|microphone|media device|could not follow|cannot follow|no (network )?requests?|0 requests|magic link|passwordless|email link|sign-?in link)/i;
 
-function classifyUnverified(step: ReportedStep): void {
+export function classifyUnverified(step: ReportedStep): void {
   const text = `${step.observed ?? ""} ${step.attempted ?? ""}`;
   const environmental = CAPABILITY_PATTERNS.test(text);
   const hardEvidence = /\b(4\d{2}|5\d{2})\b|console error|exception|stack|crash/i.test(
@@ -852,15 +994,18 @@ function resolveLocator(page: Page, input: Record<string, unknown>) {
   throw new Error("click needs role+name, name, or selector");
 }
 
-async function screenshot(env: ToolEnv): Promise<string> {
+async function screenshot(env: ToolEnv, input: Record<string, unknown> = {}): Promise<string> {
   await blurPasswordFields(env.page);
   const buffer = await env.page.screenshot({ fullPage: false });
   const url = env.onScreenshot ? await env.onScreenshot(buffer) : null;
-  if (env.visionScreenshots) {
+  // CHE-169: under vision on demand the model gets the image only when it asks
+  // for it — the tool's `look` flag is the model's own judgment moment.
+  const wanted = env.visionScreenshots || (env.visionTriggers && input.look === true);
+  if (wanted) {
     // Second capture as compressed JPEG for the model's own eyes (CHE-70):
     // evidence stays full-quality PNG, context gets ~10x smaller bytes.
-    const jpeg = await env.page.screenshot({ fullPage: false, type: "jpeg", quality: 55 });
-    env.pendingScreenshotJpegB64 = Buffer.from(jpeg).toString("base64");
+    env.pendingScreenshotJpegB64 = await captureJpeg(env.page);
+    if (env.visionTriggers) console.log("[harness] screenshot attached: model asked (look=true)");
     return url
       ? `Screenshot saved: ${url} — the image follows in this result; look at it before judging the step.`
       : "Screenshot captured (not persisted) — the image follows in this result.";
@@ -870,7 +1015,7 @@ async function screenshot(env: ToolEnv): Promise<string> {
 
 // Privacy §5: blur password fields before any screenshot. Covers native
 // type=password plus "show password" toggles that flip it to type=text.
-async function blurPasswordFields(page: Page): Promise<void> {
+async function blurPasswordFields(page: Pick<Page, "evaluate">): Promise<void> {
   await page
     .evaluate(() => {
       document
