@@ -38,6 +38,9 @@ export function SubmitForm({ initialUrl = "" }: { initialUrl?: string }) {
   const [userNotes, setUserNotes] = useState("");
   const [notifyEmail, setNotifyEmail] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  // Set once the visitor submits with no usable URL, so the inline "doesn't
+  // look like a working URL" line shows even for an empty field.
+  const [attempted, setAttempted] = useState(false);
   // `code` is set for quota rejections (CHE-40) so the copy can offer a way out.
   const [error, setError] = useState<{ message: string; code?: string } | null>(null);
   const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
@@ -87,6 +90,15 @@ export function SubmitForm({ initialUrl = "" }: { initialUrl?: string }) {
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
+    // Validated here, not by disabling the button (issue #7): a button that is
+    // disabled in the server-rendered HTML stays dead until React hydrates —
+    // the same pre-hydration failure this product flags on other people's
+    // apps. The button is live from the first paint; a bad URL gets the
+    // inline message instead.
+    if (!valid) {
+      setAttempted(true);
+      return;
+    }
     setSubmitting(true);
     setError(null);
     try {
@@ -136,7 +148,7 @@ export function SubmitForm({ initialUrl = "" }: { initialUrl?: string }) {
           />
         </div>
       </div>
-      {url.length > 0 && !valid && (
+      {(url.length > 0 || attempted) && !valid && (
         <p className="-mt-3 text-sm text-status-broken">Doesn&apos;t look like a working URL</p>
       )}
 
@@ -264,7 +276,7 @@ export function SubmitForm({ initialUrl = "" }: { initialUrl?: string }) {
 
       {TURNSTILE_SITE_KEY && <div ref={turnstileRef} className="flex justify-center" />}
 
-      <Button type="submit" disabled={!valid || submitting} className="w-full py-3.5 text-[15px]">
+      <Button type="submit" disabled={submitting} className="w-full py-3.5 text-[15px]">
         {submitting ? (
           <>
             <span className="inline-block h-2 w-2 animate-pulse-dot rounded-full bg-ink-950" />
