@@ -288,7 +288,7 @@ export function SubmitForm({ initialUrl = "" }: { initialUrl?: string }) {
       </Button>
 
       <p className="text-center font-mono text-[13px] leading-6 text-fg-faint">
-        No signup. Free first run. Takes ~2 hours.
+        No signup. Free first run.
         <br />
         We&apos;ll email you when ready.
       </p>

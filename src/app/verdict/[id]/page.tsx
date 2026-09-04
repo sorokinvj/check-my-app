@@ -368,7 +368,11 @@ export default async function VerdictPage({
         )}
 
         <p className="text-center font-mono text-[11px] uppercase tracking-[0.18em] text-fg-faint">
-          run #{run.runNumber} · permalink · privacy: private
+          {/* CHE-108: "private" was false on every verdict — the route is not
+              login-gated, anonymous verdicts are public by owner decision, and
+              an owned one loads for anyone holding the link. Say which. */}
+          run #{run.runNumber} · permalink · privacy:{" "}
+          {run.ownerId ? "unlisted link" : "public"}
         </p>
       </div>
     </main>
