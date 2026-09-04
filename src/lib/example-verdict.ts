@@ -8,6 +8,6 @@
 //   - a mixed result — some findings, not a flawless run — so the page shows
 //     what a verdict actually contains.
 //
-// Current: theins.ru, "Mostly OK", 4 findings. Swap the path here and nowhere
-// else.
-export const EXAMPLE_VERDICT_PATH = "/verdict/cmsvx1es80003xc1tcov1hgt2";
+// Current: joblander.app (from prisma/seed.ts), "Mostly OK", 4 findings,
+// 3 journeys. Swap the path here and nowhere else.
+export const EXAMPLE_VERDICT_PATH = "/verdict/demo-verdict";
