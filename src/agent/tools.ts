@@ -56,6 +56,54 @@ export interface ToolEnv {
   // never happened, so a replay must not redo it. The step handler drains this
   // into Step.actions.
   actionTrail?: RecordedAction[];
+  // CHE-171: every URL this run has actually SEEN published — the target, every
+  // href on every page read, every URL a click or navigate landed on, the
+  // survey's pages (CHE-132) and the known map's (CHE-133). Filled by the tools
+  // themselves, never by the model. A 404 on a URL outside this set is a 404 on
+  // an address nobody linked to: run #142's nav model typed
+  // https://joblander.app/landing on its own, called the 404 "the documented
+  // landing URL", and JOB-929 was filed on the customer's board off it. Keys
+  // are knownUrlKey() strings. Optional so scripts still build a bare ToolEnv;
+  // absent = the gate is off.
+  knownUrls?: Set<string>;
+}
+
+// CHE-171: one spelling per address — lower-cased origin, path without a
+// trailing slash, query kept, fragment dropped. Only http(s); anything else
+// (mailto:, javascript:, an unparsable string) is null and never counts.
+export function knownUrlKey(raw: string, base?: string): string | null {
+  let u: URL;
+  try {
+    u = new URL(raw, base);
+  } catch {
+    return null;
+  }
+  if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+  const path = u.pathname.replace(/\/+$/, "") || "/";
+  return `${u.origin.toLowerCase()}${path}${u.search}`;
+}
+
+export function rememberUrls(env: Pick<ToolEnv, "knownUrls">, urls: Iterable<string>, base?: string): void {
+  if (!env.knownUrls) return;
+  for (const raw of urls) {
+    const key = knownUrlKey(raw, base);
+    if (key) env.knownUrls.add(key);
+  }
+}
+
+// CHE-171: the set a walk or a discovery starts with. `published` may mix
+// absolute URLs and bare paths ("/pricing"); paths resolve against the target.
+export function knownUrlsFrom(targetUrl: string, published: Iterable<string> = []): Set<string> {
+  const set = new Set<string>();
+  const env = { knownUrls: set };
+  rememberUrls(env, [targetUrl]);
+  rememberUrls(env, published, targetUrl);
+  return set;
+}
+
+function isKnownUrl(env: Pick<ToolEnv, "knownUrls">, url: string, base?: string): boolean {
+  const key = knownUrlKey(url, base);
+  return key !== null && Boolean(env.knownUrls?.has(key));
 }
 
 // CHE-129: what a browser can redo without a model. Inputs are the tool's own
@@ -305,7 +353,7 @@ export async function executeTool(
       case "navigate":
         return await navigate(env, String(input.url));
       case "read_page":
-        return await readPage(env.page);
+        return await readPage(env);
       case "click":
         return await click(env, input);
       case "fill":
@@ -350,6 +398,10 @@ export async function executeTool(
         // The model occasionally invents enum values — coerce to the schema.
         const valid = ["ok", "risky", "confusing", "broken", "exposed", "skipped"];
         if (!valid.includes(step.status)) step.status = "confusing";
+        // CHE-171 first: a step it rewrites is already skipped/not_applicable
+        // by the time classifyUnverified looks, and that one leaves a step
+        // with a reason alone.
+        coerceUnpublished404(step, env);
         classifyUnverified(step);
         await env.onReportStep?.(step);
         return "Step recorded.";
@@ -392,6 +444,24 @@ async function navigate(env: ToolEnv, url: string): Promise<string> {
     url: target.toString(),
     outcome: { urlAfter: env.page.url(), status },
   });
+  // CHE-171: a 404/410 on an address nothing has published is not a fact
+  // about the product — no user arrives there. Decided against the set, not
+  // the model's story about the URL ("the documented landing URL" was the
+  // story in run #142). The refusal is the answer; there is nothing on such a
+  // page for the CHE-169 look to judge, and the address is NOT remembered,
+  // so typing it twice does not make it real.
+  if ((status === 404 || status === 410) && env.knownUrls && !isKnownUrl(env, target.toString())) {
+    console.warn(`[navigate] ${status} on an unpublished address: ${target.toString()}`);
+    return (
+      `Navigated to ${env.page.url()} (status ${status}). This address is not linked from any ` +
+      `page you have read or from the site's own map — a 404 here says nothing about the ` +
+      `product; do not report it as broken. If you meant a real page, find its link in the ` +
+      `page digest first.`
+    );
+  }
+  // Where the navigation ended up is published by definition (a redirect target
+  // is the product's own choice), unless the product said the address is gone.
+  if (status !== 404 && status !== 410) rememberUrls(env, [env.page.url()]);
   // CHE-169: a page that answered with an error, or loaded a media/WebRTC
   // surface, is a place where the digest alone has misled the walk before.
   const looked = await lookIfJudgmentMoment(env, {
@@ -720,10 +790,16 @@ async function click(env: ToolEnv, input: Record<string, unknown>): Promise<stri
       mutations: reaction.mutations,
     },
   });
+  // CHE-171: wherever a click lands, the product itself took the user there.
+  rememberUrls(env, [env.page.url()]);
 
   // CHE-100: before anything is said about the product, check whether what just
   // happened was our own credential being turned away. Sliced from the tail so
   // the rolling window's trim can never shift the range.
+  // CHE-172: this reading is trusted because fill() strips the whitespace the
+  // model puts around a placeholder before the secret is substituted — the
+  // only credential that can reach an auth endpoint from here is the clean
+  // one, so a 401 to it is about the credential, not about our typing.
   const fresh = reaction.requests > 0 ? env.networkLog.slice(-reaction.requests) : [];
   const rejection = credentialRejection(fresh);
   if (rejection) {
@@ -778,8 +854,24 @@ async function click(env: ToolEnv, input: Record<string, unknown>): Promise<stri
   return `Clicked (strategy: ${strategy}). Current URL: ${env.page.url()} (${observed}).${note}${ledgerNudge}${looked}`;
 }
 
+// CHE-172: a placeholder the model padded with whitespace — " {{TEST_EMAIL}}",
+// "{{TEST_PASSWORD}} ", "\t{{TEST_EMAIL}}\n". Run #142's nav model wrote both
+// with a leading space; the substitution kept it, the product answered 401 to
+// a password that began with a space, and the CHE-100 one-attempt rule then
+// did exactly what it should with a rejection — except the rejection was ours.
+// The placeholder IS the value in every such case, so it is collapsed to the
+// bare placeholder before anything reads it. A placeholder next to other text
+// ("{{TEST_EMAIL}}x") is left alone: odd, but it is what the model meant.
+const PADDED_PLACEHOLDER = /^\s*(\{\{TEST_(?:EMAIL|PASSWORD)\}\})\s*$/;
+
+export function normalizeFillValue(raw: string): string {
+  const m = raw.match(PADDED_PLACEHOLDER);
+  return m ? m[1] : raw;
+}
+
 async function fill(env: ToolEnv, input: Record<string, unknown>): Promise<string> {
-  let value = String(input.value);
+  // CHE-172: before any gate, any record, any substitution.
+  let value = normalizeFillValue(String(input.value));
   // CHE-129: what gets recorded is the value as the model wrote it, placeholders
   // intact, scrubbed once more in case the model pasted a real value it had
   // seen echoed by the page. The substituted value below is never written down.
@@ -917,6 +1009,56 @@ export function classifyUnverified(step: ReportedStep): void {
   }
 }
 
+// CHE-171. The navigate refusal tells the model; this makes sure the step
+// cannot say otherwise. A broken/confusing step whose evidence is a 404/410 on
+// an address the run never saw published becomes skipped/not_applicable: not
+// our capability gap (we reached it fine), not the product's defect (nobody is
+// sent there) — a path no user takes. The addresses come from two machine
+// sources: the navigate actions recorded since the last report_step (CHE-129)
+// and the URLs/paths the step text cites. One known address among them keeps
+// the step as written — a 404 on a page the product links to is a real
+// dead-end. And when the trail is there and holds no typed-in 404, the step is
+// left alone whatever the text says: that 404 came from something the product
+// did (a click's own request to /api/…), which is exactly the evidence a real
+// user hits.
+const CITED_URL = /https?:\/\/[^\s"'<>)\]]+/gi;
+const CITED_PATH = /(?:^|[\s"'`(])(\/[a-z0-9][a-z0-9_\-./]*)/gi;
+const NOT_FOUND = /\b(404|410)\b|\bnot found\b/i;
+const TRAILING_PUNCT = /[.,;:]+$/;
+
+function citedAddresses(text: string): string[] {
+  const out: string[] = [];
+  for (const m of text.matchAll(CITED_URL)) out.push(m[0].replace(TRAILING_PUNCT, ""));
+  for (const m of text.matchAll(CITED_PATH)) out.push(m[1].replace(TRAILING_PUNCT, ""));
+  return out;
+}
+
+function isGoneNavigate(a: RecordedAction): a is Extract<RecordedAction, { kind: "navigate" }> {
+  return a.kind === "navigate" && (a.outcome.status === 404 || a.outcome.status === 410);
+}
+
+export function coerceUnpublished404(
+  step: ReportedStep,
+  env: Pick<ToolEnv, "knownUrls" | "targetOrigin" | "actionTrail">,
+): void {
+  if (!env.knownUrls) return;
+  if (step.status !== "broken" && step.status !== "confusing") return;
+  const text = `${step.observed ?? ""} ${step.attempted ?? ""}`;
+  if (!NOT_FOUND.test(text)) return;
+  // A server error is the product's own word; a 404 next to it is not the story.
+  if (/\b5\d{2}\b/.test(step.observed ?? "")) return;
+  const typed = env.actionTrail?.filter(isGoneNavigate).map((a) => a.url);
+  if (typed && typed.length === 0) return;
+  const addresses = [...(typed ?? []), ...citedAddresses(text)];
+  if (addresses.length === 0) return;
+  if (addresses.some((url) => isKnownUrl(env, url, env.targetOrigin))) return;
+  console.warn(`[report_step] "${step.label}": ${step.status} on an unpublished 404 → skipped`);
+  step.status = "skipped";
+  step.unverifiedReason = "not_applicable";
+  const observed = (step.observed ?? "").trim();
+  step.observed = `${observed}${observed && !/[.!?]$/.test(observed) ? "." : ""} This address is not part of the product's navigation.`.trim();
+}
+
 // Bulk outbound-link verification (CHE-81 follow-up). Run #92 inventoried 200+
 // YouTube links on meetbashar.com but could not "open" any (target=_blank in a
 // headless page) and had to punt to "spot-check in a real browser". Links are a
@@ -1042,8 +1184,8 @@ function drainLogs(env: ToolEnv): string {
 }
 
 // Structured page digest — the agent's primary "eyes".
-async function readPage(page: Page): Promise<string> {
-  const digest = await page.evaluate(() => {
+async function readPage(env: ToolEnv): Promise<string> {
+  const digest = await env.page.evaluate(() => {
     const clip = (s: string | null | undefined, n = 80) =>
       (s ?? "").replace(/\s+/g, " ").trim().slice(0, n);
 
@@ -1051,9 +1193,14 @@ async function readPage(page: Page): Promise<string> {
       .slice(0, 20)
       .map((h) => `${h.tagName.toLowerCase()}: ${clip(h.textContent)}`);
 
-    const links = Array.from(document.querySelectorAll("a[href]"))
+    const anchors = Array.from(document.querySelectorAll("a[href]"));
+    const links = anchors
       .slice(0, 40)
       .map((a) => `"${clip(a.textContent, 50)}" → ${a.getAttribute("href")}`);
+    // CHE-171: every href on the page, resolved by the browser, not only the
+    // 40 the digest prints — a page the site links to from its footer or its
+    // 200th anchor is still published.
+    const hrefs = Array.from(new Set(anchors.map((a) => (a as HTMLAnchorElement).href)));
 
     const buttons = Array.from(
       document.querySelectorAll('button,[role="button"],input[type="submit"]'),
@@ -1082,10 +1229,15 @@ async function readPage(page: Page): Promise<string> {
       title: document.title,
       headings,
       links,
+      hrefs,
       buttons,
       fields,
     };
   });
+  // CHE-171: the page read is published (it rendered), and so is everything
+  // it links to. Relative hrefs the stub or an old digest may carry resolve
+  // against the page itself.
+  rememberUrls(env, [digest.url, ...(digest.hrefs ?? [])], digest.url);
 
   return [
     `URL: ${digest.url}`,

@@ -27,7 +27,7 @@ import { NonRetryableError } from "cloudflare:workflows";
 import type { AppAnatomy } from "@/lib/types";
 import type { Verdict } from "@/lib/enums";
 import { normalizeAnatomy } from "@/lib/anatomy";
-import { coverageSentence, unreachedPages } from "@/lib/coverage";
+import { coverageSentence, pagePaths, unreachedPages } from "@/lib/coverage";
 import { parseJson } from "@/lib/json";
 import type { RunEvent, RunPhase } from "@/lib/types";
 import { discoveryMemoryEnabled, makeAgentEnv, putText, type AgentBindings, type AgentEnv } from "./env";
@@ -471,6 +471,11 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
             run: { ...run, userNotes } as RunInput,
             known: known ?? undefined,
             knowledge,
+            // CHE-171: what the survey saw served plus what the last map named.
+            publishedUrls: [
+              ...surveyedUrls(survey),
+              ...pagePaths(known?.anatomy.pages ?? []).map((p) => p.path),
+            ],
             onLiveScreenshot: (url) => setLive(env, runId, { liveScreenshotUrl: url }),
             onProgress: (note) => setLive(env, runId, { currentAction: note }),
           }).catch(rethrowBudgetNonRetryable);
@@ -546,6 +551,8 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
               proposed,
               index: order,
               knowledge,
+              // CHE-171: the survey's pages; the walk learns the rest itself.
+              publishedUrls: surveyedUrls(survey),
               onLiveScreenshot: (url) => setLive(env, runId, { liveScreenshotUrl: url }),
               onProgress: (note) => setLive(env, runId, { currentAction: note }),
             }).catch(rethrowBudgetNonRetryable);
@@ -1103,6 +1110,15 @@ async function checkVerdictIntegrity(
     }
   }
   return { verdict: synth.verdict, bottomLine: synth.bottomLine, note: null };
+}
+
+// CHE-171: the addresses the survey (CHE-132) reached — both the path it was
+// sent to (a sitemap entry, a homepage link: published by the product) and the
+// URL it ended on. Status is not a filter here: a sitemap entry that 404s is
+// still a page the product points users at, and a 404 there IS a defect.
+function surveyedUrls(survey: SurveyOutcome | null | undefined): string[] {
+  const pages = survey?.snapshot?.pages ?? [];
+  return pages.flatMap((p) => [p.url, p.path]);
 }
 
 // Close a model-written line so a clause can be appended after it.

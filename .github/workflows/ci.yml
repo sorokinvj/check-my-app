@@ -48,6 +48,8 @@ jobs:
       - run: npm run verify:harness
       # CHE-108: the verdict page offers each owner control exactly when the server would honour it.
       - run: npm run verify:viewer
+      # CHE-171: a 404 on an address nothing published is refused at navigate and cannot become a broken step.
+      - run: npm run verify:unpublished-404
       # Smoke-build the web worker via OpenNext (catches bundle/runtime issues).
       - run: npx opennextjs-cloudflare build
 

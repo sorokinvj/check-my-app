@@ -6,7 +6,7 @@ import type { Browser } from "@cloudflare/playwright";
 import { decryptSecret } from "@/lib/crypto";
 import type { AppAnatomy } from "@/lib/types";
 import { runAgentLoop, finalizeStructured, type TranscriptEntry } from "./core";
-import { prepareAgentPage, type ToolEnv } from "./tools";
+import { knownUrlsFrom, prepareAgentPage, type ToolEnv } from "./tools";
 import { agentContextOptions } from "./browser";
 import {
   DISCOVERY_ITERATIONS,
@@ -82,10 +82,15 @@ export async function discoverApp(args: {
   // CHE-136: what earlier runs settled about this app, rendered into the
   // prompt after the client's instructions. Absent = the prompt as before.
   knowledge?: AppKnowledge | null;
+  // CHE-171: addresses the run already knows the product publishes (the
+  // survey's pages, CHE-132; the known map's, CHE-133). A 404 on an address
+  // outside this set — and outside everything discovery reads on the way —
+  // is not a defect.
+  publishedUrls?: string[];
   onLiveScreenshot?: (url: string) => Promise<void>;
   onProgress?: (note: string) => Promise<void>;
 }): Promise<DiscoveryResult> {
-  const { env, llm, browser, run, known, knowledge, onLiveScreenshot, onProgress } = args;
+  const { env, llm, browser, run, known, knowledge, publishedUrls, onLiveScreenshot, onProgress } = args;
   const empty: DiscoveryResult = {
     journeys: [],
     anatomy: { pages: [], actions: [], services: [], tech: {} },
@@ -135,6 +140,7 @@ export async function discoverApp(args: {
     // one-attempt rule is per run, not per phase.
     credentials: { rejected: await credentialsAlreadyRejected(env, run.id) },
     onCredentialRejected: (signature) => recordCredentialRejection(env, run.id, signature),
+    knownUrls: knownUrlsFrom(run.targetUrl, publishedUrls),
     onScreenshot: async (buffer) => {
       const { storageUrl } = await putScreenshot(env, buffer);
       await onLiveScreenshot?.(storageUrl);
