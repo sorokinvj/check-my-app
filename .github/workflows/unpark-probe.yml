@@ -1,0 +1,114 @@
+# TEMPORARY (CHE-153). Deleted before this branch is proposed.
+#
+# The open question is whether GITHUB_TOKEN may approve a parked workflow run at
+# all — GitHub forbids a great deal to a workflow token precisely so a bot
+# cannot drive itself. Reading the documentation would settle nothing; this
+# manufactures the exact situation and reports what happened.
+#
+# It makes a real parked run the only way one can be made: a pull request opened
+# by github-actions[bot] on a doer/* branch. Then it runs the real sweep against
+# it and prints the run's status before and after. Everything it creates is torn
+# down in the last step, which always runs.
+name: Unpark probe (CHE-153, temporary)
+
+on:
+  push:
+    branches: [che-153-unpark]
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REPO: ${{ github.repository }}
+      PROBE_BRANCH: doer/0-unpark-probe
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Baseline. An admin PAT calling this on a run that is not waiting gets
+      # 403 "This workflow run is not waiting for approval" (checked by hand,
+      # 2026-09-04). A token without the permission gets 403 "Resource not
+      # accessible by integration" instead. Two different 403s, and which one
+      # comes back is the whole answer.
+      - name: A — is the endpoint reachable by this token at all
+        run: |
+          set +e
+          gh api -X POST "repos/$REPO/actions/runs/33871396140/approve" 2>&1 | tail -3
+          echo "--- exit $? ---"
+
+      - name: B — manufacture a real parked run
+        run: |
+          set -e
+          git config user.name checkmyapp-doer
+          git config user.email doer@checkmyapp.dev
+          git checkout -B "$PROBE_BRANCH" origin/main
+          mkdir -p .doer
+          date -u > .doer/UNPARK-PROBE.md
+          git add -f .doer/UNPARK-PROBE.md
+          git commit -m "probe: CHE-153, a run to park and release"
+          git push -f origin "$PROBE_BRANCH"
+          gh pr create --repo "$REPO" --draft --base main --head "$PROBE_BRANCH" \
+            --title "[probe] CHE-153 — temporary, closed by the same job" \
+            --body "A throwaway draft that exists for about a minute so CHE-153 can find out whether a workflow token may release a parked run. It is closed and its branch deleted by the job that opened it."
+          # Back to the branch under test. The probe branch is main's content by
+          # design — the code being probed is not on it, and the first attempt
+          # died on exactly that: step D imported a module the checkout no
+          # longer had.
+          git checkout --force "$GITHUB_SHA"
+
+      - name: C — what GitHub did with it
+        run: |
+          sleep 25
+          echo "--- every run on the branch ---"
+          gh api "repos/$REPO/actions/runs?branch=$PROBE_BRANCH" \
+            --jq '.workflow_runs[] | "\(.id) status=\(.status) conclusion=\(.conclusion) event=\(.event) actor=\(.actor.login) head_repo=\(.head_repository.full_name)"'
+          echo "--- what the status=action_required filter sees ---"
+          gh api "repos/$REPO/actions/runs?status=action_required&per_page=50" \
+            --jq '.workflow_runs[] | "\(.id) \(.head_branch)"'
+
+      - name: D — the real sweep, against the real parked run
+        run: |
+          node --input-type=module -e '
+            import { execFileSync } from "node:child_process";
+            const { unparkOurRuns } = await import("./scripts/doer/unpark.mjs");
+            const gh = (args) => JSON.parse(execFileSync("gh", args, { encoding: "utf8" }) || "null");
+            const r = unparkOurRuns({
+              repo: process.env.REPO,
+              gh,
+              approve: (id) => execFileSync("gh",
+                ["api", "-X", "POST", `repos/${process.env.REPO}/actions/runs/${id}/approve`],
+                { stdio: "inherit" }),
+            });
+            console.log(JSON.stringify(r, null, 2));
+          '
+
+      - name: E — did it start
+        run: |
+          sleep 10
+          gh api "repos/$REPO/actions/runs?branch=$PROBE_BRANCH" \
+            --jq '.workflow_runs[] | "\(.id) status=\(.status) conclusion=\(.conclusion)"'
+
+      - name: Tear it all down
+        if: always()
+        run: |
+          set +e
+          for id in $(gh api "repos/$REPO/actions/runs?branch=$PROBE_BRANCH" --jq '.workflow_runs[].id'); do
+            gh api -X POST "repos/$REPO/actions/runs/$id/cancel" >/dev/null 2>&1
+            echo "cancelled $id"
+          done
+          gh pr close "$PROBE_BRANCH" --repo "$REPO" --delete-branch 2>&1
+          git push origin --delete "$PROBE_BRANCH" 2>&1
+          echo "--- what is left ---"
+          gh pr list --repo "$REPO" --state open --json number,headRefName

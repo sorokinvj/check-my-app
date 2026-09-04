@@ -19,6 +19,7 @@
 import { execFileSync } from "node:child_process";
 import { decidePr, MAX_ROUNDS } from "./machine.mjs";
 import { HOLD_LABEL, STOP_LABEL, isMergeCandidate } from "./eligibility.mjs";
+import { unparkOurRuns } from "./unpark.mjs";
 
 const DRY = process.argv.includes("--dry-run");
 const REPO = process.env.DOER_REPO ?? "sorokinvj/check-my-app";
@@ -155,6 +156,39 @@ function reviewReportedForHead(prNumber, headSha) {
   }
 }
 
+// A stop the owner set outranks everything, including a PR mid-round — and
+// including the unparking below, which spends this repository's compute.
+const stopped = gh([
+  "issue", "list", "--repo", REPO, "--state", "open", "--limit", "100", "--json", "labels",
+]).some((i) => i.labels.some((l) => l.name === STOP_LABEL));
+if (stopped) {
+  console.log(`Stopped — a ${STOP_LABEL} label is set. Nothing was touched.`);
+  process.exit(0);
+}
+
+// Before reading verdicts, make sure they can exist at all (CHE-153).
+//
+// This repository is public and holds first-time contributors' workflow runs
+// for approval. A pull request opened by our own bot counts as one, so PR #20's
+// only run sat in `action_required` for twenty minutes on 2026-09-04 until a
+// person pressed Approve. The gate below requires green checks for the current
+// head and correctly refuses to read silence as success — so a run that never
+// starts is a merge that never happens, and the loop's last step is a button.
+//
+// Released here rather than at the moment the PR is opened because every push
+// by the implementer parks a run of its own, and this process is the one that
+// comes back every twenty minutes. Only our own branches are touched; the
+// approval policy protecting strangers' forks is left exactly as it is.
+//
+// This runs before the "no PRs to shepherd" exit on purpose: a shadow draft on
+// journeyman/* is not a merge candidate and never appears below, but its checks
+// are still the measurement CHE-128 exists to take.
+unparkOurRuns({
+  repo: REPO,
+  gh,
+  approve: (runId) => act("gh", ["api", "-X", "POST", `repos/${REPO}/actions/runs/${runId}/approve`]),
+});
+
 const prs = gh([
   "pr", "list", "--repo", REPO, "--state", "open", "--limit", "50",
   "--json", "number,headRefName,headRefOid,isDraft",
@@ -162,15 +196,6 @@ const prs = gh([
 
 if (prs.length === 0) {
   console.log("No open doer PRs to shepherd.");
-  process.exit(0);
-}
-
-// A stop the owner set outranks everything, including a PR mid-round.
-const stopped = gh([
-  "issue", "list", "--repo", REPO, "--state", "open", "--limit", "100", "--json", "labels",
-]).some((i) => i.labels.some((l) => l.name === STOP_LABEL));
-if (stopped) {
-  console.log(`Stopped — a ${STOP_LABEL} label is set. ${prs.length} PR(s) left untouched.`);
   process.exit(0);
 }
 
