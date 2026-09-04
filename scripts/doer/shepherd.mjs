@@ -18,7 +18,7 @@
 
 import { execFileSync } from "node:child_process";
 import { decidePr, MAX_ROUNDS } from "./machine.mjs";
-import { HOLD_LABEL, STOP_LABEL } from "./eligibility.mjs";
+import { HOLD_LABEL, STOP_LABEL, isMergeCandidate } from "./eligibility.mjs";
 
 const DRY = process.argv.includes("--dry-run");
 const REPO = process.env.DOER_REPO ?? "sorokinvj/check-my-app";
@@ -158,7 +158,7 @@ function reviewReportedForHead(prNumber, headSha) {
 const prs = gh([
   "pr", "list", "--repo", REPO, "--state", "open", "--limit", "50",
   "--json", "number,headRefName,headRefOid,isDraft",
-]).filter((p) => p.headRefName.startsWith("doer/") && !p.isDraft);
+]).filter(isMergeCandidate);
 
 if (prs.length === 0) {
   console.log("No open doer PRs to shepherd.");

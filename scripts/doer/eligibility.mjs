@@ -65,6 +65,26 @@ export function decideTick(state) {
 // else's branch and the dispatcher must not touch it.
 export const BRANCH_PREFIX = "doer/";
 
+/**
+ * A branch this dispatcher owns. Everything else — including the second
+ * implementer's `journeyman/*` (CHE-128) — is somebody else's work, and the two
+ * rails below are the only reason a shadow PR is safe to open at all.
+ *
+ * Exported rather than written inline twice because the shadow design rests on
+ * both, and an invariant nobody can test is a comment.
+ */
+export function isDoerBranch(ref) {
+  return String(ref ?? "").startsWith(BRANCH_PREFIX);
+}
+
+/**
+ * A PR the merge gate may consider. A draft is a proposal, not a candidate, and
+ * the shadow run publishes drafts deliberately.
+ */
+export function isMergeCandidate(pr) {
+  return isDoerBranch(pr?.headRefName) && pr?.isDraft !== true;
+}
+
 export function branchFor(issueNumber, title) {
   const slug = String(title)
     .toLowerCase()
