@@ -392,6 +392,21 @@ const approved = [{ state: "APPROVED", headSha: "aaa" }];
       `approved=${approved.join()} skipped=${r.skipped.length}`);
   }
   {
+    // An empty sweep still speaks. "Nothing was parked" and "the sweep never
+    // ran" must not read the same in a log — this sweep is what stands between
+    // a doer pull request and its checks (CHE-152).
+    const said = [];
+    const r = unparkOurRuns({
+      repo: REPO,
+      gh: fakeGh({ runs: [], prs: [ourPr] }),
+      approve: () => { throw new Error("nothing should be approved"); },
+      say: (s) => said.push(s),
+    });
+    check("an empty sweep says so rather than saying nothing",
+      r.released.length === 0 && said.some((s) => s.includes("nothing is parked")),
+      `said=${said.join(" | ") || "(silence)"}`);
+  }
+  {
     // Fail closed. Without the pull requests, ownership cannot be established,
     // and an unverifiable claim of ownership releases nothing.
     const approved = [];

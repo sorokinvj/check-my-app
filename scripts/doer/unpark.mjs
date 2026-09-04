@@ -119,7 +119,14 @@ export function unparkOurRuns({ repo, gh, approve, say = console.log }) {
     say(`[unpark] could not list parked runs: ${err.message.split("\n")[0]}`);
     return result;
   }
-  if (runs.length === 0) return result;
+  // Say so even when there is nothing to do. Silence here would mean two
+  // different things — "nothing was parked" and "the sweep never ran" — and
+  // this sweep is what stands between a doer pull request and its checks, so
+  // its absence must not look like its success (CHE-152).
+  if (runs.length === 0) {
+    say("[unpark] nothing is parked");
+    return result;
+  }
 
   let prs = [];
   try {
