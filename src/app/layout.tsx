@@ -3,6 +3,7 @@ import Link from "next/link";
 import { Bricolage_Grotesque, IBM_Plex_Mono } from "next/font/google";
 import { ClerkProvider, Show, SignInButton, UserButton } from "@clerk/nextjs";
 import "./globals.css";
+import { OG_IMAGE, SITE } from "@/lib/site-metadata";
 
 const sans = Bricolage_Grotesque({
   subsets: ["latin"],
@@ -24,8 +25,8 @@ const mono = IBM_Plex_Mono({
 //
 // metadataBase makes the relative image below absolute, which every platform
 // requires; templated titles let a page name itself without repeating the
-// product name.
-const SITE = process.env.NEXT_PUBLIC_APP_URL ?? "https://checkmyapp.dev";
+// product name. Pages that want their own card use pageMetadata() from
+// src/lib/site-metadata.ts — the image has to travel with them, see there.
 const TAGLINE =
   "Paste a link and we check your app the way a person would — then tell you what a visitor hits.";
 
@@ -39,13 +40,13 @@ export const metadata: Metadata = {
     title: "CheckMyApp",
     description: TAGLINE,
     url: SITE,
-    images: [{ url: "/og.png", width: 1200, height: 630, alt: "CheckMyApp" }],
+    images: [OG_IMAGE],
   },
   twitter: {
     card: "summary_large_image",
     title: "CheckMyApp",
     description: TAGLINE,
-    images: ["/og.png"],
+    images: [OG_IMAGE.url],
   },
 };
 
