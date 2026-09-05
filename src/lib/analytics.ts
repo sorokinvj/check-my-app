@@ -94,7 +94,7 @@ export function posthogEventName(event: AnalyticsEvent): string {
   return POSTHOG_EVENT_NAME[event] ?? event;
 }
 
-type TrackArgs<E extends AnalyticsEvent> = AnalyticsEvents[E] extends undefined
+export type TrackArgs<E extends AnalyticsEvent> = AnalyticsEvents[E] extends undefined
   ? []
   : [props: AnalyticsEvents[E]];
 
@@ -346,6 +346,11 @@ export function initAnalytics(): void {
       client.onFeatureFlags(onFlagsLoaded);
     },
   });
+  // What the PostHog snippet does by itself: the client on `window.posthog`,
+  // so a person debugging a page (or forcing a flag with
+  // posthog.featureFlags.overrideFeatureFlags) can reach it. Nothing on it is
+  // secret — the token is the one every visitor already holds.
+  (window as unknown as { posthog?: typeof posthog }).posthog = posthog;
 }
 
 /** Tie the browser's events to a signed-in user. Idempotent for the same id. */

@@ -15,6 +15,8 @@
 // Usage: npx tsx --tsconfig tsconfig.json scripts/verify-analytics.ts
 
 import { randomUUID } from "node:crypto";
+import { readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 import {
   ANALYTICS_EVENTS,
   fnv1a32,
@@ -34,6 +36,7 @@ import {
   POSTHOG_COOKIE_NAME,
   POSTHOG_SERVER_TOKEN,
   SERVER_ANALYTICS_EVENTS,
+  serverDistinctId,
   type FetchLike,
 } from "@/lib/analytics-server";
 
@@ -180,7 +183,7 @@ check("null passes through", guardEvent(null) === null);
 // ─── Server capture ─────────────────────────────────────────────────────────
 
 const fixedNow = new Date("2026-09-05T12:00:00.000Z");
-const payload = buildCapturePayload("run_created", "user_123", { appSlug: "example.com", tier: "smoke", hasCredentials: false }, fixedNow);
+const payload = buildCapturePayload("run_created", "user_123", { appSlug: "example.com", paid: false, hasCredentials: false }, fixedNow);
 check("payload carries the project token as api_key", payload.api_key === POSTHOG_SERVER_TOKEN);
 check("payload carries event, distinct_id and ISO timestamp",
   payload.event === "run_created" && payload.distinct_id === "user_123" && payload.timestamp === "2026-09-05T12:00:00.000Z",
@@ -188,7 +191,7 @@ check("payload carries event, distinct_id and ISO timestamp",
 );
 check(
   "payload properties are the caller's plus $lib",
-  payload.properties.appSlug === "example.com" && payload.properties.tier === "smoke" && payload.properties.$lib === "checkmyapp-server",
+  payload.properties.appSlug === "example.com" && payload.properties.paid === false && payload.properties.$lib === "checkmyapp-server",
   JSON.stringify(payload.properties),
 );
 
@@ -226,6 +229,57 @@ async function serverChecks() {
     console.warn = warn;
   }
 }
+
+// ─── Whom a server event belongs to ─────────────────────────────────────────
+
+check("a cookie id wins", serverDistinctId("ph-cookie", "user_1", "run:x").distinctId === "ph-cookie");
+check("no cookie → the signed-in owner", serverDistinctId(null, "user_1", "run:x").distinctId === "user_1");
+const orphan = serverDistinctId(null, null, "run:x");
+check(
+  "no cookie, no owner → the per-object id, and no person profile is created",
+  orphan.distinctId === "run:x" && orphan.extra.$process_person_profile === false,
+);
+check("a cookie id creates a person as usual", Object.keys(serverDistinctId("ph-cookie", null, "run:x").extra).length === 0);
+
+// ─── Call sites ─────────────────────────────────────────────────────────────
+//
+// Every event the product emits is in the catalogue (the compiler enforces
+// that), and every catalogue event is emitted somewhere — a name nobody
+// calls is a chart that will stay empty. Phase 2 wired the calls; this keeps
+// them wired.
+
+function sources(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((d) => {
+    const p = join(dir, d.name);
+    if (d.isDirectory()) return d.name === "generated" ? [] : sources(p);
+    return /\.(ts|tsx)$/.test(d.name) ? [p] : [];
+  });
+}
+const srcFiles = sources(join(process.cwd(), "src")).filter((f) => !/[\\/]lib[\\/]analytics(-server)?\.ts$/.test(f));
+const clientCalls = new Map<string, string[]>();
+const serverCalls = new Map<string, string[]>();
+for (const file of srcFiles) {
+  const text = readFileSync(file, "utf8");
+  const rel = file.slice(process.cwd().length + 1);
+  for (const m of text.matchAll(/\btrack\("([a-z_]+)"/g)) clientCalls.set(m[1], [...(clientCalls.get(m[1]) ?? []), rel]);
+  for (const m of text.matchAll(/\bevent="([a-z_]+)"/g)) clientCalls.set(m[1], [...(clientCalls.get(m[1]) ?? []), rel]);
+  for (const m of text.matchAll(/\b(?:captureServer|capture|deps\.capture)\("([a-z_]+)"/g)) serverCalls.set(m[1], [...(serverCalls.get(m[1]) ?? []), rel]);
+}
+const unknownClient = [...clientCalls.keys()].filter((n) => !(clientNames as readonly string[]).includes(n));
+check("every client call site names a catalogue event", unknownClient.length === 0, unknownClient.join(", "));
+const unknownServer = [...serverCalls.keys()].filter((n) => !(SERVER_ANALYTICS_EVENTS as readonly string[]).includes(n));
+check("every server call site names a catalogue event", unknownServer.length === 0, unknownServer.join(", "));
+const silentClient = clientNames.filter((n) => !clientCalls.has(n));
+check("every client catalogue event has a call site", silentClient.length === 0, `uncalled: ${silentClient.join(", ")}`);
+const silentServer = SERVER_ANALYTICS_EVENTS.filter((n) => !serverCalls.has(n));
+check("every server catalogue event has a call site", silentServer.length === 0, `uncalled: ${silentServer.join(", ")}`);
+for (const [name, files] of [...clientCalls, ...serverCalls]) console.log(`      ${name} ← ${[...new Set(files)].join(", ")}`);
+
+// The three inputs that hold what a customer typed for us carry the class
+// the SDK and guardEvent both honour.
+const form = readFileSync(join(process.cwd(), "src/components/submit-form.tsx"), "utf8");
+const noCapture = (form.match(/className="ph-no-capture"/g) ?? []).length;
+check("the test e-mail, password and notify e-mail inputs carry ph-no-capture", noCapture >= 3, `${noCapture} inputs`);
 
 // ─── Cookie → distinct id ───────────────────────────────────────────────────
 

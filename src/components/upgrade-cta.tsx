@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useUser } from "@clerk/nextjs";
+import { track } from "@/lib/analytics";
 
 // Paid-plan CTA on /pricing (CHE-40 phase 3). Signed-out visitors go to
 // /sign-in as before; signed-in owners start a Stripe Checkout session. Until
@@ -31,6 +32,7 @@ export function UpgradeCta({
   }
 
   async function checkout() {
+    track("checkout_opened", { plan });
     setBusy(true);
     setNote(null);
     const res = await fetch("/api/billing/checkout", {

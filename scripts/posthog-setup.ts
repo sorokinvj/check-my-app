@@ -133,8 +133,11 @@ async function ensureExperiment(): Promise<Experiment> {
       funnelMetric("Landing → checkout opened", "checkout_opened"),
     ],
     exposure_criteria: { filterTestAccounts: true },
-    // The metric events are instrumented by phase 2 of the analytics work and
-    // have not been ingested yet; the owner named them for this experiment.
+    // Needed on 2026-09-05 because the metric events were not ingested yet
+    // (the owner named them for this experiment). Phase 2 wired the calls;
+    // once check_submitted, sign_in_clicked and checkout_opened show up in
+    // the project's event list this line can go — PostHog then validates the
+    // names for us, which is the better default.
     allow_unknown_events: true,
   });
   console.log(`experiment  created id=${created.id} flag=${created.feature_flag_key} start_date=${created.start_date ?? "draft"}`);
