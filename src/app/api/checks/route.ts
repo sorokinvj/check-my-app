@@ -5,6 +5,7 @@ import { hashClientKey } from "@/lib/crypto";
 import { assertCanStartRun } from "@/lib/plans";
 import { effectiveSiteCap } from "@/lib/site-cap";
 import { startCheck } from "@/lib/start-check";
+import { distinctIdFromCookies } from "@/lib/analytics-server";
 import { appSlugFromUrl } from "@/lib/utils";
 import { createCheckSchema } from "@/lib/validation";
 import { verifyTurnstile } from "@/lib/turnstile";
@@ -77,8 +78,14 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: gate.reason, code: gate.code }, { status: 429 });
   }
 
-  // Insert + hand-off to the agent, shared with the paid one-off check.
-  const run = await startCheck(prisma, { input, ownerId: owner?.id ?? null, anonKeyHash });
+  // Insert + hand-off to the agent, shared with the paid one-off check. The
+  // browser's PostHog id rides along so `run_created` joins its own events.
+  const run = await startCheck(prisma, {
+    input,
+    ownerId: owner?.id ?? null,
+    anonKeyHash,
+    distinctId: distinctIdFromCookies(req.headers.get("cookie")),
+  });
 
   // The /run/{id} URL uses the unguessable public id.
   return NextResponse.json({ id: run.publicId }, { status: 201 });

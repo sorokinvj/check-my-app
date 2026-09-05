@@ -5,6 +5,7 @@ import { encryptSecret, hashClientKey } from "@/lib/crypto";
 import { BILLING_UNCONFIGURED, getStripe, getStripeEnv, oneCheckPriceId } from "@/lib/stripe";
 import { PENDING_CHECK_TTL_MS, paidCheckState } from "@/lib/one-check";
 import { createCheckSchema } from "@/lib/validation";
+import { distinctIdFromCookies } from "@/lib/analytics-server";
 
 // Prod build inlines https://checkmyapp.dev (.env.production); local dev lands
 // back on localhost. Stripe requires absolute URLs here.
@@ -42,6 +43,9 @@ export async function POST(req: Request) {
       userNotes: input.userNotes || null,
       notifyEmail: input.notifyEmail || null,
       anonKeyHash: await hashClientKey(req.headers.get("cf-connecting-ip")),
+      // The buyer's PostHog id, so the events the payment produces later
+      // (one_check_paid, run_created) land on the same person as this click.
+      distinctId: distinctIdFromCookies(req.headers.get("cookie")),
       expiresAt: new Date(Date.now() + PENDING_CHECK_TTL_MS),
     },
     select: { id: true },

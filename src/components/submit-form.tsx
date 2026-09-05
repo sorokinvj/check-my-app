@@ -6,8 +6,17 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { VERDICT_META } from "@/lib/status";
+import { appSlugFromUrl } from "@/lib/utils";
+import { track, useLandingVariant } from "@/lib/analytics";
 
 const TURNSTILE_SITE_KEY = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
+
+// The server's rejection codes worth telling apart in analytics; anything
+// else (a 400, a 403 from Turnstile, a 5xx) is "other".
+const REJECTION_CODES = new Set(["quota_site", "quota_anon", "quota_free"]);
+function rejectionCode(code: string | undefined): string {
+  return code && REJECTION_CODES.has(code) ? code : "other";
+}
 
 // Domain-keyed result cache hit (CHE-39) — latest completed run for this domain.
 type LookupHit = {
@@ -52,6 +61,15 @@ export function SubmitForm({ initialUrl = "" }: { initialUrl?: string }) {
   // the same submission, follow the checkout URL it returns.
   const [paying, setPaying] = useState(false);
   const [payError, setPayError] = useState<string | null>(null);
+  // Landing headline A/B (PostHog flag `landing-variant`, see
+  // src/lib/analytics.ts): "A" on the server and until the flag resolves.
+  const variant = useLandingVariant();
+
+  // The site-cap panel is the growth plan's own signal: count it when it
+  // renders, once per rejection.
+  useEffect(() => {
+    if (error?.code === "quota_site") track("quota_site_hit");
+  }, [error]);
 
   useEffect(() => {
     let cancelled = false;
@@ -114,6 +132,7 @@ export function SubmitForm({ initialUrl = "" }: { initialUrl?: string }) {
   // paid endpoint carries the submission through checkout and starts the same
   // run on payment.
   async function payForThisCheck() {
+    track("one_check_clicked");
     setPaying(true);
     setPayError(null);
     try {
@@ -140,12 +159,21 @@ export function SubmitForm({ initialUrl = "" }: { initialUrl?: string }) {
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
+    // Recorded on the click, before anything can refuse it: the headline A/B
+    // measures intent, and the site-wide cap must not depress it. What the
+    // server answers is a separate event below.
+    track("check_submitted", {
+      appSlug: valid ? appSlugFromUrl(normalizedUrl) : "",
+      hasCredentials: Boolean(testEmail && testPassword),
+      hasNotifyEmail: Boolean(notifyEmail),
+    });
     // Validated here, not by disabling the button (issue #7): a button that is
     // disabled in the server-rendered HTML stays dead until React hydrates —
     // the same pre-hydration failure this product flags on other people's
     // apps. The button is live from the first paint; a bad URL gets the
     // inline message instead.
     if (!valid) {
+      track("check_rejected", { code: "invalid_url" });
       setAttempted(true);
       return;
     }
@@ -159,6 +187,7 @@ export function SubmitForm({ initialUrl = "" }: { initialUrl?: string }) {
       });
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string; code?: string };
+        track("check_rejected", { code: rejectionCode(body.code) });
         setError({ message: body.error ?? "Something went wrong", code: body.code });
         setSubmitting(false);
         return;
@@ -166,6 +195,7 @@ export function SubmitForm({ initialUrl = "" }: { initialUrl?: string }) {
       const { id } = (await res.json()) as { id: string };
       router.push(`/run/${id}`);
     } catch (err) {
+      track("check_rejected", { code: "other" });
       setError({ message: err instanceof Error ? err.message : "Something went wrong" });
       setSubmitting(false);
     }
@@ -175,10 +205,22 @@ export function SubmitForm({ initialUrl = "" }: { initialUrl?: string }) {
     <form onSubmit={onSubmit} className="stagger w-full max-w-xl space-y-6">
       <div className="space-y-3 text-center">
         <p className="section-label">free first run · no signup</p>
+        {/* Two headlines under test (experiment "Landing headline A/B"). A is
+            the original; B names what the check is for. Same element, same
+            classes — only the words differ, so a late switch to B moves no
+            layout beyond the text itself. */}
         <h1 className="text-balance text-4xl font-semibold tracking-tight sm:text-[2.75rem] sm:leading-[1.1]">
           Paste a link.
           <br />
-          We&apos;ll show you <span className="text-accent">your app</span>.
+          {variant === "B" ? (
+            <>
+              We&apos;ll show you what a <span className="text-accent">first-time visitor</span> hits.
+            </>
+          ) : (
+            <>
+              We&apos;ll show you <span className="text-accent">your app</span>.
+            </>
+          )}
         </h1>
       </div>
 
@@ -272,12 +314,15 @@ export function SubmitForm({ initialUrl = "" }: { initialUrl?: string }) {
               Test login{" "}
               <span className="font-normal text-fg-faint">(optional but recommended)</span>
             </p>
+            {/* ph-no-capture: the customer's test login never rides on an
+                analytics event (src/lib/analytics.ts, guardEvent). */}
             <Input
               type="email"
               placeholder="test@example.com"
               value={testEmail}
               onChange={(e) => setTestEmail(e.target.value)}
               autoComplete="off"
+              className="ph-no-capture"
             />
             <Input
               type="password"
@@ -285,6 +330,7 @@ export function SubmitForm({ initialUrl = "" }: { initialUrl?: string }) {
               value={testPassword}
               onChange={(e) => setTestPassword(e.target.value)}
               autoComplete="new-password"
+              className="ph-no-capture"
             />
             <p className="text-xs text-fg-faint">
               Encrypted at rest, deleted after the run, never appears in evidence.
@@ -305,6 +351,7 @@ export function SubmitForm({ initialUrl = "" }: { initialUrl?: string }) {
               placeholder="you@email.com"
               value={notifyEmail}
               onChange={(e) => setNotifyEmail(e.target.value)}
+              className="ph-no-capture"
             />
           </div>
         </div>
@@ -336,7 +383,11 @@ export function SubmitForm({ initialUrl = "" }: { initialUrl?: string }) {
             {error.code === "quota_anon" && (
               <>
                 {" "}
-                <Link href="/sign-in" className="text-accent transition-colors hover:underline">
+                <Link
+                  href="/sign-in"
+                  onClick={() => track("sign_in_clicked", { from: "check" })}
+                  className="text-accent transition-colors hover:underline"
+                >
                   Sign in →
                 </Link>
               </>

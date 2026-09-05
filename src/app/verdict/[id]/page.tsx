@@ -10,6 +10,7 @@ import { AppAnatomySection } from "@/components/app-anatomy";
 import { FindingsList } from "@/components/findings-list";
 import { EnableWatchButton, FullRecheckButton, RecheckButton } from "@/components/verdict-actions";
 import { ExportSpecs } from "@/components/export-specs";
+import { TrackOnView, TrackedLink } from "@/components/track";
 import { canMutateOwned, getOptionalUser } from "@/lib/auth";
 import { viewerCapabilities } from "@/lib/viewer-capabilities";
 import type { AppLens, RunEvent } from "@/lib/types";
@@ -169,6 +170,14 @@ export default async function VerdictPage({
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-10">
+      <TrackOnView
+        event="verdict_viewed"
+        props={{
+          appSlug: run.appSlug,
+          verdict: run.verdict ?? "none",
+          isOwner: viewer !== null && viewer.id === run.ownerId,
+        }}
+      />
       {run.status === "partial" && (
         <p className="mb-4 rounded-lg border border-status-confusing/40 bg-status-confusing/10 px-4 py-2.5 text-sm text-status-confusing">
           The agent got partway through and paused — this is a partial verdict.
@@ -183,12 +192,14 @@ export default async function VerdictPage({
             today&apos;s checks
           </Link>
           .{" "}
-          <Link
+          <TrackedLink
+            event="sign_in_clicked"
+            props={{ from: "verdict" }}
             href="/sign-in?redirect_url=%2Fcheck"
             className="text-accent underline-offset-2 hover:underline"
           >
             Sign in
-          </Link>{" "}
+          </TrackedLink>{" "}
           before your next check to keep it unlisted.
         </p>
       )}

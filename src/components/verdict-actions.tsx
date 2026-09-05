@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useFormStatus } from "react-dom";
 import { Button } from "@/components/ui/button";
 import { enableWatchAction, fullRecheckRunAction, recheckRunAction } from "@/app/verdict/actions";
+import { track } from "@/lib/analytics";
 
 // Verdict header/footer actions: enable Daily Watch (Loop B) and re-check now
 // (Journey 7). Kept client-side so the report page itself stays a server render.
@@ -35,7 +36,9 @@ export function EnableWatchButton({
   }
 
   return (
-    <form action={enableWatchAction.bind(null, runId)}>
+    // Recorded on the submit: the action redirects away, so the click is the
+    // last moment this page can speak.
+    <form action={enableWatchAction.bind(null, runId)} onSubmit={() => track("watch_enabled", { appSlug })}>
       <EnableWatchSubmit variant={variant} />
     </form>
   );

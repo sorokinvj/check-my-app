@@ -4,6 +4,7 @@ import { relativeTime, todayChecks } from "@/lib/checks-today";
 import { effectiveSiteCap } from "@/lib/site-cap";
 import { VERDICT_META, isTerminal } from "@/lib/status";
 import { pageMetadata } from "@/lib/site-metadata";
+import { TrackOnView } from "@/components/track";
 
 // The cap in the description is the effective one (runtime env), so the
 // number a search result shows is the number the page enforces.
@@ -28,6 +29,7 @@ export default async function TodayChecksPage() {
 
   return (
     <main className="mx-auto max-w-2xl px-4 py-16">
+      <TrackOnView event="today_checks_viewed" />
       <div className="stagger space-y-10">
         <div className="space-y-3">
           <p className="section-label">today · {today.used} of {today.cap} free checks used</p>

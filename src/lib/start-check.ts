@@ -9,6 +9,7 @@ import { nextRunNumber } from "@/lib/db";
 import { triggerRun } from "@/lib/trigger";
 import { encryptSecret } from "@/lib/crypto";
 import { appSlugFromUrl } from "@/lib/utils";
+import { captureServer, serverDistinctId } from "@/lib/analytics-server";
 import type { CreateCheckInput } from "@/lib/validation";
 
 export interface StartCheckOptions {
@@ -21,12 +22,19 @@ export interface StartCheckOptions {
   // column is unique, so a second start on the same payment fails at the
   // insert instead of producing a second run.
   paid?: { checkoutSessionId: string };
+  // The browser's PostHog distinct id when the caller has it (from the
+  // request cookie, or parked with a paid check), so `run_created` joins the
+  // visitor's own events. Null when the visitor sent none.
+  distinctId?: string | null;
 }
 
 export interface StartCheckDeps {
   // Hands the queued run to the agent. Injectable so the start can be verified
   // without a Workflow binding or an agent worker.
   trigger: (runId: string) => Promise<void>;
+  // Records the product event. Absent in a test's deps → nothing is sent;
+  // production callers pass no deps and get the real capture.
+  capture?: typeof captureServer;
 }
 
 export interface StartedCheck {
@@ -37,14 +45,15 @@ export interface StartedCheck {
 export async function startCheck(
   db: PrismaClient,
   opts: StartCheckOptions,
-  deps: StartCheckDeps = { trigger: triggerRun },
+  deps: StartCheckDeps = { trigger: triggerRun, capture: captureServer },
 ): Promise<StartedCheck> {
   const { input } = opts;
+  const appSlug = appSlugFromUrl(input.url);
   const run = await db.run.create({
     data: {
       runNumber: await nextRunNumber(db),
       targetUrl: input.url,
-      appSlug: appSlugFromUrl(input.url),
+      appSlug,
       testEmail: input.testEmail || null,
       testPasswordEnc: input.testPassword ? encryptSecret(input.testPassword) : null,
       scopeHints: input.scopeHints || null,
@@ -60,6 +69,19 @@ export async function startCheck(
     },
     select: { id: true, publicId: true },
   });
+
+  // The row is the fact the event records, so it is sent here and not after
+  // the hand-off: a run that failed to trigger still exists and still counts.
+  // captureServer never throws — analytics being down cannot fail a run.
+  if (deps.capture) {
+    const who = serverDistinctId(opts.distinctId ?? null, opts.ownerId, `run:${run.publicId}`);
+    await deps.capture("run_created", who.distinctId, {
+      appSlug,
+      paid: Boolean(opts.paid),
+      hasCredentials: Boolean(input.testEmail && input.testPassword),
+      ...who.extra,
+    });
+  }
 
   await deps.trigger(run.id);
   return run;
