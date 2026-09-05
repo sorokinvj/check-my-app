@@ -20,46 +20,18 @@ jobs:
       - run: npm run typecheck # web app (tsc)
       - run: npm run agent:typecheck # agent worker (tsc)
       - run: npm run lint
-      # CHE-100: the one-attempt rule for a rejected credential. Verified here
-      # rather than by asking the owner to break a password by hand — that is
-      # homework, and this product exists to remove it.
-      - run: npm run verify:gates
-      # The doer's rails — same reason: unattended decisions get tested.
-      - run: npm run verify:doer
-      # The gate that decides whether code merges (CHE-122).
-      - run: npm run verify:machine
-      # CHE-130: the walking context keeps only the last N screenshots.
-      - run: npm run verify:images
-      # CHE-129: recorded actions carry no secret and replay classifies honestly.
-      - run: npm run verify:replay
-      # CHE-132: the page survey sees change and only change; a full walk is forced by change, not by the calendar.
-      - run: npm run verify:survey
-      # CHE-133: discovery confirms the known map on watched apps instead of remapping.
-      - run: npm run verify:known-map
-      # CHE-134: a walk wraps up after the spec; its cap is sized to the journey; focus journeys walk first.
-      - run: npm run verify:walk-limits
-      # CHE-135: discovery runs lean — thinking off, no screenshots in context — behind DISCOVERY_LEAN.
-      - run: npm run verify:discovery-lean
-      # CHE-136: the three prompts read what earlier runs settled — settled findings, changed pages, last journeys.
-      - run: npm run verify:knowledge
-      # CHE-168: nav vision and structured-extraction routing are decided by secrets, not by a deploy.
-      - run: npm run verify:nav-vision
-      # CHE-169: vision on demand and a judge at the moment of judgment, behind HARNESS_TIER; unset = today's walk.
-      - run: npm run verify:harness
-      # CHE-108: the verdict page offers each owner control exactly when the server would honour it.
-      - run: npm run verify:viewer
-      # CHE-171: a 404 on an address nothing published is refused at navigate and cannot become a broken step.
-      - run: npm run verify:unpublished-404
-      # Launch: the whole site runs a fixed number of free anonymous checks a day; owners and the per-visitor quota are untouched by it.
-      - run: npm run verify:site-quota
-      # CHE-179: a page that does not answer is unreached, not trouble — a $0.01 smoke day survives a silence; truncated surveys compare on the pages they share.
-      - run: npm run verify:smoke-gate
-      # Launch: a $1 one-off check produces exactly one run, and only once it is paid for.
-      - run: npm run verify:one-check
-      # Launch analytics: A/B bucketing is deterministic and balanced, the event catalogue is unique, nothing a customer typed for us rides on an event.
-      - run: npm run verify:analytics
-      # CHE-180: step text and journey summaries describe the product only; a walk the cap cut still gets a real summary, never the model's last thought.
-      - run: npm run verify:step-language
+      # The acceptance registry, discovered by mask (CHE-183). Every
+      # scripts/verify-*.{ts,mjs} runs here — the one-attempt credential rule
+      # (CHE-100), the doer's rails, the merge gate (CHE-122) and the rest; each
+      # script's header says what it proves and which ticket asked for it.
+      # This used to be one `- run: npm run verify:…` step per script. Each new
+      # script added a line at the same spot here and in package.json, so every
+      # merge conflicted every open PR: on 2026-09-05 two sessions merging in
+      # parallel spent the day rebasing each other (#40 → #41/#42/#43, #38/#39 →
+      # #40/#43). Now a new verify script is picked up automatically — do not add
+      # a step for it. The runner fails on any non-zero exit, timeout or missing
+      # runner, and prints a PASS/FAIL table at the end (scripts/verify-all.mjs).
+      - run: npm run verify:all
       # Smoke-build the web worker via OpenNext (catches bundle/runtime issues).
       - run: npx opennextjs-cloudflare build
 
