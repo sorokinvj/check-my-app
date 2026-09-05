@@ -7,7 +7,13 @@ import type { Browser } from "@cloudflare/playwright";
 import { decryptSecret } from "@/lib/crypto";
 import type { StepStatus } from "@/lib/enums";
 import { LlmBudgetError, runAgentLoop, finalizeJson, type TranscriptEntry } from "./core";
-import { prepareAgentPage, scrubSecrets, type RecordedAction, type ToolEnv } from "./tools";
+import {
+  knownUrlsFrom,
+  prepareAgentPage,
+  scrubSecrets,
+  type RecordedAction,
+  type ToolEnv,
+} from "./tools";
 import { agentContextOptions } from "./browser";
 import { walkingSystem } from "./instructions";
 import type { AppKnowledge } from "./knowledge";
@@ -95,6 +101,10 @@ export async function walkOneJourney(args: {
   // CHE-136: settled findings and changed pages, so the walk stops proving a
   // known condition again. Absent = the prompt as before.
   knowledge?: AppKnowledge | null;
+  // CHE-171: addresses the run already knows the product publishes (the
+  // survey's pages, CHE-132), seeding the set a 404 is judged against. The
+  // walk adds what it reads and where it lands as it goes.
+  publishedUrls?: string[];
   onLiveScreenshot?: (url: string) => Promise<void>;
   onProgress?: (note: string) => Promise<void>;
 }): Promise<{
@@ -107,7 +117,8 @@ export async function walkOneJourney(args: {
   // was made, so the ledger carries no empty rows for walks that needed none.
   judgeUsage: UsageTotals | null;
 }> {
-  const { env, llm, browser, run, proposed, index, knowledge, onLiveScreenshot, onProgress } = args;
+  const { env, llm, browser, run, proposed, index, knowledge, publishedUrls, onLiveScreenshot, onProgress } =
+    args;
   const transcripts: TranscriptEntry[] = [];
   let costUsd = 0;
   const usage = emptyUsage();
@@ -177,6 +188,8 @@ export async function walkOneJourney(args: {
       credentials: { rejected: await credentialsAlreadyRejected(env, run.id) },
       onCredentialRejected: (signature) => recordCredentialRejection(env, run.id, signature),
       actionTrail,
+      // CHE-171: a 404 on an address outside this set is not a defect.
+      knownUrls: knownUrlsFrom(run.targetUrl, publishedUrls),
       onScreenshot: async (buffer) => {
         const stored = await putScreenshot(env, buffer);
         lastScreenshot = stored;

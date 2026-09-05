@@ -40,6 +40,7 @@
     "verify:nav-vision": "tsx --tsconfig tsconfig.json scripts/verify-nav-vision.ts",
     "verify:harness": "tsx --tsconfig tsconfig.json scripts/verify-harness.ts",
     "verify:viewer": "tsx --tsconfig tsconfig.json scripts/verify-viewer-capabilities.ts",
+    "verify:unpublished-404": "tsx --tsconfig tsconfig.json scripts/verify-unpublished-404.ts",
     "cost:trend": "node scripts/cost-trend.mjs",
     "supply": "tsx --tsconfig tsconfig.json scripts/measure/gate-ready-supply.ts"
   },

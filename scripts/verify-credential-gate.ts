@@ -14,9 +14,17 @@
 //   2. once recognised, the password is never typed into a field again;
 //   3. and a sign-in control is never clicked again.
 //
+// CHE-172 adds the premise all three rest on: the credential that reaches the
+// field is the clean one. Run #142's nav model wrote " {{TEST_PASSWORD}}" with
+// a leading space, the product answered 401 to a password beginning with a
+// space, and the one-attempt rule then correctly refused every further sign-in
+// — on a rejection that was our own typing. So (5): whitespace around a
+// placeholder is stripped before substitution, and the recorded action
+// (CHE-129) carries the bare placeholder.
+//
 // Usage: npx tsx --tsconfig tsconfig.json scripts/verify-credential-gate.ts
 
-import { executeTool, credentialRejection, type ToolEnv } from "@/agent/tools";
+import { executeTool, credentialRejection, type RecordedAction, type ToolEnv } from "@/agent/tools";
 
 let failures = 0;
 function check(name: string, ok: boolean, detail = "") {
@@ -35,6 +43,41 @@ function stubEnv(rejected: boolean): ToolEnv {
     consoleLog: [],
     credentials: { rejected },
   } as unknown as ToolEnv;
+}
+
+// CHE-172: a page whose one field remembers what was typed into it, so the
+// assertion is on the bytes the product would have received.
+function fillingEnv(): { env: ToolEnv; received: () => string | null } {
+  let filled: string | null = null;
+  const locator = {
+    first: () => locator,
+    or: () => locator,
+    fill: async (v: string) => {
+      filled = v;
+    },
+    inputValue: async () => filled,
+  };
+  const page = {
+    url: () => "https://target.test/login",
+    waitForLoadState: async () => {},
+    waitForTimeout: async () => {},
+    evaluate: async () => 0,
+    getByLabel: () => locator,
+    getByPlaceholder: () => locator,
+    getByRole: () => locator,
+    locator: () => locator,
+  };
+  const env = {
+    page,
+    targetOrigin: "https://target.test",
+    testEmail: "qa@target.test",
+    testPassword: "s3cret-value",
+    networkLog: [],
+    consoleLog: [],
+    credentials: { rejected: false },
+    actionTrail: [],
+  } as unknown as ToolEnv;
+  return { env, received: () => filled };
 }
 
 async function main() {
@@ -93,6 +136,42 @@ async function main() {
     !healthyFill.startsWith("Refused:") && !healthyFill.includes("No test credentials"),
     healthyFill.slice(0, 70),
   );
+
+  // 5 — CHE-172: whitespace around a placeholder never reaches the field. Each
+  // padded spelling fills the clean secret, byte for byte, and the recorded
+  // action carries the bare placeholder — a replay must not redo the padding.
+  const padded: Array<[string, string, string]> = [
+    [" {{TEST_PASSWORD}}", "s3cret-value", "{{TEST_PASSWORD}}"],
+    ["{{TEST_PASSWORD}} ", "s3cret-value", "{{TEST_PASSWORD}}"],
+    ["\t{{TEST_EMAIL}}\n", "qa@target.test", "{{TEST_EMAIL}}"],
+  ];
+  for (const [value, expectField, expectRecorded] of padded) {
+    const { env, received } = fillingEnv();
+    const result = await executeTool(env, "fill", { label: "Field", value });
+    const action = (env.actionTrail as RecordedAction[])[0];
+    check(
+      `padded placeholder ${JSON.stringify(value)} fills the clean value exactly`,
+      result === "Filled (credential substituted server-side)." && received() === expectField,
+      `field received ${JSON.stringify(received())}`,
+    );
+    check(
+      `padded placeholder ${JSON.stringify(value)} is recorded as the bare placeholder`,
+      action?.kind === "fill" && action.value === expectRecorded,
+      JSON.stringify(action),
+    );
+  }
+  // A placeholder next to other text is the model's real intent, however odd,
+  // and stays exactly what it was: the normalisation is for padding only.
+  {
+    const { env, received } = fillingEnv();
+    await executeTool(env, "fill", { label: "Field", value: "{{TEST_EMAIL}}x" });
+    const action = (env.actionTrail as RecordedAction[])[0];
+    check(
+      'a placeholder with other text ("{{TEST_EMAIL}}x") is filled as written',
+      received() === "qa@target.testx" && action?.kind === "fill" && action.value === "{{TEST_EMAIL}}x",
+      `field received ${JSON.stringify(received())}, recorded ${JSON.stringify(action?.kind === "fill" ? action.value : action)}`,
+    );
+  }
 
   console.log(failures === 0 ? "\nall pass" : `\n${failures} FAILED`);
   process.exit(failures === 0 ? 0 : 1);
