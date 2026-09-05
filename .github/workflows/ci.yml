@@ -56,6 +56,8 @@ jobs:
       - run: npm run verify:smoke-gate
       # Launch: a $1 one-off check produces exactly one run, and only once it is paid for.
       - run: npm run verify:one-check
+      # Launch analytics: A/B bucketing is deterministic and balanced, the event catalogue is unique, nothing a customer typed for us rides on an event.
+      - run: npm run verify:analytics
       # Smoke-build the web worker via OpenNext (catches bundle/runtime issues).
       - run: npx opennextjs-cloudflare build
 
