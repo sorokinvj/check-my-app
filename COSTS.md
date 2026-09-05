@@ -379,3 +379,110 @@ costs ~$0.7–0.8 against the program's ≤ $0.40–0.50 target, so the remainin
 distance has to come from CHE-133/134/135 (deployed 2026-09-03, unmeasured)
 and, if the replay spike (CHE-129) reproduces enough journeys, from walking
 without a model at all.
+
+## DeepSeek nav spike (CHE-168, 2026-09-04)
+
+Same method as the #137 A/B above: the joblander.app watch, a forced full walk
+inserted by hand (`forceFull=1`, `notifyEmail NULL`, no email leaves), Opus
+synthesis unchanged, secrets flipped only with no run in flight and restored
+with a `wrangler secret list` read-back after each terminal status. Model
+routing is a secret since PR #28 (`ANTHROPIC_NAV_VISION`,
+`ANTHROPIC_STRUCT_MODEL`, `src/agent/llm.ts`), so no deploy happened per
+attempt. OpenRouter prices at the time: `deepseek-v4-flash-vision-exp`
+$0.22 / $0.66 per 1M, cache-read $0.007; `deepseek-v4-flash` $0.089 /
+$0.177, cache-read $0.018; `glm-5v-turbo` $1.20 / $4.00, cache-read $0.24.
+Quality bar: the five journeys walked, verdict all_good or mostly_ok, the
+LiveKit call step ok, no new broken/exposed finding #137 did not have, no
+`checkVerdictIntegrity` downgrade. Price bar: `Run.costUsd` ≤ $0.40.
+
+| Run | Date | Nav model | Vision | Struct model | Run.costUsd | Ledger Σ | Walking $ | Iterations | Input tok | Cache-read tok | Output tok | Calls / journey | Verdict | Journeys | LiveKit |
+|-----|------|-----------|--------|--------------|-------------|----------|-----------|------------|-----------|----------------|------------|-----------------|---------|----------|---------|
+| #137 | 2026-09-03 | z-ai/glm-5v-turbo | on | z-ai/glm-5.2 | **$0.80** | $1.35 (2 orphan rows) | $0.67 | 149 | 174,720 | 1,540,608 | 21,718 | 29.8 | all_good | 5 walked (4 ok, 1 partial) | ok |
+| #142 | 2026-09-04 | deepseek/deepseek-v4-flash-vision-exp | on | deepseek/deepseek-v4-flash | **$0.24** | $0.24 | $0.10 | 138 | 229,414 | 1,689,428 | 49,177 | 27.6 | needs_attention (2 low findings, both ours) | 5 walked (0 ok, 2 partial, 2 confusing, 1 skipped) | ok |
+| #144 | 2026-09-05 | deepseek/deepseek-v4-flash | off | itself | **$0.11** | $0.12 | $0.05 | 142 | 257,674 | 1,421,824 | 24,742 | 28.4 | all_good (0 findings) | 5 walked (2 ok, 3 partial) | skipped (our_capability) |
+| #145 | 2026-09-05 | deepseek/deepseek-v4-flash-vision-exp | on demand (HARNESS_TIER=judge, judge claude-sonnet-4-6) | deepseek/deepseek-v4-flash | **$0.19** | $0.20 | $0.13 | 106 | 88,204 | 1,475,840 | 36,200 | 26.5 | all_good (0 findings) | 4 walked (3 ok, 1 partial) | ok, PATCH /user → 200 confirmed |
+
+Walking = the completed attempts (the number `Run.costUsd` uses); Ledger Σ =
+every `LlmUsage` row. Discovery / synthesis per run: #137 $0.08 / $0.06 ·
+#142 $0.03 / $0.12 · #144 $0.007 / $0.06 · #145 $0.02 / $0.05 — the Opus
+synthesis is unchanged across the four and is a third to a half of a DeepSeek
+run. #144 was the first walk on the CHE-171/172 harness (unpublished-404 gate,
+placeholder whitespace); #145 was the combined CHE-168 + CHE-169 A/B (vision
+on demand, a judge on negative steps) on the same harness. #145 carries no
+judge row: no step was broken / exposed / confusing, so the second opinion was
+never called and its price is still unmeasured.
+
+**What the ledger settles.** `cacheReadTokens` is non-zero on both DeepSeek
+variants through OpenRouter (1.4–1.7M per walk), and the walking dollars
+reproduce from the list price to within a cent (#142: 229k × 0.22 + 1.69M ×
+0.007 + 49k × 0.66 per 1M = $0.095; #144: 257k × 0.089 + 1.42M × 0.018 +
+24.7k × 0.177 = $0.053), so the price estimate holds — walking is −86% (vision,
+every screenshot), −93% (text) and −81% (vision on demand) against #137 with
+iterations flat (106–149). Images in #145, counted in the four walking
+transcripts: 8 in 106 iterations — 7 the model asked for (`screenshot
+{look:true}`) and 1 the harness attached on the coaching-call page (the
+media/WebRTC trigger); non-cached input per iteration 832 tok against 1,662
+with every screenshot in context (#142). The vision variant writes 2.4× more
+output per call (342–356 vs 146 tok) and it does not matter at $0.66/M.
+`output_config json_schema` works on both DeepSeek variants (discovery
+"Proposed N user journeys" every time; the text model extracts on itself, no
+sibling needed). `tool_use` and `cache_control` worked without a code change;
+no retries, no 429s.
+
+**Go / no-go per model.**
+
+- `deepseek-v4-flash-vision-exp`, every screenshot in context (#142): **price
+  go, quality no-go as run.** Verdict needs_attention off two low findings that
+  were both our own defects: it typed `/landing` (linked nowhere on the site,
+  in the sitemap or in the discovery transcript), reported the 404 as broken
+  and JOB-929 landed on the customer's board (canceled next day → CHE-173);
+  and one journey filled `" {{TEST_EMAIL}}"` with a leading space, got a 401,
+  cited run #63's false-positive as a "known condition" and asked the owner
+  for credentials that had worked three times minutes earlier. Both are closed
+  by mechanism in CHE-171/172 (PR #33), not by the model. LiveKit ok (call
+  view, timer, `POST /api/connection-details → 200`); PATCH /user not
+  confirmed (no verify step in that map).
+- `deepseek-v4-flash` text, vision off (#144): **price go; quality clears the
+  verdict bar and misses the LiveKit bar.** all_good with 0 findings, nothing
+  filed, five sign-ins at 200. The LiveKit step was written skipped /
+  our_capability although the observed text says the call interface loaded
+  and the transcript panel appeared — without an image the model would not
+  call a connected call ok, and its observed text leaked "in our test
+  environment" into a customer-facing step (CHE-180 now strips step text).
+  PATCH /user unmentioned. Two journey summaries were the loop's last
+  unfinished thought ("Let me try the Reset to Defaults button"): the walk hit
+  its cap at 43 iterations and the last text became the summary (CHE-180).
+- `deepseek-v4-flash-vision-exp`, vision on demand + judge (#145): **go.**
+  all_good, 0 findings, nothing filed; the LiveKit step ok on its own evidence
+  (avatar, running timer, live caption "Aria: Hey Vladislav, ready to…",
+  `POST /api/connection-details → 200`, `PATCH api.joblander.app/user → 200`)
+  — the first DeepSeek run to confirm the PATCH. Four journeys, not five (the
+  map memory of #144 proposed four); one summary cut by the 43-iteration cap
+  (the same CHE-180 defect as #144, fixed after this run). $0.19 = 24% of
+  #137.
+- `z-ai/glm-5.3-flash`: not run — candidate 3 was reserved for both DeepSeek
+  variants failing the quality bar, and #144/#145 did not.
+
+**Recommended tier config** for the watch A/B (a week of watch runs read off
+`npm run cost:trend`, the check E3/E4 and CHE-130 taught us to wait for):
+`ANTHROPIC_NAV_MODEL=deepseek/deepseek-v4-flash-vision-exp`,
+`ANTHROPIC_NAV_VISION=on`, `HARNESS_TIER=judge`,
+`ANTHROPIC_JUDGE_MODEL=claude-sonnet-4-6`, `ANTHROPIC_STRUCT_MODEL` unset (the
+sibling default routes extraction to `deepseek-v4-flash`). `z-ai/glm-5v-turbo`
+stays one secret away as the rollback. Two open numbers: the judge's price
+(never called on #145) and the model's `experimental` tag on OpenRouter, which
+is a supply risk the ledger cannot measure. The text variant at $0.11 is the
+fallback only once a text-only walk can read a connected call as connected.
+
+**What broke, for the record.** `wrangler tail` on the agent worker shows only
+scheduler ticks — Workflow step logs do not reach it, so the per-iteration
+`[agent] iter N` and `[harness] screenshot attached` lines were not captured
+for any spike run; the R2 walking transcripts carried the image count instead.
+The discovery map is not stable across runs of any model (#137, #140, #142,
+#144, #145 each proposed a different set), so "the same five journeys" is not
+a bar a single run can meet; the walk-quality signals that do transfer are the
+LiveKit step, the PATCH /user check and the finding list. The secret restore
+after a spike run depends on a poll that outlives the run: after #144 it came
+56 minutes late and after #145 18 minutes late (no other run started in either
+window — checked in D1); `wrangler secret delete` has no `--force`, it reads
+the confirmation from stdin.
