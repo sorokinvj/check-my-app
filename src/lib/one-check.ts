@@ -15,6 +15,8 @@
 import type Stripe from "stripe";
 import type { PrismaClient } from "@/generated/prisma/client";
 import { decryptSecret } from "@/lib/crypto";
+import { appSlugFromUrl } from "@/lib/utils";
+import { captureServer, serverDistinctId } from "@/lib/analytics-server";
 import { startCheck, type StartCheckDeps, type StartedCheck } from "@/lib/start-check";
 
 export const PENDING_CHECK_TTL_MS = 24 * 60 * 60 * 1000;
@@ -76,9 +78,18 @@ export async function startPaidCheck(
         ownerId: null,
         anonKeyHash: pending.anonKeyHash,
         paid: { checkoutSessionId },
+        distinctId: pending.distinctId,
       },
       deps,
     );
+    // The payment turned into a run, exactly once: the winner of the race
+    // records it, the loser (below) does not. Attributed to the buyer's
+    // browser when the POST that parked the check carried its id.
+    const capture = deps ? deps.capture : captureServer;
+    if (capture) {
+      const who = serverDistinctId(pending.distinctId, null, `run:${run.publicId}`);
+      await capture("one_check_paid", who.distinctId, { appSlug: appSlugFromUrl(pending.targetUrl), ...who.extra });
+    }
   } catch (err) {
     if (!isUniqueViolation(err)) throw err;
     // Lost the race: the other starter's insert landed between our read and

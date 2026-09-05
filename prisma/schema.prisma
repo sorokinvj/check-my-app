@@ -357,6 +357,9 @@ model PendingCheck {
   notifyEmail     String?
   // Same salted IP hash the anonymous quota uses, carried onto the run.
   anonKeyHash     String?
+  // The buyer's PostHog distinct id (from the cookie on the POST), so the
+  // server-side events the payment produces join the browser's own events.
+  distinctId      String?
 
   // The Stripe Checkout Session created for this pending check.
   checkoutSessionId String? @unique

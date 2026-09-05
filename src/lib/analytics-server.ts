@@ -24,13 +24,30 @@ export const POSTHOG_SERVER_TOKEN = "phc_yDqQQgx3vGfFvp97tEWsExEsLPnnGi6jp9XAqfo
 export const POSTHOG_CAPTURE_URL = `${POSTHOG_SERVER_HOST}/i/v0/e/`;
 
 export type ServerAnalyticsEvents = {
-  /** A run row was created for `appSlug` at `tier`. */
-  run_created: { appSlug: string; tier: string; hasCredentials: boolean };
+  /** A run row was created for `appSlug`; `paid` when a $1 one-off check bought it. */
+  run_created: { appSlug: string; paid: boolean; hasCredentials: boolean };
   /** Stripe reported a completed subscription checkout for `plan`. */
   checkout_completed: { plan: string };
   /** Stripe reported a paid one-off check for `appSlug`. */
   one_check_paid: { appSlug: string };
 };
+
+/**
+ * Whom a server event belongs to when the request carried no PostHog cookie
+ * (Do Not Track, an API-key caller, a webhook): the signed-in owner if there
+ * is one, else a per-object id that keeps the event countable without
+ * inventing a person — `$process_person_profile: false` tells PostHog not to
+ * create one.
+ */
+export function serverDistinctId(
+  fromCookie: string | null,
+  ownerId: string | null,
+  fallback: string,
+): { distinctId: string; extra: Record<string, unknown> } {
+  if (fromCookie) return { distinctId: fromCookie, extra: {} };
+  if (ownerId) return { distinctId: ownerId, extra: {} };
+  return { distinctId: fallback, extra: { $process_person_profile: false } };
+}
 
 export type ServerAnalyticsEvent = keyof ServerAnalyticsEvents;
 
@@ -52,7 +69,7 @@ export type CapturePayload = {
 export function buildCapturePayload<E extends ServerAnalyticsEvent>(
   event: E,
   distinctId: string,
-  props: ServerAnalyticsEvents[E],
+  props: ServerAnalyticsEvents[E] & Record<string, unknown>,
   now: Date = new Date(),
 ): CapturePayload {
   return {
@@ -73,7 +90,7 @@ export type FetchLike = (input: string, init: RequestInit) => Promise<{ ok: bool
 export async function captureServer<E extends ServerAnalyticsEvent>(
   event: E,
   distinctId: string,
-  props: ServerAnalyticsEvents[E],
+  props: ServerAnalyticsEvents[E] & Record<string, unknown>,
   fetchImpl: FetchLike = fetch,
 ): Promise<boolean> {
   const payload = buildCapturePayload(event, distinctId, props);

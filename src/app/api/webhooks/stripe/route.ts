@@ -18,6 +18,7 @@ import {
   type StripeEnv,
 } from "@/lib/stripe";
 import { isPaidOneCheck, startPaidCheck } from "@/lib/one-check";
+import { captureServer } from "@/lib/analytics-server";
 import type { PrismaClient } from "@/generated/prisma/client";
 import type { UserPlan } from "@/lib/enums";
 
@@ -76,7 +77,9 @@ export async function POST(req: Request) {
 
       // A paid one-off check (src/lib/one-check.ts): create the run the
       // payment bought. Idempotent — the success page may have started it
-      // already, and Stripe retries deliveries.
+      // already, and Stripe retries deliveries. `one_check_paid` is recorded
+      // in there, by whichever starter creates the run, so a retry or the
+      // success page's poll never counts a payment twice.
       if (session.mode === "payment") {
         const pendingCheckId = session.metadata?.pendingCheckId;
         if (pendingCheckId && isPaidOneCheck(session)) {
@@ -112,6 +115,9 @@ export async function POST(req: Request) {
           ...(plan ? { plan } : {}),
         },
       });
+      // The buyer is a signed-in owner and the browser identified with the
+      // same Clerk id, so this joins their own events without a cookie.
+      await captureServer("checkout_completed", user.id, { plan: plan ?? "unknown" });
       break;
     }
 
