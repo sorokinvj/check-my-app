@@ -10,15 +10,17 @@
 //     last one is (the calendar is gone);
 //   - two comparable snapshots that differ → a full walk, with the diff as the
 //     reason the owner reads;
-//   - nothing to compare (first snapshot, a blocked homepage, a survey the
-//     cap or the deadline cut short, a survey that errored) → the old
-//     seven-day fuse, exactly as before.
+//   - nothing to compare (first snapshot, a blocked homepage, a survey that
+//     errored, two surveys the cap cut short with too little in common) →
+//     the old seven-day fuse, exactly as before.
 //
-// "Previous" is the last snapshot that CAN be compared against — blocked and
-// truncated rows are skipped, not compared: a page the survey never reached
-// is unknown, not removed, and reading it as removed would force a full walk
-// on every slow or large app every day, which is the calendar back under
-// another name.
+// "Previous" is the last unblocked snapshot. A survey the cap or the deadline
+// cut short IS compared (CHE-179) — on the pages both sides saw, with a page
+// only one side reached read as unknown, not added or removed. Until
+// 2026-09-04 a truncated row was never compared, and since every real app has
+// more than 50 pages that left every real app on the fuse: `changed` was
+// null every day and the change-driven walk this file exists for never fired
+// for anyone but the five-page checkmyapp.dev.
 //
 // fullRunGate is pure so the rule is checked by scripts/verify-survey.ts and
 // not by waiting a week in production.
@@ -30,6 +32,7 @@ import {
   describeDiff,
   diffIsChange,
   diffSnapshots,
+  pathOverlap,
   surveyApp,
   type SnapshotDiff,
   type SurveyPage,
@@ -57,16 +60,28 @@ export interface SnapshotRecord {
 export interface SurveyOutcome {
   snapshot: SnapshotRecord | null;
   previous: SnapshotRecord | null;
-  /** A comparable previous exists and this survey saw everything — `snapshot.changed` is an answer, not null. */
+  /** A comparable previous exists — `snapshot.changed` is an answer, not null. */
   comparable: boolean;
 }
 
-/** Whether this survey can be read against an earlier one at all. */
+// Two truncated surveys of the same site share the same first 50 pages
+// (survey.ts keeps the crawl order a function of the site); a site that grew
+// or shrank a little still shares most of them. Below this share the two
+// lists are about different pages and a comparison would be noise.
+export const COMPARABLE_OVERLAP = 0.8;
+
+/**
+ * Whether this survey can be read against an earlier one at all: neither
+ * blocked, and either both complete or (CHE-179) enough pages in common to
+ * compare on.
+ */
 export function isComparable(
   previous: SnapshotRecord | null,
-  current: { blocked: boolean; truncated: boolean },
+  current: { blocked: boolean; truncated: boolean; pages: Pick<SurveyPage, "path">[] },
 ): boolean {
-  return Boolean(previous && !previous.blocked && !previous.truncated && !current.blocked && !current.truncated);
+  if (!previous || previous.blocked || current.blocked) return false;
+  if (!previous.truncated && !current.truncated) return true;
+  return pathOverlap(previous.pages, current.pages) >= COMPARABLE_OVERLAP;
 }
 
 export const NO_SURVEY: SurveyOutcome = { snapshot: null, previous: null, comparable: false };
@@ -128,11 +143,12 @@ export async function takeSnapshot(
   // inherit a stale snapshot as its baseline — "nothing changed" would then
   // be a claim about somebody else's history. An anonymous one-off run has no
   // App row, so it compares only against other anonymous runs of that host.
+  // Truncated rows are candidates (CHE-179); isComparable decides whether the
+  // two have enough in common.
   const previousRow = await env.db.appSnapshot.findFirst({
     where: {
       ...(run.appId ? { appId: run.appId } : { appSlug: run.appSlug, appId: null }),
       blocked: false,
-      truncated: false,
     },
     orderBy: { takenAt: "desc" },
   });
@@ -254,14 +270,17 @@ export function smokeTargetsFromSnapshot(
 // ─── Feed line ───────────────────────────────────────────────────────────────
 
 // One line for the owner, about their pages only (rule §1): what was seen and
-// whether it moved. Nothing about how it was seen.
+// whether it moved. Nothing about how it was seen. A survey the cap cut short
+// says so in the count ("the first 50 of a larger site") and still answers
+// whether those pages changed (CHE-179).
 export function surveyEvent(outcome: SurveyOutcome): Omit<RunEvent, "at" | "phase"> {
   const s = outcome.snapshot;
   if (!s || s.blocked) return { icon: "info", text: "Could not survey the pages this run" };
   const n = s.pages.length;
-  const seen = `Surveyed ${n} page${n === 1 ? "" : "s"}`;
-  if (s.truncated) return { icon: "info", text: `${seen} — more pages than could be compared this run` };
+  const seen =
+    `Surveyed ${n} page${n === 1 ? "" : "s"}` + (s.truncated ? ` (the first ${n} of a larger site)` : "");
   if (!outcome.previous) return { icon: "ok", text: `${seen} — first snapshot of this app` };
+  if (s.changed === null) return { icon: "info", text: `${seen} — more pages than could be compared this run` };
   if (s.changed === false || !s.diff) {
     return { icon: "ok", text: `${seen} — nothing changed since the last check` };
   }

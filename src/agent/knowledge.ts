@@ -93,8 +93,9 @@ export function composeKnowledge(input: ComposeInput): AppKnowledge | null {
 
 // Pure. What the survey contributes: the page count, and the paths that
 // changed or appeared — only when two snapshots were actually compared and
-// differed. A first snapshot, a blocked homepage or a truncated survey has no
-// "changed" answer (snapshot.ts), so it contributes no paths rather than
+// differed. A first snapshot, a blocked homepage or a truncated survey with
+// too little in common with the last one has no "changed" answer
+// (snapshot.ts), so it contributes no paths rather than
 // every path.
 export function snapshotInput(
   survey: SurveyOutcome | null | undefined,

@@ -81,6 +81,8 @@ export interface Comparable {
   pages: Pick<SurveyPage, "path" | "hash" | "status">[];
   bundles: string[];
   buildId: string | null;
+  /** The cap or the deadline stopped this side short (CHE-179): absence from it means nothing. */
+  truncated?: boolean;
 }
 
 export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
@@ -283,6 +285,27 @@ export function countForms(html: string): number {
 
 // ─── Comparison ──────────────────────────────────────────────────────────────
 
+// Share of paths two surveys have in common, against the larger of the two.
+// With the crawl order deterministic, a stable site under the same cap gives
+// the same pages every day and this is 1; a page added near the front shifts
+// one page off the end and it is 0.98. CHE-179 sets the bar at 0.8.
+export function pathOverlap(previous: Pick<SurveyPage, "path">[], current: Pick<SurveyPage, "path">[]): number {
+  const before = new Set(previous.map((p) => p.path));
+  const after = new Set(current.map((p) => p.path));
+  const larger = Math.max(before.size, after.size);
+  if (larger === 0) return 1;
+  let common = 0;
+  for (const path of after) if (before.has(path)) common += 1;
+  return common / larger;
+}
+
+// Changed = a page both sides saw that hashes or answers differently. Added
+// and removed = a page only one side saw — and that means something only when
+// the other side saw everything. A previous survey the cap cut short may
+// simply not have reached today's "new" page, and a page that fell off the
+// cap today was not removed (CHE-179): until 2026-09-04 that pair was never
+// compared at all, so every real app sat on the seven-day fuse and the
+// change-driven full walk of CHE-132 never happened for any of them.
 export function diffSnapshots(previous: Comparable, current: Comparable): SnapshotDiff {
   const before = new Map(previous.pages.map((p) => [p.path, p]));
   const after = new Map(current.pages.map((p) => [p.path, p]));
@@ -291,10 +314,13 @@ export function diffSnapshots(previous: Comparable, current: Comparable): Snapsh
   const changedPaths: string[] = [];
   for (const [path, page] of after) {
     const old = before.get(path);
-    if (!old) addedPaths.push(path);
-    else if (old.hash !== page.hash || old.status !== page.status) changedPaths.push(path);
+    if (!old) {
+      if (!previous.truncated) addedPaths.push(path);
+    } else if (old.hash !== page.hash || old.status !== page.status) changedPaths.push(path);
   }
-  for (const path of before.keys()) if (!after.has(path)) removedPaths.push(path);
+  if (!current.truncated) {
+    for (const path of before.keys()) if (!after.has(path)) removedPaths.push(path);
+  }
   const bundlesChanged =
     JSON.stringify([...new Set(previous.bundles)].sort()) !==
     JSON.stringify([...new Set(current.bundles)].sort());
@@ -510,7 +536,11 @@ export async function surveyApp(targetUrl: string, opts: SurveyOptions = {}): Pr
   };
 
   // Homepage bookkeeping, then the seeds: sitemap URLs first (the app's own
-  // list of what matters), then what the homepage links to.
+  // list of what matters, in sitemap order), then what the homepage links to
+  // in DOM order. From here on the order is a function of the site alone —
+  // nothing below depends on which request answered first — so two surveys of
+  // a stable site under the same cap visit the same pages, and two truncated
+  // snapshots can be compared on the pages they share (CHE-179).
   const homeRecord = record(home, first);
   pages.push({ ...homeRecord.page, hash: await pageHash(homeRecord.html) });
   seen.add(homeRecord.page.url);
@@ -530,8 +560,9 @@ export async function surveyApp(targetUrl: string, opts: SurveyOptions = {}): Pr
   }
 
   // Breadth-first in batches of `concurrency`; each batch's links join the
-  // back of the queue. Order is deterministic given the same app, which keeps
-  // two snapshots of a stable app visiting the same pages.
+  // back of the queue in the batch's own order (Promise.all keeps it, whatever
+  // the network did), so discovery order — and with it the 50 pages under the
+  // cap — is the same on every visit of the same app.
   let truncated = false;
   while (queue.length > 0) {
     if (pages.length >= pageCap || expired()) {
