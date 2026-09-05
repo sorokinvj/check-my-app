@@ -5,8 +5,13 @@
 // (run #79, Clerk modal) are the two tickets a human ruled not-a-bug. This runs
 // the real exported classifier against the real findings behind them.
 //
-// Usage: npx tsx scripts/verify-defect-class.ts <links.json> <findings.json> <steps.json>
+// Usage: npx tsx scripts/replay-defect-class.ts <links.json> <findings.json> <steps.json>
 // where each file is a `wrangler d1 execute … --json` results array.
+//
+// Named replay-, not verify-: it needs D1 exports as arguments, so it is a
+// replay tool, not an acceptance check. Since CHE-183 the acceptance registry
+// is every scripts/verify-*.{ts,mjs}, run by `npm run verify:all` and CI with
+// no arguments — a file under that mask that cannot run standalone fails CI.
 
 import { readFileSync } from "node:fs";
 import { dedupKeyForFinding } from "../src/lib/tracker/file";

@@ -1,3 +1,5 @@
+// The gate that decides whether code merges (CHE-122). This line lived as a
+// comment on the CI step until CHE-183 folded the steps into verify:all.
 import { decidePr, MAX_ROUNDS } from "./doer/machine.mjs";
 const base = { headSha: "aaaaaaa1", checks: [], reviewReportedForHead: false, unresolvedFindings: 0, roundsUsed: 0, mayMerge: false, hasImplementerWork: true };
 const green = [{ name: "check", conclusion: "success", headSha: "aaaaaaa1" }, { name: "deploy", conclusion: "skipped", headSha: "aaaaaaa1" }];

@@ -12,8 +12,7 @@ npx prisma generate      # the workerd client; its output is gitignored
 npm run typecheck        # web app
 npm run agent:typecheck  # agent worker — a separate tsconfig, easy to forget
 npm run lint
-npm run verify:gates     # the one-attempt credential rule
-npm run verify:doer      # the doer's rails
+npm run verify:all       # every scripts/verify-*.{ts,mjs}, found by mask
 ```
 
 **`npx opennextjs-cloudflare build` will fail for you and that is expected.** It
@@ -21,7 +20,13 @@ needs deploy-time environment this checkout does not carry. CI builds it; do not
 chase that failure, and do not invent values to get past it.
 
 Every `npm run verify:*` script is part of the acceptance registry — the closed
-set of commands this project treats as proof. If you add one, add it to CI too.
+set of commands this project treats as proof. The registry is the set of files
+matching `scripts/verify-*.{ts,mjs}`; a new script is picked up by
+`verify:all` and CI automatically — do not edit `ci.yml` for it. Add a
+`verify:<name>` entry to package.json so it can be run by hand, and keep the
+file self-contained: it must pass with no arguments and no environment, or CI
+fails on it (CHE-183). A tool that needs inputs is a `replay-*`, not a
+`verify-*`.
 
 ## What "done" means
 

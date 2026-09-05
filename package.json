@@ -27,6 +27,7 @@
     "db:seed:local": "wrangler d1 execute checkmyapp --local --file prisma/seed-d1.sql",
     "agent:dev": "wrangler dev --config wrangler-agent.jsonc",
     "agent:typecheck": "tsc --noEmit -p tsconfig.agent.json",
+    "verify:all": "node scripts/verify-all.mjs",
     "verify:gates": "tsx --tsconfig tsconfig.json scripts/verify-credential-gate.ts",
     "verify:doer": "node scripts/verify-doer.mjs",
     "verify:machine": "node scripts/verify-machine.mjs",
