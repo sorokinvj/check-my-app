@@ -45,6 +45,7 @@
     "verify:smoke-gate": "tsx --tsconfig tsconfig.json scripts/verify-smoke-gate.ts",
     "verify:one-check": "tsx --tsconfig tsconfig.json scripts/verify-one-check.ts",
     "verify:analytics": "tsx --tsconfig tsconfig.json scripts/verify-analytics.ts",
+    "posthog:setup": "tsx --tsconfig tsconfig.json scripts/posthog-setup.ts",
     "cost:trend": "node scripts/cost-trend.mjs",
     "supply": "tsx --tsconfig tsconfig.json scripts/measure/gate-ready-supply.ts"
   },

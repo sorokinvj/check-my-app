@@ -17,7 +17,7 @@
 import { Suspense, useEffect, useRef } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
 import { useUser } from "@clerk/nextjs";
-import { identifyUser, initAnalytics, resetUser, track } from "@/lib/analytics";
+import { identifyUser, initAnalytics, resetUser, track, whenVariantResolved } from "@/lib/analytics";
 
 function AnalyticsPageView() {
   const pathname = usePathname();
@@ -28,7 +28,10 @@ function AnalyticsPageView() {
     // Child effects run before the parent's; make sure the SDK is up.
     initAnalytics();
     const query = searchParams?.toString();
-    track("pageview", { path: query ? `${pathname}?${query}` : pathname });
+    const path = query ? `${pathname}?${query}` : pathname;
+    // Not cancelled on cleanup: a navigation within the flags round trip
+    // must not lose the pageview that preceded it.
+    whenVariantResolved(() => track("pageview", { path }));
   }, [pathname, searchParams]);
 
   return null;

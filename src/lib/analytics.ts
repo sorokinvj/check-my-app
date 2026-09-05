@@ -169,24 +169,51 @@ export function isSecretProperty(key: string, value: unknown): boolean {
 
 // ─── A/B bucket for the landing page ────────────────────────────────────────
 //
-// No PostHog experiment (see top of file), so the bucket is computed here from
+// The bucket is the PostHog feature flag `landing-variant` (multivariate A/B,
+// 50/50; created by scripts/posthog-setup.ts together with the experiment
+// "Landing headline A/B" that reads it). Reading the flag through
+// `getFeatureFlag` also emits `$feature_flag_called`, which is the exposure
+// event the experiment counts.
+//
+// If the flag does not resolve after flags have loaded (flag deleted, the
+// flags request failed or timed out), the bucket falls back to FNV-1a over
 // the browser's PostHog device id, which persists in localStorage+cookie for
-// a year and survives `identify()` and `reset()`. FNV-1a over the id, folded
-// to one bit: even → A, odd → B. Registered as the super property
-// `landing_variant` so every event — pageview, check_submitted, checkout — can
-// be broken down by variant in an insight.
+// a year and survives `identify()` and `reset()`: even → A, odd → B.
+// Whichever source resolved, the result is registered as the super property
+// `landing_variant`, so every event — pageview, check_submitted, checkout —
+// can be broken down by variant in an insight.
 //
 // Limits, stated plainly:
 // - Per browser, not per person: the same person on two devices may see both.
 // - Server-rendered HTML does not know the variant. A component that renders
 //   a variant must render A on the server and may switch to B after mount;
-//   `useLandingVariant()` returns "A" until PostHog is ready. That is a flash
-//   for half of B's visitors, accepted for launch.
+//   `useLandingVariant()` returns "A" until flags have loaded. That is a
+//   flash for half of B's visitors, accepted for launch.
 // - Do Not Track / Global Privacy Control: PostHog never initialises for such
 //   visitors, so they always see A and are never counted. Neither bias is
 //   measured; both are small and known.
+// - A fallback bucket is not the flag's bucket: a visitor bucketed by hash
+//   while the flags request was down may land elsewhere once it is back.
+//   PostHog's experiment analysis excludes people seen in more than one
+//   variant by default.
 
 export type LandingVariant = "A" | "B";
+
+export const LANDING_VARIANT_FLAG = "landing-variant";
+
+export type LandingVariantSource = "flag" | "hash";
+
+/**
+ * Decide the bucket from what the flag returned and the device id. Pure, so
+ * scripts/verify-analytics.ts can exercise it.
+ */
+export function resolveLandingVariant(
+  flagValue: unknown,
+  deviceId: string | null,
+): { variant: LandingVariant; source: LandingVariantSource } {
+  if (flagValue === "A" || flagValue === "B") return { variant: flagValue, source: "flag" };
+  return { variant: deviceId ? variantForId(deviceId) : "A", source: "hash" };
+}
 
 /** 32-bit FNV-1a. Exported for the verification script's known-answer test. */
 export function fnv1a32(input: string): number {
@@ -207,14 +234,15 @@ export function variantForId(id: string): LandingVariant {
   return (folded & 1) === 0 ? "A" : "B";
 }
 
-// Ready state as a tiny external store so React can subscribe without a
-// context provider (and so `getLandingVariant()` works outside React).
-let ready = false;
-const readyListeners = new Set<() => void>();
+// The resolved bucket as a tiny external store so React can subscribe without
+// a context provider (and so `getLandingVariant()` works outside React).
+// null until flags have loaded (or failed to) on the client.
+let resolved: { variant: LandingVariant; source: LandingVariantSource } | null = null;
+const listeners = new Set<() => void>();
 
-function subscribeReady(listener: () => void): () => void {
-  readyListeners.add(listener);
-  return () => readyListeners.delete(listener);
+function subscribe(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
 }
 
 function deviceId(): string | null {
@@ -222,18 +250,64 @@ function deviceId(): string | null {
   return typeof id === "string" && id.length > 0 ? id : null;
 }
 
-/** "A" until PostHog is ready on the client, then the device's bucket. */
+// Runs on every flags load (first load, reload after identify) and on a
+// failed or timed-out load (`errorsLoading`). The flag's answer for this
+// device does not change between loads, so re-registering is idempotent; if
+// the flag ever went away mid-session the hash takes over.
+//
+// Order matters: the bucket is read from the callback's `variants` and
+// registered first, and only then is `getFeatureFlag` called — that call
+// emits `$feature_flag_called`, the experiment's exposure event, and this way
+// it carries `landing_variant` like every event after it.
+function onFlagsLoaded(_flags: string[], variants: Record<string, string | boolean>, context?: { errorsLoading?: boolean }): void {
+  const next = resolveLandingVariant(context?.errorsLoading ? undefined : variants[LANDING_VARIANT_FLAG], deviceId());
+  posthog.register({ landing_variant: next.variant, landing_variant_source: next.source });
+  if (next.source === "flag") posthog.getFeatureFlag(LANDING_VARIANT_FLAG);
+  if (resolved?.variant === next.variant && resolved.source === next.source) return;
+  resolved = next;
+  for (const listener of listeners) listener();
+}
+
+/**
+ * Run `fn` once the bucket is known — at once if it already is, otherwise
+ * when flags load, or after `maxWaitMs` if they never do. The landing
+ * pageview waits on this so the very first event of a visit already carries
+ * `landing_variant`; the flags round trip is a few hundred milliseconds.
+ */
+export function whenVariantResolved(fn: () => void, maxWaitMs = 4000): void {
+  if (typeof window === "undefined") return;
+  if (resolved) {
+    fn();
+    return;
+  }
+  let done = false;
+  const finish = () => {
+    if (done) return;
+    done = true;
+    unsubscribe();
+    clearTimeout(timer);
+    fn();
+  };
+  const unsubscribe = subscribe(finish);
+  const timer = setTimeout(finish, maxWaitMs);
+}
+
+/** "A" until flags have loaded on the client, then the flag's bucket (or the hash fallback). */
 export function getLandingVariant(): LandingVariant {
-  if (typeof window === "undefined" || !ready) return "A";
-  const id = deviceId();
-  return id ? variantForId(id) : "A";
+  if (typeof window === "undefined" || !resolved) return "A";
+  return resolved.variant;
+}
+
+/** Where the current bucket came from; null until flags have loaded. */
+export function getLandingVariantSource(): LandingVariantSource | null {
+  return resolved?.source ?? null;
 }
 
 const serverVariant = (): LandingVariant => "A";
 
-/** React hook form of `getLandingVariant()`; re-renders once PostHog is ready. */
+/** React hook form of `getLandingVariant()`; re-renders once the bucket is known. */
 export function useLandingVariant(): LandingVariant {
-  return useSyncExternalStore(subscribeReady, getLandingVariant, serverVariant);
+  return useSyncExternalStore(subscribe, getLandingVariant, serverVariant);
 }
 
 // ─── Initialisation ─────────────────────────────────────────────────────────
@@ -265,11 +339,11 @@ export function initAnalytics(): void {
     // Masks e-mail addresses and the like inside captured URLs.
     mask_personal_data_properties: true,
     before_send: guardEvent,
+    // The flags request has a 3 s timeout (feature_flag_request_timeout_ms);
+    // the callback fires on success and on failure, so the bucket is always
+    // decided — by the flag, or by the hash.
     loaded: (client) => {
-      const id = deviceId();
-      if (id) client.register({ landing_variant: variantForId(id) });
-      ready = true;
-      for (const listener of readyListeners) listener();
+      client.onFeatureFlags(onFlagsLoaded);
     },
   });
 }

@@ -21,8 +21,10 @@ import {
   guardEvent,
   POSTHOG_TOKEN,
   posthogEventName,
+  resolveLandingVariant,
   variantForId,
   type AnalyticsEvent,
+  type LandingVariant,
 } from "@/lib/analytics";
 import {
   buildCapturePayload,
@@ -72,6 +74,15 @@ check(
 );
 
 check("an empty id still buckets", variantForId("") === "A" || variantForId("") === "B");
+
+// The flag decides; the hash is only the fallback for when it cannot.
+const dev = "0198f0c2-dead-7abc-8def-0123456789ab";
+const hashed = variantForId(dev);
+const other: LandingVariant = hashed === "A" ? "B" : "A";
+check("a flag value of A or B wins over the hash", resolveLandingVariant(other, dev).variant === other && resolveLandingVariant(other, dev).source === "flag");
+check("an undefined flag falls back to the device hash", resolveLandingVariant(undefined, dev).variant === hashed && resolveLandingVariant(undefined, dev).source === "hash");
+check("a flag value outside A/B (false, 'control') falls back to the hash", resolveLandingVariant(false, dev).source === "hash" && resolveLandingVariant("control", dev).source === "hash");
+check("no flag and no device id → A", resolveLandingVariant(undefined, null).variant === "A");
 
 // ─── Catalogue ──────────────────────────────────────────────────────────────
 
