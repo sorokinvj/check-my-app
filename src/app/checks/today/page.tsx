@@ -1,15 +1,19 @@
 import Link from "next/link";
 import { getDbFromContext } from "@/lib/db";
 import { relativeTime, todayChecks } from "@/lib/checks-today";
-import { ANON_RUNS_PER_DAY_SITE } from "@/lib/plans";
+import { effectiveSiteCap } from "@/lib/site-cap";
 import { VERDICT_META, isTerminal } from "@/lib/status";
 import { pageMetadata } from "@/lib/site-metadata";
 
-export const metadata = pageMetadata({
-  title: "Today's checks",
-  description: `Every anonymous check is public. The site runs ${ANON_RUNS_PER_DAY_SITE} free checks a day — read today's verdicts, or run your own.`,
-  path: "/checks/today",
-});
+// The cap in the description is the effective one (runtime env), so the
+// number a search result shows is the number the page enforces.
+export async function generateMetadata() {
+  return pageMetadata({
+    title: "Today's checks",
+    description: `Every anonymous check is public. The site runs ${effectiveSiteCap()} free checks a day — read today's verdicts, or run your own.`,
+    path: "/checks/today",
+  });
+}
 
 // Today's checks · /checks/today (owner decision 2026-09-05). The public face
 // of the site-wide daily cap: when the free checks are gone, a visitor can read
@@ -20,7 +24,7 @@ export const dynamic = "force-dynamic";
 export default async function TodayChecksPage() {
   const db = await getDbFromContext();
   const now = new Date();
-  const today = await todayChecks(db, now);
+  const today = await todayChecks(db, now, effectiveSiteCap());
 
   return (
     <main className="mx-auto max-w-2xl px-4 py-16">

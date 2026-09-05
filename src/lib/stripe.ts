@@ -24,6 +24,9 @@ export interface StripeEnv {
   STRIPE_WEBHOOK_SECRET?: string;
   STRIPE_PRICE_STARTER?: string;
   STRIPE_PRICE_GROWTH?: string;
+  // One-time $1 check for a visitor the free daily allowance has run out on
+  // (launch, 2026-09-05). A one-off price, not a plan.
+  STRIPE_PRICE_ONE_CHECK?: string;
 }
 
 export function getStripeEnv(env: Record<string, unknown>): StripeEnv {
@@ -32,7 +35,13 @@ export function getStripeEnv(env: Record<string, unknown>): StripeEnv {
     STRIPE_WEBHOOK_SECRET: env.STRIPE_WEBHOOK_SECRET as string | undefined,
     STRIPE_PRICE_STARTER: env.STRIPE_PRICE_STARTER as string | undefined,
     STRIPE_PRICE_GROWTH: env.STRIPE_PRICE_GROWTH as string | undefined,
+    STRIPE_PRICE_ONE_CHECK: env.STRIPE_PRICE_ONE_CHECK as string | undefined,
   };
+}
+
+// Null until the price exists — the one-check route turns that into the 503.
+export function oneCheckPriceId(env: StripeEnv): string | null {
+  return env.STRIPE_PRICE_ONE_CHECK || null;
 }
 
 // Null until the owner adds keys — callers turn that into the 503 above.

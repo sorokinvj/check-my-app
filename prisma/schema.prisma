@@ -115,6 +115,11 @@ model Run {
   // IP, set only on anonymous runs so the free-run quota (CHE-40) can be counted
   // per client without ever storing an IP. Null on owner and scheduler runs.
   anonKeyHash String?
+  // Paid one-off check (launch, 2026-09-05): the Stripe Checkout Session that
+  // paid for this run. Unique so a webhook and the success-page poll racing to
+  // start the same paid check can only produce one run — D1 has no
+  // transactions, so the constraint is the lock. Null on every other run.
+  paidCheckoutSessionId String? @unique
 
   journeys Journey[]
   findings Finding[]
@@ -333,6 +338,32 @@ model Watch {
 model Counter {
   name  String @id // e.g. "runNumber"
   value Int    @default(0)
+}
+
+// ─── Paid one-off check (launch, 2026-09-05) ─────────────────────────────────
+// What a visitor typed into the form, parked while they pay. A Run is created
+// from it only once Stripe says the session is paid; until then nothing runs
+// and nothing is billed. Anonymous: no User, no Stripe customer.
+
+model PendingCheck {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  targetUrl       String
+  testEmail       String?
+  // Encrypted like Run.testPasswordEnc; cleared the moment the run is created.
+  testPasswordEnc String?
+  userNotes       String?
+  notifyEmail     String?
+  // Same salted IP hash the anonymous quota uses, carried onto the run.
+  anonKeyHash     String?
+
+  // The Stripe Checkout Session created for this pending check.
+  checkoutSessionId String? @unique
+  // Set once the run exists; the idempotency marker for the start.
+  runId             String? @unique
+  // Unpaid rows are garbage after this.
+  expiresAt DateTime
 }
 
 // ─── M3: Owner accounts & per-owner QA→tracker loop (CHE-27) ──────────────────

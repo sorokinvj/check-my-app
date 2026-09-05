@@ -17,6 +17,7 @@ import {
   stripeCryptoProvider,
   type StripeEnv,
 } from "@/lib/stripe";
+import { isPaidOneCheck, startPaidCheck } from "@/lib/one-check";
 import type { PrismaClient } from "@/generated/prisma/client";
 import type { UserPlan } from "@/lib/enums";
 
@@ -72,6 +73,20 @@ export async function POST(req: Request) {
   switch (event.type) {
     case "checkout.session.completed": {
       const session = event.data.object;
+
+      // A paid one-off check (src/lib/one-check.ts): create the run the
+      // payment bought. Idempotent — the success page may have started it
+      // already, and Stripe retries deliveries.
+      if (session.mode === "payment") {
+        const pendingCheckId = session.metadata?.pendingCheckId;
+        if (pendingCheckId && isPaidOneCheck(session)) {
+          await startPaidCheck(db, pendingCheckId, session.id);
+        }
+        break;
+      }
+
+      // A plan subscription: sync User.plan from the price.
+      if (session.mode !== "subscription") break;
       const userId = session.client_reference_id ?? session.metadata?.userId;
       if (!userId) break; // not one of ours (checkout we didn't create)
       const user = await db.user.findUnique({ where: { id: userId } });

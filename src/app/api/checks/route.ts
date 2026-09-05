@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
-import { getDbFromContext, nextRunNumber } from "@/lib/db";
+import { getDbFromContext } from "@/lib/db";
 import { getOwnerFromRequest } from "@/lib/auth";
-import { triggerRun } from "@/lib/trigger";
-import { encryptSecret, hashClientKey } from "@/lib/crypto";
+import { hashClientKey } from "@/lib/crypto";
 import { assertCanStartRun } from "@/lib/plans";
+import { effectiveSiteCap } from "@/lib/site-cap";
+import { startCheck } from "@/lib/start-check";
 import { appSlugFromUrl } from "@/lib/utils";
 import { createCheckSchema } from "@/lib/validation";
 import { verifyTurnstile } from "@/lib/turnstile";
@@ -70,32 +71,14 @@ export async function POST(req: Request) {
     prisma,
     owner ? { id: owner.id, plan: owner.plan as UserPlan } : null,
     anonKeyHash,
+    { siteCap: effectiveSiteCap() },
   );
   if (!gate.ok) {
     return NextResponse.json({ error: gate.reason, code: gate.code }, { status: 429 });
   }
 
-  const run = await prisma.run.create({
-    data: {
-      runNumber: await nextRunNumber(prisma),
-      targetUrl: input.url,
-      appSlug: appSlugFromUrl(input.url),
-      testEmail: input.testEmail || null,
-      testPasswordEnc: input.testPassword ? encryptSecret(input.testPassword) : null,
-      scopeHints: input.scopeHints || null,
-      userNotes: input.userNotes || null,
-      notifyEmail: input.notifyEmail || null,
-      // Deploy identity (CHE-56) — set by CI so the verdict names a build.
-      deploySha: input.deploy?.sha ?? null,
-      deployEnv: input.deploy?.env || null,
-      ownerId: owner?.id ?? null,
-      anonKeyHash,
-      status: "queued",
-    },
-    select: { id: true, publicId: true },
-  });
-
-  await triggerRun(run.id);
+  // Insert + hand-off to the agent, shared with the paid one-off check.
+  const run = await startCheck(prisma, { input, ownerId: owner?.id ?? null, anonKeyHash });
 
   // The /run/{id} URL uses the unguessable public id.
   return NextResponse.json({ id: run.publicId }, { status: 201 });
