@@ -4,6 +4,7 @@ import { Bricolage_Grotesque, IBM_Plex_Mono } from "next/font/google";
 import { ClerkProvider, Show, SignInButton, UserButton } from "@clerk/nextjs";
 import "./globals.css";
 import { OG_IMAGE, SITE } from "@/lib/site-metadata";
+import { AnalyticsProvider } from "@/components/analytics-provider";
 
 const sans = Bricolage_Grotesque({
   subsets: ["latin"],
@@ -55,6 +56,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <ClerkProvider>
       <html lang="en" className={`${sans.variable} ${mono.variable}`}>
         <body className="min-h-screen">
+          {/* Product analytics (PostHog) — renders nothing; see src/lib/analytics.ts. */}
+          <AnalyticsProvider />
           <header className="border-b border-ink-800">
             <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4">
               <Link href="/check" className="group flex items-center gap-2.5">

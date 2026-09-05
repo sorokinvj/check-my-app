@@ -44,6 +44,7 @@
     "verify:site-quota": "tsx --tsconfig tsconfig.json scripts/verify-site-quota.ts",
     "verify:smoke-gate": "tsx --tsconfig tsconfig.json scripts/verify-smoke-gate.ts",
     "verify:one-check": "tsx --tsconfig tsconfig.json scripts/verify-one-check.ts",
+    "verify:analytics": "tsx --tsconfig tsconfig.json scripts/verify-analytics.ts",
     "cost:trend": "node scripts/cost-trend.mjs",
     "supply": "tsx --tsconfig tsconfig.json scripts/measure/gate-ready-supply.ts"
   },
@@ -59,6 +60,7 @@
     "nanoid": "^5.0.9",
     "next": "^16.2.9",
     "playwright": "^1.49.1",
+    "posthog-js": "1.427.2",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "stripe": "^22.5.0",
