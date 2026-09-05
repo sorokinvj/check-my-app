@@ -83,6 +83,23 @@ export const FREE_RUNS_LIFETIME = 3;
 // checks — every anonymous check is public.
 export const ANON_RUNS_PER_DAY_SITE = 20;
 
+// The cap the site is actually running with. The constant above is the
+// default; the web worker's runtime env may raise or lower it without a
+// deploy (`wrangler secret put ANON_RUNS_PER_DAY_SITE` on checkmyapp-web — the
+// owner sets 100 for launch day and 20 the day after, see DEPLOY.md). Only a
+// positive integer counts; anything else (unset, empty, "abc", "0", "1.5",
+// "-5") is the default, so a typo can never open the site or close it.
+// Pure so the rule is testable; the web app reads its env in
+// src/lib/site-cap.ts and threads the value into the two functions below.
+export function siteCapFromEnv(env: Record<string, unknown> | null | undefined): number {
+  const raw = env?.ANON_RUNS_PER_DAY_SITE;
+  if (typeof raw !== "string" && typeof raw !== "number") return ANON_RUNS_PER_DAY_SITE;
+  const text = String(raw).trim();
+  if (!/^\d+$/.test(text)) return ANON_RUNS_PER_DAY_SITE;
+  const n = Number(text);
+  return Number.isSafeInteger(n) && n > 0 ? n : ANON_RUNS_PER_DAY_SITE;
+}
+
 // Start of the current UTC day — the cap resets at midnight UTC, and the copy
 // says so.
 export function utcDayStart(now: Date = new Date()): Date {
@@ -93,15 +110,17 @@ export function utcDayStart(now: Date = new Date()): Date {
 // count is by ownerId null — the only runs the free funnel creates — minus the
 // paid $1 runs: a run someone paid for (Run.paidCheckoutSessionId set, see
 // src/lib/one-check.ts) is not a free check and never consumes the free cap.
+// `cap` is the effective cap (siteCapFromEnv); the default is the constant.
 export async function anonRunsToday(
   db: PrismaClient,
   now: Date = new Date(),
+  cap: number = ANON_RUNS_PER_DAY_SITE,
 ): Promise<{ used: number; cap: number; dayStartIso: string }> {
   const dayStart = utcDayStart(now);
   const used = await db.run.count({
     where: { ownerId: null, paidCheckoutSessionId: null, createdAt: { gte: dayStart } },
   });
-  return { used, cap: ANON_RUNS_PER_DAY_SITE, dayStartIso: dayStart.toISOString() };
+  return { used, cap, dayStartIso: dayStart.toISOString() };
 }
 
 // Daily Watch on Free is a trial, not a tier (CHE-54): the one free watch runs
@@ -212,10 +231,14 @@ export type RunGate =
 // couldn't derive one (see hashClientKey), and an unidentifiable client is let
 // through rather than blocked — over-counting strangers would break the funnel
 // this whole product runs on.
+//
+// `opts.siteCap` is the effective site-wide cap (siteCapFromEnv); callers in
+// the web app pass what the runtime env says, and the constant is the default.
 export async function assertCanStartRun(
   db: PrismaClient,
   owner: { id: string; plan: UserPlan } | null,
   anonKeyHash: string | null,
+  opts: { siteCap?: number } = {},
 ): Promise<RunGate> {
   if (owner) {
     if (owner.plan !== "free") return { ok: true };
@@ -233,7 +256,7 @@ export async function assertCanStartRun(
   // The site-wide cap comes first: once today's free checks are gone, no
   // stranger gets one — identifiable or not — and the answer names the two
   // ways forward instead of the per-visitor line.
-  const site = await anonRunsToday(db);
+  const site = await anonRunsToday(db, new Date(), opts.siteCap ?? ANON_RUNS_PER_DAY_SITE);
   if (site.used >= site.cap) {
     return {
       ok: false,

@@ -3,6 +3,7 @@ import { getDbFromContext } from "@/lib/db";
 import { getOwnerFromRequest } from "@/lib/auth";
 import { hashClientKey } from "@/lib/crypto";
 import { assertCanStartRun } from "@/lib/plans";
+import { effectiveSiteCap } from "@/lib/site-cap";
 import { startCheck } from "@/lib/start-check";
 import { appSlugFromUrl } from "@/lib/utils";
 import { createCheckSchema } from "@/lib/validation";
@@ -70,6 +71,7 @@ export async function POST(req: Request) {
     prisma,
     owner ? { id: owner.id, plan: owner.plan as UserPlan } : null,
     anonKeyHash,
+    { siteCap: effectiveSiteCap() },
   );
   if (!gate.ok) {
     return NextResponse.json({ error: gate.reason, code: gate.code }, { status: 429 });

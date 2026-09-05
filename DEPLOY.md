@@ -35,6 +35,22 @@ npx opennextjs-cloudflare build && npx opennextjs-cloudflare deploy  # web worke
 The web worker binds the agent's `CheckRunWorkflow` cross-worker (`script_name`
 in `wrangler.jsonc`), so deploy the agent first.
 
+## Site-wide free-check cap (launch day)
+
+The site runs a fixed number of free anonymous checks per UTC day (default 20,
+`ANON_RUNS_PER_DAY_SITE` in `src/lib/plans.ts`). The running cap can be raised or
+lowered without a deploy: set the env var on the **web** worker and it takes
+effect on the next request, in the gate, on `/checks/today`, and in the form's
+counter. Only a positive integer counts; unset, empty or garbage means the
+default, so a typo cannot open or close the site. No agent-worker redeploy.
+
+```bash
+# Launch day: 100 free checks (type 100 at the prompt)
+npx wrangler secret put ANON_RUNS_PER_DAY_SITE
+# The day after: back to the default
+npx wrangler secret delete ANON_RUNS_PER_DAY_SITE     # or put 20
+```
+
 ## CI secrets (GitHub → repo settings → secrets)
 
 - `CLOUDFLARE_API_TOKEN` — scoped to Workers Scripts + D1 + R2 edit

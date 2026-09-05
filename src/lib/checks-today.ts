@@ -38,8 +38,15 @@ export function excerpt(text: string | null): string | null {
   return t.length <= EXCERPT_CHARS ? t : `${t.slice(0, EXCERPT_CHARS - 1).trimEnd()}…`;
 }
 
-export async function todayChecks(db: PrismaClient, now: Date = new Date()): Promise<TodayChecks> {
-  const site = await anonRunsToday(db, now);
+// `cap` is the effective site-wide cap (src/lib/site-cap.ts); the page, the
+// API and the form counter all show this number, so it must be the one the
+// gate enforces.
+export async function todayChecks(
+  db: PrismaClient,
+  now: Date = new Date(),
+  cap?: number,
+): Promise<TodayChecks> {
+  const site = await anonRunsToday(db, now, cap);
   const dayStart = new Date(site.dayStartIso);
   const resetsAt = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
   // A run that failed on our side has no verdict to read and is not the
