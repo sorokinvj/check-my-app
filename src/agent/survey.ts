@@ -7,11 +7,17 @@
 // page a sitemap or the homepage links to, hashed after the noise is stripped,
 // plus the list of script bundles and the Next.js build id when there is one.
 //
-// What the hash keeps and what it drops is the whole point. Dropped: nonces,
-// CSRF tokens, ISO timestamps, inline scripts that carry either, whitespace.
+// What the hash keeps and what it drops is the whole point. Since CHE-185 the
+// per-page hash is not a hash of the HTML at all but of a structural digest of
+// it (pageDigest): title, description, headings, the link set, form fields,
+// script and stylesheet URLs, control counts, and the visible text with every
+// number and date removed. Dropped, therefore: nonces, CSRF tokens, timestamps,
+// inline scripts and state blobs, attribute order, data-ids — and counters.
 // Kept: hashed asset filenames and /_next/static/<buildId>/ paths — those are
 // the build signal, and a deploy that changed nothing visible still changes
-// them, which is exactly when a full walk is worth its cost.
+// them, which is exactly when a full walk is worth its cost. The old
+// normalised-HTML hash is still computed and stored as rawHash so the next
+// "why did this page read as changed" is answerable from the row.
 //
 // The crawler is GET-only and refuses anything that could be a state change
 // (logout, sign-out, delete, unsubscribe): it must never be the thing that
@@ -39,6 +45,17 @@ const SITEMAP_FETCH_CAP = 3;
 // A page bigger than this is not a page; hash the head of it and move on
 // rather than hold megabytes of somebody's export in memory.
 const MAX_BODY_CHARS = 1_500_000;
+// The homepage is fetched a second time this long after the first, at the end
+// of the crawl (CHE-185): a site whose digest differs between the two is
+// volatile at the digest level, and snapshot.ts reads its diff accordingly.
+const HOMEPAGE_RECHECK_DELAY_MS = 20_000;
+
+// Bumped whenever what `hash` is computed over changes. Two snapshots with
+// different versions are never compared (snapshot.ts): every page would read
+// as changed once, and that once is a $0.60 full walk for nothing (CHE-185).
+//   1 — sha256 of normalizeHtml(html), until 2026-09-05
+//   2 — sha256 of pageDigest(html)
+export const DIGEST_VERSION = 2;
 
 export interface SurveyPage {
   /** Final URL after redirects. */
@@ -48,8 +65,20 @@ export interface SurveyPage {
   /** HTTP status, or null when the request never got an answer. */
   status: number | null;
   title: string;
-  /** sha256 of the normalised HTML; "" when nothing was read. */
+  /** sha256 of the structural page digest (pageDigest). */
   hash: string;
+  /**
+   * sha256 of the normalised HTML — what `hash` was before CHE-185. Never
+   * compared; stored so a page that reads as changed can be told apart from
+   * one whose HTML merely churned (absent on rows written before 2026-09-05).
+   */
+  rawHash?: string;
+  /**
+   * sha256 of the digest's skeleton — headings, links, form fields, assets —
+   * the part of a page that per-request content does not move. What the
+   * volatile rule in snapshot.ts compares (absent on older rows).
+   */
+  skeletonHash?: string;
   /** Number of <form> elements. */
   forms: number;
   /** Number of distinct same-origin links. */
@@ -66,6 +95,14 @@ export interface SurveyResult {
   fingerprint: string;
   /** The deadline or the cap stopped the walk with pages still unvisited. */
   truncated: boolean;
+  /** The DIGEST_VERSION the page hashes were computed with. */
+  digestVersion: number;
+  /**
+   * The homepage digest differed between the first fetch and one taken at the
+   * end of the crawl: this site changes at the digest level between requests,
+   * and text-only differences on its pages are not evidence of a change.
+   */
+  volatile: boolean;
 }
 
 export interface SnapshotDiff {
@@ -74,6 +111,8 @@ export interface SnapshotDiff {
   changedPaths: string[];
   bundlesChanged: boolean;
   buildIdChanged: boolean;
+  /** Pages whose digest moved on a volatile site with the skeleton intact — set aside, not a change (CHE-185). Present only when non-empty. */
+  ignoredPaths?: string[];
 }
 
 /** The part of a snapshot two of which can be compared. */
@@ -94,6 +133,8 @@ export interface SurveyOptions {
   pageCap?: number;
   concurrency?: number;
   requestTimeoutMs?: number;
+  /** How long after the first homepage fetch the second one is taken (CHE-185). */
+  homepageRecheckDelayMs?: number;
 }
 
 // ─── Normalisation ───────────────────────────────────────────────────────────
@@ -136,8 +177,237 @@ export async function sha256Hex(text: string): Promise<string> {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-export function pageHash(html: string): Promise<string> {
+/** The pre-CHE-185 hash: the normalised HTML. Stored as SurveyPage.rawHash, never compared. */
+export function rawPageHash(html: string): Promise<string> {
   return sha256Hex(normalizeHtml(html));
+}
+
+// ─── Structural digest (CHE-185) ─────────────────────────────────────────────
+//
+// Run #149 (joblander.app, 2026-09-05 16:31 UTC) read 13 pages as changed —
+// every localised homepage — and walked the whole app for $0.60 on a day
+// nothing was deployed: bundles equal, and the raw HTML of "/" different in
+// every one of five stored snapshots. Diagnosed the same evening with the
+// survey's own headers: fetches minutes apart are byte-identical (the page is
+// a Next.js App Router route served from a per-instance ISR cache —
+// cache-control: s-maxage=3600, x-nextjs-cache: HIT — so the survey sees
+// whichever render its instance made in the last hour), and two renders 25
+// minutes apart (etags zt094t3lma48aj → q1367t6xwx48aj, 197,677 chars both)
+// differed in exactly one fragment, inside an inline self.__next_f.push
+// flight-data script:
+//   "initialCanonicalUrl":"/?_rsc=p18k4"   vs   "/?_rsc=1j6xg"
+// — the RSC cache-buster of whichever request triggered that regeneration,
+// baked into the HTML for everyone until the next one. Every locale is its own
+// ISR entry and regenerates within the day, so all 13 moved together.
+// normalizeHtml strips inline scripts only when they carry a timestamp, an
+// epoch or a nonce; this one carries none, and no list of such keys will ever
+// be complete. The same page also renders a live figure in the hero
+// ("<span>169,500</span> insights delivered this month") that will move the
+// bytes whenever it changes. A hash of the HTML therefore cannot be stable
+// on any site that serialises state or renders a figure, and "a full walk
+// only when the app changed" never fires for such a site: every day is a full
+// run. Hence a digest of what the page IS rather than of the bytes it came in
+// — the two real renders above digest identically (both stored bodies were
+// re-hashed with pageHashes: hash equal, rawHash different).
+
+const COMMENT = /<!--[\s\S]*?-->/g;
+const DROP_BLOCK = /<(script|style|noscript|template|svg|iframe)\b[^>]*>[\s\S]*?<\/\1\s*>/gi;
+const ANY_TAG = /<[^>]*>/g;
+const HEADING = /<(h[1-3])\b[^>]*>([\s\S]*?)<\/\1\s*>/gi;
+const META_TAG = /<meta\b[^>]*>/gi;
+const LINK_TAG = /<link\b[^>]*>/gi;
+const FIELD_TAG = /<(input|select|textarea)\b[^>]*>/gi;
+const BUTTON_TAG = /<button\b/gi;
+const INPUT_TAG = /<input\b/gi;
+const MAIN_BLOCK = /<main\b[^>]*>([\s\S]*?)<\/main\s*>/i;
+const ARTICLE_BLOCK = /<article\b[^>]*>([\s\S]*?)<\/article\s*>/i;
+const BODY_BLOCK = /<body\b[^>]*>([\s\S]*?)<\/body\s*>/i;
+const ATTR = /([^\s"'<>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'<>`]+)))?/g;
+
+// Dates and times in the shapes copy is written in, then every remaining
+// number. Order matters: a month name is only noise when it is part of a
+// date, so dates go before the digits they contain.
+const MONTH =
+  "(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\\.?";
+const WEEKDAY =
+  "(?:mon(?:day)?|tue(?:s(?:day)?)?|wed(?:nesday)?|thu(?:rs?(?:day)?)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)\\.?,?\\s+";
+const LOOSE_DATE = new RegExp(
+  `\\b(?:${WEEKDAY})?(?:${MONTH}\\s+\\d{1,2}(?:st|nd|rd|th)?(?:,?\\s+\\d{4})?|\\d{1,2}(?:st|nd|rd|th)?\\s+${MONTH}(?:,?\\s+\\d{4})?|${MONTH}\\s+\\d{4})\\b`,
+  "gi",
+);
+const NUMERIC_DATE = /\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}[./-]\d{1,2}[./-]\d{2,4}\b/g;
+const CLOCK_TIME = /\b\d{1,2}:\d{2}(?::\d{2})?(?:\s*[ap]\.?m\.?)?\b/gi;
+const NUMBER = /\d[\d.,' ]*\d|\d/g;
+
+function attrsOf(tag: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  const inner = tag.replace(/^<\s*[A-Za-z][\w:-]*/, "").replace(/\/?\s*>$/, "");
+  ATTR.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = ATTR.exec(inner)) !== null) {
+    if (!m[1]) continue;
+    out[m[1].toLowerCase()] = decodeEntities(m[2] ?? m[3] ?? m[4] ?? "");
+  }
+  return out;
+}
+
+function textOf(fragment: string): string {
+  return decodeEntities(fragment.replace(ANY_TAG, " "))
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Visible text with every date, time and number removed. */
+export function stableText(fragment: string): string {
+  return textOf(fragment)
+    .replace(ISO_TIMESTAMP, " ")
+    .replace(NUMERIC_DATE, " ")
+    .replace(CLOCK_TIME, " ")
+    .replace(LOOSE_DATE, " ")
+    .replace(NUMBER, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+interface DigestParts {
+  title: string;
+  description: string;
+  headings: string[];
+  links: string[];
+  fields: string[];
+  assets: string[];
+  buttons: number;
+  inputs: number;
+  text: string;
+}
+
+function digestParts(html: string, pageUrl?: string): DigestParts {
+  const src = (html.length > MAX_BODY_CHARS ? html.slice(0, MAX_BODY_CHARS) : html).replace(COMMENT, "");
+  const title = extractTitle(src);
+
+  let description = "";
+  META_TAG.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = META_TAG.exec(src)) !== null) {
+    const a = attrsOf(m[0]);
+    if ((a.name ?? "").toLowerCase() === "description") {
+      description = (a.content ?? "").replace(/\s+/g, " ").trim();
+      break;
+    }
+  }
+
+  const headings: string[] = [];
+  HEADING.lastIndex = 0;
+  while ((m = HEADING.exec(src)) !== null) headings.push(textOf(m[2]));
+
+  const links = new Set<string>();
+  HREF.lastIndex = 0;
+  while ((m = HREF.exec(src)) !== null) {
+    const raw = decodeEntities((m[1] ?? m[2] ?? m[3] ?? "").trim());
+    if (!raw || raw.startsWith("#")) continue;
+    let href = raw;
+    try {
+      const u = new URL(raw, pageUrl);
+      u.hash = "";
+      href = u.toString();
+    } catch {
+      href = raw.replace(/#.*$/, "");
+    }
+    if (href) links.add(href);
+  }
+
+  const fields: string[] = [];
+  FIELD_TAG.lastIndex = 0;
+  while ((m = FIELD_TAG.exec(src)) !== null) {
+    const a = attrsOf(m[0]);
+    fields.push(`${m[1].toLowerCase()}|${a.name ?? ""}|${(a.type ?? "").toLowerCase()}`);
+  }
+
+  const assets = new Set<string>();
+  const noQuery = (s: string) => s.trim().replace(/[?#].*$/, "");
+  SCRIPT_SRC.lastIndex = 0;
+  while ((m = SCRIPT_SRC.exec(src)) !== null) {
+    const s = noQuery(decodeEntities(m[1] ?? m[2] ?? m[3] ?? ""));
+    if (s) assets.add(s);
+  }
+  LINK_TAG.lastIndex = 0;
+  while ((m = LINK_TAG.exec(src)) !== null) {
+    const a = attrsOf(m[0]);
+    if (!/\bstylesheet\b/i.test(a.rel ?? "")) continue;
+    const s = noQuery(a.href ?? "");
+    if (s) assets.add(s);
+  }
+
+  BUTTON_TAG.lastIndex = 0;
+  INPUT_TAG.lastIndex = 0;
+  const buttons = (src.match(BUTTON_TAG) ?? []).length;
+  const inputs = (src.match(INPUT_TAG) ?? []).length;
+
+  const stripped = src.replace(DROP_BLOCK, " ");
+  const region = MAIN_BLOCK.exec(stripped)?.[1] ?? ARTICLE_BLOCK.exec(stripped)?.[1] ?? BODY_BLOCK.exec(stripped)?.[1] ?? stripped;
+
+  return {
+    title,
+    description,
+    headings,
+    links: [...links].sort(),
+    fields,
+    assets: [...assets].sort(),
+    buttons,
+    inputs,
+    text: stableText(region),
+  };
+}
+
+// The skeleton is the part of a page per-request content does not move:
+// headings, the link set, form fields, and the script/stylesheet URLs. Text,
+// counts, title and description are the rest. On a volatile site (see
+// SurveyResult.volatile) a page whose skeleton is unchanged did not change.
+function skeletonOf(p: DigestParts): string {
+  return [
+    ...p.headings.map((h) => `h:${h}`),
+    ...p.links.map((l) => `a:${l}`),
+    ...p.fields.map((f) => `field:${f}`),
+    ...p.assets.map((a) => `asset:${a}`),
+  ].join("\n");
+}
+
+function digestOf(p: DigestParts): string {
+  return [
+    `title:${p.title}`,
+    `description:${p.description}`,
+    skeletonOf(p),
+    `buttons:${p.buttons}`,
+    `inputs:${p.inputs}`,
+    `text:${p.text}`,
+  ].join("\n");
+}
+
+/** The canonical string a page hashes to. `pageUrl` resolves relative links; without it they are kept as written. */
+export function pageDigest(html: string, pageUrl?: string): string {
+  return digestOf(digestParts(html, pageUrl));
+}
+
+export function pageSkeleton(html: string, pageUrl?: string): string {
+  return skeletonOf(digestParts(html, pageUrl));
+}
+
+export function pageHash(html: string, pageUrl?: string): Promise<string> {
+  return sha256Hex(pageDigest(html, pageUrl));
+}
+
+/** Every hash a SurveyPage carries, from one parse. */
+export async function pageHashes(
+  html: string,
+  pageUrl?: string,
+): Promise<{ hash: string; rawHash: string; skeletonHash: string }> {
+  const parts = digestParts(html, pageUrl);
+  const [hash, rawHash, skeletonHash] = await Promise.all([
+    sha256Hex(digestOf(parts)),
+    rawPageHash(html),
+    sha256Hex(skeletonOf(parts)),
+  ]);
+  return { hash, rawHash, skeletonHash };
 }
 
 // Equal inputs in any order give the same fingerprint: the survey visits
@@ -168,12 +438,20 @@ const TOKEN_VALUE = /^[A-Za-z0-9_-]{20,}$/;
 
 function decodeEntities(s: string): string {
   return s
-    .replace(/&amp;/g, "&")
-    .replace(/&#38;/g, "&")
     .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
     .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">");
+    .replace(/&gt;/g, ">")
+    .replace(/&nbsp;/g, " ")
+    // Numeric entities before &amp;, so "&amp;#x27;" stays the literal it is.
+    // React writes apostrophes as &#x27; — left undecoded, the digest's number
+    // stripping would turn "I&#x27;m" into "I&#x;m" (CHE-185).
+    .replace(/&#x([0-9a-f]{1,6});/gi, (_, hex: string) => codePoint(parseInt(hex, 16)))
+    .replace(/&#(\d{1,7});/g, (_, dec: string) => codePoint(Number(dec)))
+    .replace(/&amp;/g, "&");
+}
+
+function codePoint(n: number): string {
+  return n > 0 && n <= 0x10ffff ? String.fromCodePoint(n) : "";
 }
 
 /** "/pricing?plan=pro" — the path a snapshot is keyed by. */
@@ -268,6 +546,12 @@ export function extractBundles(html: string, pageUrl: string, origins?: Set<stri
 export function extractBuildId(html: string): string | null {
   const data = html.match(/"buildId"\s*:\s*"([^"]+)"/);
   if (data) return data[1];
+  // The App Router writes it into the flight data instead, as a JSON string
+  // inside a JS string: \"buildId\":\"KsTYig8L1zpL2GwSgPCrL\". Run #149's
+  // joblander snapshots had "no buildId" for exactly this reason (CHE-185),
+  // and it is the one deploy marker that survives every other churn.
+  const flight = html.match(/\\"buildId\\"\s*:\s*\\"([^"\\]+)\\"/);
+  if (flight) return flight[1];
   const manifest = html.match(/\/_next\/static\/([A-Za-z0-9_-]{6,})\/_(?:build|ssg)Manifest\.js/);
   if (manifest) return manifest[1];
   return null;
@@ -471,6 +755,7 @@ export async function surveyApp(targetUrl: string, opts: SurveyOptions = {}): Pr
   const pageCap = opts.pageCap ?? PAGE_CAP;
   const concurrency = opts.concurrency ?? CONCURRENCY;
   const timeoutMs = opts.requestTimeoutMs ?? REQUEST_TIMEOUT_MS;
+  const recheckDelayMs = opts.homepageRecheckDelayMs ?? HOMEPAGE_RECHECK_DELAY_MS;
   const startedAt = Date.now();
   const expired = () => Date.now() - startedAt >= deadlineMs;
 
@@ -487,6 +772,8 @@ export async function surveyApp(targetUrl: string, opts: SurveyOptions = {}): Pr
     blocked,
     fingerprint: "",
     truncated: false,
+    digestVersion: DIGEST_VERSION,
+    volatile: false,
   });
 
   // The homepage first, alone: it decides whether there is anything to survey
@@ -542,7 +829,8 @@ export async function surveyApp(targetUrl: string, opts: SurveyOptions = {}): Pr
   // a stable site under the same cap visit the same pages, and two truncated
   // snapshots can be compared on the pages they share (CHE-179).
   const homeRecord = record(home, first);
-  pages.push({ ...homeRecord.page, hash: await pageHash(homeRecord.html) });
+  const homeHashes = await pageHashes(homeRecord.html, homeRecord.page.url);
+  pages.push({ ...homeRecord.page, ...homeHashes });
   seen.add(homeRecord.page.url);
 
   const fromSitemap = await sitemapUrls(fetchImpl, target.origin, origins, timeoutMs, expired);
@@ -573,7 +861,7 @@ export async function surveyApp(targetUrl: string, opts: SurveyOptions = {}): Pr
     const results = await Promise.all(batch.map((url) => fetchPage(fetchImpl, url, timeoutMs)));
     for (let i = 0; i < batch.length; i++) {
       const r = record(batch[i], results[i]);
-      pages.push({ ...r.page, hash: await pageHash(r.html) });
+      pages.push({ ...r.page, ...(await pageHashes(r.html, r.page.url)) });
       seen.add(r.page.url);
       for (const url of r.links) {
         if (!seen.has(url)) {
@@ -581,6 +869,25 @@ export async function surveyApp(targetUrl: string, opts: SurveyOptions = {}): Pr
           queue.push(url);
         }
       }
+    }
+  }
+
+  // Self-calibration (CHE-185): the homepage once more, at least
+  // recheckDelayMs after the first fetch, while the deadline allows. Two
+  // digests of the same page minutes apart that differ mean the site moves
+  // between requests in a way the digest does not absorb — and then a page
+  // whose text differs from yesterday's is not evidence of a change either.
+  // The second fetch's bytes are not kept: the snapshot stays what the crawl
+  // saw first, only the verdict on its stability is added.
+  let volatile = false;
+  const dueAt = startedAt + recheckDelayMs;
+  const wait = Math.max(0, dueAt - Date.now());
+  if (Date.now() + wait + timeoutMs <= startedAt + deadlineMs) {
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+    const second = await fetchPage(fetchImpl, homeUrl, timeoutMs);
+    if (second.isHtml && second.status === first.status && second.html) {
+      const again = await pageHashes(second.html, homeRecord.page.url);
+      volatile = again.hash !== homeHashes.hash;
     }
   }
 
@@ -594,6 +901,8 @@ export async function surveyApp(targetUrl: string, opts: SurveyOptions = {}): Pr
     blocked: false,
     fingerprint: await fingerprintOf(pages, bundleList),
     truncated,
+    digestVersion: DIGEST_VERSION,
+    volatile,
   };
 }
 

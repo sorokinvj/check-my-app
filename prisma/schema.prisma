@@ -624,7 +624,12 @@ model AppSnapshot {
   // sha256 over the sorted per-page content hashes plus the bundle list: equal
   // fingerprints mean nothing served differently, whatever order it was seen in.
   fingerprint String
-  // JSON SurveyPage[] — { url, path, status, title, hash, forms, links }.
+  // JSON. Rows before 2026-09-05: a bare SurveyPage[] — { url, path, status,
+  // title, hash, forms, links }, hash = sha256 of the normalised HTML. Since
+  // CHE-185: { digestVersion, volatile, pages: SurveyPage[] }, where hash is
+  // the structural page digest and each page also carries rawHash (the old
+  // hash, for diagnosis) and skeletonHash. Envelope, not a column, so old rows
+  // parse without a migration (src/agent/snapshot.ts parseStoredPages).
   pages       String
   // JSON string[] — script URLs (same-origin and first-party CDN), deduped, sorted.
   bundles     String
