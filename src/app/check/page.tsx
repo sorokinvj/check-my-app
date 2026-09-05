@@ -22,6 +22,22 @@ export default async function CheckPage({
           See an example verdict →
         </Link>
       </p>
+      {/* Owner decision, 2026-09-05: every anonymous check is public. Say so
+          where the link is pasted, and make it the reason to sign in. */}
+      <p className="mt-3 w-full max-w-xl text-center font-mono text-[13px] leading-6 text-fg-faint">
+        Anonymous checks are public and listed in{" "}
+        <Link href="/checks/today" className="text-accent transition-colors hover:underline">
+          today&apos;s checks
+        </Link>
+        .{" "}
+        <Link
+          href="/sign-in?redirect_url=%2Fcheck"
+          className="text-accent transition-colors hover:underline"
+        >
+          Sign in
+        </Link>{" "}
+        to keep yours unlisted and get 3 free checks.
+      </p>
     </main>
   );
 }

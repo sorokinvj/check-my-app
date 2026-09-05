@@ -78,8 +78,29 @@ const FAQS: Faq[] = [
     q: "How is the free tier limited?",
     a: (
       <>
-        A typical full first check costs us ~$0.50 of agent compute. Free = 1 check/day
-        without signup, 3 total with a free account; paid plans lift the caps.
+        The site runs 20 free checks a day in total. Without an account that is 1 check per
+        visitor every 24 hours; a free account gets 3 checks. Once the day&apos;s free checks
+        are used up, a check costs $1; paid plans lift the caps.
+      </>
+    ),
+  },
+  {
+    // Owner decision, 2026-09-05: anonymous checks are public. Owned verdicts
+    // are "unlisted" — reachable by their link, listed nowhere — not "private".
+    q: "Are my checks public?",
+    a: (
+      <>
+        Checks run without an account are public: they appear in{" "}
+        <Link href="/checks/today" className="text-accent hover:underline">
+          today&apos;s checks
+        </Link>
+        , and the next visitor who pastes the same app on{" "}
+        <Link href="/check" className="text-accent hover:underline">
+          /check
+        </Link>{" "}
+        may be shown its previous verdict. With a free account your verdicts are unlisted —
+        they open only by their link — you get 3 checks, and they stay in your dashboard with
+        their history.
       </>
     ),
   },
