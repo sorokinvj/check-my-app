@@ -41,6 +41,7 @@
     "verify:harness": "tsx --tsconfig tsconfig.json scripts/verify-harness.ts",
     "verify:viewer": "tsx --tsconfig tsconfig.json scripts/verify-viewer-capabilities.ts",
     "verify:unpublished-404": "tsx --tsconfig tsconfig.json scripts/verify-unpublished-404.ts",
+    "verify:site-quota": "tsx --tsconfig tsconfig.json scripts/verify-site-quota.ts",
     "cost:trend": "node scripts/cost-trend.mjs",
     "supply": "tsx --tsconfig tsconfig.json scripts/measure/gate-ready-supply.ts"
   },
