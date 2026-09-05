@@ -51,7 +51,7 @@ import { deliverWebhook, type RunCompletedPayload } from "@/lib/notify/webhook";
 import { deliverSlack } from "@/lib/notify/slack";
 import { decryptSecret } from "@/lib/crypto";
 import type { TranscriptEntry } from "./core";
-import { shortLabel, smokeReplay, SMOKE_COST_USD, type SmokeReport } from "./replay";
+import { shortLabel, smokeOutcomeLine, smokeReplay, SMOKE_COST_USD, type SmokeReport } from "./replay";
 import {
   mergeSurveyedPages,
   NO_SURVEY,
@@ -286,9 +286,15 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
             data: {
               status: "completed",
               verdict: smoke.verdict,
+              // CHE-179: a page that did not answer is said, never counted
+              // as healthy, and never a reason to spend on a full run.
               bottomLine:
-                `Daily smoke pass: ${smoke.probes.length} page${smoke.probes.length === 1 ? "" : "s"} ` +
-                `healthy, nothing changed since Run #${smoke.fullRunNumber} — full agent check ` +
+                `Daily smoke pass: ${smoke.healthy} page${smoke.healthy === 1 ? "" : "s"} ` +
+                `healthy` +
+                (smoke.unreached.length > 0
+                  ? `, ${smoke.unreached.length} did not answer in time`
+                  : "") +
+                `, nothing changed since Run #${smoke.fullRunNumber} — full agent check ` +
                 `skipped (replay-first). This confirms your app is up and its known pages still ` +
                 `serve; it does not re-verify the journeys.`,
               // Carried from the last full run so the verdict page still describes
@@ -957,19 +963,10 @@ function modeEvents(
           ? ` (${smoke.skipped} more known page${smoke.skipped === 1 ? "" : "s"} left for the next check)`
           : ""),
     });
-    events.push(
-      smoke.ok
-        ? {
-            icon: "ok",
-            text:
-              `All ${smoke.probes.length} pages healthy, no uncaught errors — carrying Run ` +
-              `#${smoke.baselineRunNumber}'s verdict forward and skipping the full agent check`,
-          }
-        : {
-            icon: "warn",
-            text: `Smoke found trouble: ${smoke.failures.join("; ")} — running the full check`,
-          },
-    );
+    // Wording lives in smoke.ts (CHE-179) so verify-smoke-gate reads the same
+    // sentence the owner does: healthy pages, pages that did not answer, and
+    // the verdict carried forward.
+    events.push({ icon: smoke.ok ? "ok" : "warn", text: smokeOutcomeLine(smoke, targetUrl) });
   } else {
     events.push({ icon: "info", text: `No smoke check — ${smoke.reason}` });
   }

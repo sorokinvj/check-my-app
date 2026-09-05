@@ -18,7 +18,9 @@
 //   1. load the homepage in a real browser (Browser Rendering, one session),
 //   2. re-visit the URLs the recorded specs navigate to — extracted statically
 //      from GeneratedTest.content — plus the paths in the baseline's anatomy,
-//   3. every one of them must answer below HTTP 500 and actually load,
+//   3. every one of them must answer below HTTP 500; a page that does not
+//      answer at all is `unreached` — trouble only when it is the homepage or
+//      one of the pages a journey depends on (CHE-179, smoke.ts),
 //   4. no uncaught JS exceptions, no console-error burst.
 // It proves the app is up and its known pages still serve. It proves nothing
 // about whether the journeys still work — that's what a full run is for, and
@@ -26,7 +28,10 @@
 // changed, not on a weekly calendar.
 //
 // Bias on every uncertainty: fall through to the full run. A false alarm costs
-// $0.53; a missed regression costs the owner's trust.
+// $0.53; a missed regression costs the owner's trust. The one uncertainty that
+// is NOT a full run is a page the survey merely saw serve going quiet: on
+// 2026-09-04 that sent every watched app full for +$0.6–0.75 apiece, and
+// silence is not evidence (rule 3).
 
 import type { Browser, Page } from "@cloudflare/playwright";
 import type { Verdict } from "@/lib/enums";
@@ -35,7 +40,19 @@ import { normalizeAnatomy } from "@/lib/anatomy";
 import { parseJson } from "@/lib/json";
 import { agentContextOptions, applyNameShim, launchAgentBrowser } from "./browser";
 import { putScreenshot, type AgentEnv } from "./env";
+import {
+  MAX_SMOKE_PAGES,
+  probeTargets,
+  splitSmokeTargets,
+  type PageProbe,
+  type ProbeOutcome,
+  type SmokeTargetSets,
+} from "./smoke";
 import { fullRunGate, gateInputFrom, smokeTargetsFromSnapshot, type SurveyOutcome } from "./snapshot";
+
+// workflow.ts reads these off the replay module; the pure half lives in smoke.ts
+// so scripts/verify-smoke-gate.ts can drive it without Browser Rendering.
+export { shortLabel, smokeOutcomeLine, type PageProbe } from "./smoke";
 
 // Browser-time only — no tokens are spent on a smoke pass. Recorded so a run's
 // cost column is never a lie by omission and the ledger still sums correctly.
@@ -63,34 +80,12 @@ const FULL_RUN_LOOKBACK = 12;
 // is not a baseline.
 const REPLAYABLE_VERDICTS: Verdict[] = ["all_good", "mostly_ok"];
 
-// Time budget. The survey (CHE-132) hands the smoke pass every page it saw
-// serve, so the cap is by pages AND by wall clock: the ladder was six pages
-// at ~20 s worst case, and thirty pages at that worst case would move the
-// verdict email, which the owner ruled out. Probing stops when the budget is
-// spent; the pages left over are counted, never claimed healthy.
-const MAX_SMOKE_PAGES = 30;
-const PROBE_BUDGET_MS = 90_000;
-const HOME_TIMEOUT_MS = 30_000;
-const PAGE_TIMEOUT_MS = 20_000;
-// Let the homepage's JS actually run before we judge its console.
-const SETTLE_MS = 1_500;
-// Production apps log the odd console error (blocked analytics, a 404 asset).
-// A burst is different, and an *uncaught* exception is different again — that
-// one is a single-instance signal.
-const CONSOLE_ERROR_LIMIT = 5;
-
 export interface SmokeRun {
   id: string;
   appSlug: string;
   targetUrl: string;
   watchId: string | null;
   baselineRunId: string | null;
-}
-
-export interface PageProbe {
-  url: string;
-  status: number | null;
-  error?: string;
 }
 
 /** The smoke check wasn't attempted; the caller runs the full agent check. */
@@ -113,6 +108,10 @@ export interface SmokeReport {
   appLens: string | null;
   anatomy: string | null;
   probes: PageProbe[];
+  /** Pages that answered — what "N pages healthy" counts (CHE-179). */
+  healthy: number;
+  /** Pages that did not answer on either attempt (CHE-179). Listed, never healthy. */
+  unreached: string[];
   /** Known pages left unvisited because the probe budget ran out (CHE-132). */
   skipped: number;
   failures: string[];
@@ -176,22 +175,19 @@ export async function smokeReplay(
   }
 
   // Specs and anatomy say where the journeys went; the survey says what else
-  // serves. Union, deduped, specs first so the pages a journey depends on are
-  // probed before the budget can run out.
-  const targets = [
-    ...new Set([
-      ...smokeTargets(
-        run.targetUrl,
-        specs.map((s) => s.content),
-        normalizeAnatomy(parseJson<unknown>(full.anatomy)),
-      ),
-      ...smokeTargetsFromSnapshot(survey?.snapshot, run.targetUrl),
-    ]),
-  ].slice(0, MAX_SMOKE_PAGES);
+  // serves. Two sets, not one (CHE-179): the first CORE_SMOKE_PAGES of the
+  // spec/anatomy list are the pre-CHE-132 smoke pass — the pages a journey
+  // depends on, where a silence is trouble. Everything else (the rest of that
+  // list and whatever the survey saw) is probed after them and a silence there
+  // is `unreached`, not a reason to spend on a full run.
+  const targets = splitSmokeTargets(
+    smokeTargets(run.targetUrl, specs.map((s) => s.content), normalizeAnatomy(parseJson<unknown>(full.anatomy))),
+    smokeTargetsFromSnapshot(survey?.snapshot, run.targetUrl),
+  );
   // Specs that navigate nowhere we can pin down (and an anatomy we couldn't
   // read paths out of) leave only the homepage. Same reasoning as no specs at
   // all: "the front door opens" is not enough to skip a day's check on.
-  if (targets.length === 0) {
+  if (targets.core.length + targets.extra.length === 0) {
     return { taken: false, reason: "nothing beyond the homepage to re-check" };
   }
 
@@ -324,103 +320,25 @@ function rebase(raw: string, origin: string): string | null {
 }
 
 // ─── The browser pass ────────────────────────────────────────────────────────
-
-interface ProbeOutcome {
-  probes: PageProbe[];
-  skipped: number;
-  failures: string[];
-  consoleErrors: number;
-  pageErrors: number;
-  screenshotUrl: string | null;
-}
+// One Browser Rendering session around smoke.ts's probeTargets; the rules
+// live there so they can be checked without a browser.
 
 async function probePages(
   env: AgentEnv,
   targetUrl: string,
-  targets: string[],
+  targets: SmokeTargetSets,
 ): Promise<ProbeOutcome> {
-  const probes: PageProbe[] = [];
-  const failures: string[] = [];
-  const uncaught: string[] = [];
-  let consoleErrors = 0;
-  let screenshotUrl: string | null = null;
-
   const browser: Browser = await launchAgentBrowser(env);
   const context = await browser.newContext(agentContextOptions(browser));
   try {
     const page: Page = await context.newPage();
     await applyNameShim(page);
-    page.on("console", (msg) => {
-      if (msg.type() === "error") consoleErrors++;
+    return await probeTargets(page, targetUrl, targets, {
+      saveScreenshot: async () =>
+        (await putScreenshot(env, await page.screenshot({ fullPage: false }))).storageUrl,
     });
-    page.on("pageerror", (err: Error) => {
-      if (uncaught.length < 5) uncaught.push(err.message.slice(0, 200));
-    });
-
-    const home = await probe(page, targetUrl, HOME_TIMEOUT_MS);
-    probes.push(home);
-    if (!home.error) {
-      await page.waitForTimeout(SETTLE_MS);
-      try {
-        screenshotUrl = (await putScreenshot(env, await page.screenshot({ fullPage: false })))
-          .storageUrl;
-      } catch {
-        /* the live screenshot is a nicety, never a verdict */
-      }
-    }
-
-    // The budget is wall clock from the first navigation. A page that is not
-    // probed is not counted anywhere but `skipped` — "N pages healthy" names
-    // only pages actually visited.
-    const startedAt = Date.now();
-    for (const url of targets) {
-      if (Date.now() - startedAt >= PROBE_BUDGET_MS) break;
-      probes.push(await probe(page, url, PAGE_TIMEOUT_MS));
-    }
   } finally {
     await context.close().catch(() => {});
     await browser.close().catch(() => {});
-  }
-
-  for (const p of probes) {
-    const label = shortLabel(p.url, targetUrl);
-    if (p.error) failures.push(`${label} didn't load (${p.error})`);
-    else if (p.status === null) failures.push(`${label} returned no response`);
-    else if (p.status >= 500) failures.push(`${label} returned HTTP ${p.status}`);
-  }
-  if (uncaught.length) {
-    failures.push(`uncaught JS error on load — "${uncaught[0]}"`);
-  }
-  if (consoleErrors >= CONSOLE_ERROR_LIMIT) {
-    failures.push(`${consoleErrors} console errors while loading the pages`);
-  }
-
-  return {
-    probes,
-    skipped: targets.length - (probes.length - 1),
-    failures,
-    consoleErrors,
-    pageErrors: uncaught.length,
-    screenshotUrl,
-  };
-}
-
-async function probe(page: Page, url: string, timeout: number): Promise<PageProbe> {
-  try {
-    const res = await page.goto(url, { waitUntil: "domcontentloaded", timeout });
-    return { url, status: res?.status() ?? null };
-  } catch (err) {
-    return { url, status: null, error: (err instanceof Error ? err.message : String(err)).slice(0, 160) };
-  }
-}
-
-/** "/pricing" for feed lines — the origin is already on screen. */
-export function shortLabel(url: string, targetUrl: string): string {
-  try {
-    const u = new URL(url);
-    if (u.origin !== new URL(targetUrl).origin) return url;
-    return `${u.pathname}${u.search}` || "/";
-  } catch {
-    return url;
   }
 }

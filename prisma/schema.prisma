@@ -604,8 +604,10 @@ model AppSnapshot {
   blocked     Boolean @default(false)
   // The page cap or the deadline stopped the survey with pages still
   // unvisited. An unvisited page is unknown, not removed — so this row is
-  // never compared either, or a slow app would read as "changed" every day
-  // and the calendar would be back as a daily full run.
+  // compared only on the pages both sides saw, and only when they share
+  // enough of them (CHE-179, src/agent/snapshot.ts isComparable). Otherwise a
+  // slow app would read as "changed" every day and the calendar would be
+  // back as a daily full run.
   truncated   Boolean @default(false)
 
   // Comparison with the snapshot before it. changed NULL = not comparable

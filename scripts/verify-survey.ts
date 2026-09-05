@@ -10,6 +10,13 @@
 // against a stub fetch that never runs out of links, the diff, the fingerprint,
 // the gate, and what the smoke pass is handed.
 //
+// CHE-179 (2026-09-04): every real app has more than 50 pages, so every real
+// survey was truncated, never compared, and the change-driven walk never
+// fired. Two truncated surveys are now compared on the pages they share when
+// they share enough (§9b), and the crawl order is checked to be a function of
+// the site alone (§5), which is what makes "the pages they share" the same
+// 50 pages every day.
+//
 // Usage: npx tsx --tsconfig tsconfig.json scripts/verify-survey.ts
 
 import {
@@ -20,6 +27,7 @@ import {
   fingerprintOf,
   normalizeHtml,
   pageHash,
+  pathOverlap,
   surveyApp,
   type FetchLike,
   type SurveyPage,
@@ -184,6 +192,23 @@ async function main() {
   check("cap: nothing off-list was requested but robots/sitemap", farmLog.filter((u) => /robots|sitemap/.test(u)).length === 2, String(farmLog.filter((u) => /robots|sitemap/.test(u)).length));
   check("cap: a fingerprint was computed", /^[0-9a-f]{64}$/.test(capped.fingerprint));
 
+  // 5b — CHE-179: the crawl order is a function of the site alone. The same
+  // farm crawled again — with the stub answering in a different order this
+  // time — visits the same 50 pages in the same order. A site's stable first
+  // 50 is what two truncated snapshots are compared on.
+  const jitter = (delay: () => number): FetchLike => {
+    const inner = stubFetch(farmPages, []);
+    return async (url, init) => {
+      await new Promise((r) => setTimeout(r, delay()));
+      return inner(url, init);
+    };
+  };
+  const again = await surveyApp(`${ORIGIN}/`, { fetch: jitter(() => Math.floor(Math.random() * 4)) });
+  const order = (r: { pages: SurveyPage[] }) => r.pages.map((p) => p.path);
+  check("order: the same farm crawled twice gives the same 50 pages in the same order", JSON.stringify(order(capped)) === JSON.stringify(order(again)), order(again).slice(0, 5).join(" "));
+  check("order: sitemap first, then homepage links in DOM order, then breadth-first", JSON.stringify(order(capped).slice(0, 12)) === JSON.stringify(["/", ...Array.from({ length: 10 }, (_, i) => `/p${i}`), "/p0-0"]), order(capped).slice(0, 12).join(" "));
+  check("order: two truncated crawls of a stable site overlap fully", pathOverlap(capped.pages, again.pages) === 1);
+
   // The deadline: 30 ms per request, a 120 ms budget — the crawl stops well
   // short of the cap and keeps what it has.
   const slowLog: string[] = [];
@@ -263,18 +288,41 @@ async function main() {
   check("gate: not comparable and no walk at all → not forced (other rungs decide)", !gate(false, null, null).force);
   check("gate: changed but reported not comparable → fuse rules, not the diff", !gate(false, true, 3).force);
 
-  // 9b — a truncated survey is not comparable: unvisited pages are unknown,
-  // not removed, so the fuse rules and never the diff.
+  // 9b — CHE-179: a truncated survey IS comparable when the two share enough
+  // pages; a page only one side reached is unknown, never added or removed.
   const full = record([page("/", "h")]);
-  check("comparable: two complete unblocked snapshots", isComparable(full, { blocked: false, truncated: false }));
-  check("not comparable: current truncated", !isComparable(full, { blocked: false, truncated: true }));
-  check("not comparable: current blocked", !isComparable(full, { blocked: true, truncated: false }));
-  check("not comparable: previous truncated", !isComparable(record([], { truncated: true }), { blocked: false, truncated: false }));
-  check("not comparable: no previous", !isComparable(null, { blocked: false, truncated: false }));
-  const truncatedNow = isComparable(full, capped);
-  check("the 50-page link farm survey is not comparable", !truncatedNow);
-  check("truncated current → changed stays null → gate not forced at 3 days", !fullRunGate({ comparable: truncatedNow, changed: null, lastWalkAgeDays: 3, maxAgeDays: 7 }).force);
-  check("truncated current → gate forced at 8 days by the fuse", fullRunGate({ comparable: truncatedNow, changed: null, lastWalkAgeDays: 8, maxAgeDays: 7 }).force);
+  const cur = (pages: SurveyPage[], truncated = false, blocked = false) => ({ blocked, truncated, pages });
+  check("comparable: two complete unblocked snapshots", isComparable(full, cur([page("/", "h")])));
+  check("comparable: complete pair with different page sets (no overlap rule)", isComparable(full, cur([page("/", "h"), page("/a", "h"), page("/b", "h"), page("/c", "h")])));
+  check("not comparable: current blocked", !isComparable(full, cur([page("/", "h")], false, true)));
+  check("not comparable: previous blocked", !isComparable(record([page("/", "h")], { blocked: true }), cur([page("/", "h")])));
+  check("not comparable: no previous", !isComparable(null, cur([page("/", "h")])));
+  const fifty = (prefix: string, from: number, n: number, hash = "h") => Array.from({ length: n }, (_, i) => page(`${prefix}${from + i}`, hash));
+  const prevT = record(fifty("/p", 0, 50), { truncated: true });
+  check("comparable: two truncated snapshots with the same 50 paths", isComparable(prevT, cur(fifty("/p", 0, 50), true)));
+  check("comparable: 45 common + 5 different (90% overlap)", isComparable(prevT, cur([...fifty("/p", 0, 45), ...fifty("/q", 0, 5)], true)));
+  check("not comparable: 30 common (60% overlap)", !isComparable(prevT, cur([...fifty("/p", 0, 30), ...fifty("/q", 0, 20)], true)));
+  check("not comparable: previous truncated at 50, current complete at 12", !isComparable(prevT, cur(fifty("/p", 0, 12))));
+  check("comparable: previous complete at 40, current truncated at 50 (80%)", isComparable(record(fifty("/p", 0, 40)), cur(fifty("/p", 0, 50), true)));
+  check("pathOverlap: 45 of 50 → 0.9", pathOverlap(fifty("/p", 0, 50), [...fifty("/p", 0, 45), ...fifty("/q", 0, 5)]) === 0.9);
+  const sameT = diffSnapshots({ ...prevT }, { pages: fifty("/p", 0, 50), bundles: [], buildId: null, truncated: true });
+  check("diff: same 50 paths, both truncated → unchanged", JSON.stringify(sameT) === JSON.stringify({ addedPaths: [], removedPaths: [], changedPaths: [], bundlesChanged: false, buildIdChanged: false }), JSON.stringify(sameT));
+  const shifted = diffSnapshots({ ...prevT }, { pages: [...fifty("/p", 0, 45), ...fifty("/q", 0, 5)], bundles: [], buildId: null, truncated: true });
+  check("diff: 45 common + 5 different, both truncated → the 5 are neither added nor removed", shifted.addedPaths.length === 0 && shifted.removedPaths.length === 0 && shifted.changedPaths.length === 0, JSON.stringify(shifted));
+  const contentT = diffSnapshots({ ...prevT }, { pages: [...fifty("/p", 0, 49), page("/p49", "h", 500)], bundles: [], buildId: null, truncated: true });
+  check("diff: a status change on a common page still counts", JSON.stringify(contentT.changedPaths) === JSON.stringify(["/p49"]), JSON.stringify(contentT.changedPaths));
+  const hashT = diffSnapshots({ ...prevT }, { pages: [page("/p0", "h-new"), ...fifty("/p", 1, 49)], bundles: [], buildId: null, truncated: true });
+  check("diff: a hash change on a common page still counts", JSON.stringify(hashT.changedPaths) === JSON.stringify(["/p0"]));
+  const grew = diffSnapshots({ pages: fifty("/p", 0, 40), bundles: [], buildId: null }, { pages: fifty("/p", 0, 50), bundles: [], buildId: null, truncated: true });
+  check("diff: previous complete, current truncated → pages the previous never had ARE added", grew.addedPaths.length === 10 && grew.removedPaths.length === 0, JSON.stringify(grew.addedPaths.length));
+  const shrank = diffSnapshots({ pages: fifty("/p", 0, 50), bundles: [], buildId: null, truncated: true }, { pages: fifty("/p", 0, 45), bundles: [], buildId: null });
+  check("diff: previous truncated, current complete → pages the current lacks ARE removed, nothing added", shrank.removedPaths.length === 5 && shrank.addedPaths.length === 0);
+  const farmAgainComparable = isComparable(record(capped.pages, { truncated: true }), again);
+  check("the 50-page link farm survey is comparable with its own repeat", farmAgainComparable);
+  check("… and unchanged", !fullRunGate({ comparable: farmAgainComparable, changed: false, lastWalkAgeDays: 30, maxAgeDays: 7 }).force);
+  const lowOverlap = isComparable(prevT, cur([...fifty("/p", 0, 30), ...fifty("/q", 0, 20)], true));
+  check("low overlap → changed stays null → gate not forced at 3 days", !fullRunGate({ comparable: lowOverlap, changed: null, lastWalkAgeDays: 3, maxAgeDays: 7 }).force);
+  check("low overlap → gate forced at 8 days by the fuse", fullRunGate({ comparable: lowOverlap, changed: null, lastWalkAgeDays: 8, maxAgeDays: 7 }).force);
 
   // 10 — smoke targets from a snapshot: served pages only, homepage out.
   const targets = smokeTargetsFromSnapshot(
@@ -300,13 +348,19 @@ async function main() {
     surveyEvent({ snapshot: record([page("/", "h")]), previous: null, comparable: false }).text,
     surveyEvent({ snapshot: record([page("/", "h"), page("/a", "h")], { changed: false }), previous: record([]), comparable: true }).text,
     surveyEvent({ snapshot: record([page("/", "h")], { changed: true, diff }), previous: record([]), comparable: true }).text,
-    surveyEvent({ snapshot: record(Array.from({ length: 50 }, (_, i) => page(`/p${i}`, "h")), { truncated: true }), previous: record([]), comparable: false }).text,
+    surveyEvent({ snapshot: record(fifty("/p", 0, 50), { truncated: true, changed: null }), previous: record([]), comparable: false }).text,
+    surveyEvent({ snapshot: record(fifty("/p", 0, 50), { truncated: true, changed: false }), previous: record([]), comparable: true }).text,
+    surveyEvent({ snapshot: record(fifty("/p", 0, 50), { truncated: true, changed: true, diff: { ...diff, addedPaths: [], removedPaths: [] } }), previous: record([]), comparable: true }).text,
+    surveyEvent({ snapshot: record(fifty("/p", 0, 50), { truncated: true }), previous: null, comparable: false }).text,
   ];
   check("feed: could not survey", lines[0] === "Could not survey the pages this run", lines[0]);
   check("feed: first snapshot", lines[1] === "Surveyed 1 page — first snapshot of this app", lines[1]);
   check("feed: nothing changed", lines[2] === "Surveyed 2 pages — nothing changed since the last check", lines[2]);
   check("feed: changed, with paths", lines[3] === "Surveyed 1 page — 3 pages changed since the last check: /pricing, /new, /old", lines[3]);
-  check("feed: truncated", lines[4] === "Surveyed 50 pages — more pages than could be compared this run", lines[4]);
+  check("feed: truncated, not comparable", lines[4] === "Surveyed 50 pages (the first 50 of a larger site) — more pages than could be compared this run", lines[4]);
+  check("feed: truncated, comparable, unchanged (CHE-179)", lines[5] === "Surveyed 50 pages (the first 50 of a larger site) — nothing changed since the last check", lines[5]);
+  check("feed: truncated, comparable, changed (CHE-179)", lines[6] === "Surveyed 50 pages (the first 50 of a larger site) — 1 page changed since the last check: /pricing", lines[6]);
+  check("feed: truncated, first snapshot", lines[7] === "Surveyed 50 pages (the first 50 of a larger site) — first snapshot of this app", lines[7]);
   check("feed: no crawler mechanics leak", !lines.some((l) => /fetch|crawl|hash|sitemap|headless|browser/i.test(l)));
 
   console.log(failures === 0 ? "\nall pass" : `\n${failures} FAILED`);

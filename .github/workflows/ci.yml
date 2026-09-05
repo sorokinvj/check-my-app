@@ -52,6 +52,8 @@ jobs:
       - run: npm run verify:unpublished-404
       # Launch: the whole site runs a fixed number of free anonymous checks a day; owners and the per-visitor quota are untouched by it.
       - run: npm run verify:site-quota
+      # CHE-179: a page that does not answer is unreached, not trouble — a $0.01 smoke day survives a silence; truncated surveys compare on the pages they share.
+      - run: npm run verify:smoke-gate
       # Smoke-build the web worker via OpenNext (catches bundle/runtime issues).
       - run: npx opennextjs-cloudflare build
 
