@@ -22,17 +22,12 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { finalizeStructured, LlmBudgetError, runAgentLoop } from "@/agent/core";
 import { harnessMode } from "@/agent/env";
 import { walkingVision } from "@/agent/harness";
-import {
-  adjudicateStep,
-  applyJudgeAnswer,
-  judgeProse,
-  needsJudge,
-  NOT_DEFECT_FALLBACK,
-  parseJudgeAnswer,
-  UNVERIFIABLE_FALLBACK,
-} from "@/agent/judge";
+import { adjudicateStep, applyJudgeAnswer, needsJudge, parseJudgeAnswer } from "@/agent/judge";
 import { emptyUsage, isVisionModel, navVisionFor, type LlmConfig } from "@/agent/llm";
 import { BROWSER_TOOLS, browserToolsFor, errorResponseIn, type ReportedStep, type ToolEnv } from "@/agent/tools";
+// CHE-180: the judge's prose gate and fallback sentences moved to the shared
+// language module so report_step writes with the same words.
+import { NOT_DEFECT_FALLBACK, productProse, UNVERIFIABLE_FALLBACK } from "@/lib/verdict-language";
 
 let failures = 0;
 function check(name: string, ok: boolean, detail = "") {
@@ -518,11 +513,11 @@ async function main() {
     check("judge on, no page: judged on text alone", noPage.calls.length === 1 && !noPage.calls[0].hadImage);
   }
 
-  // 8 — the pure pieces of the judge.
-  check("judgeProse: drops the sentence naming our side, keeps the product", judgeProse("The checkout completed and the receipt page showed the order number. Our headless browser then lost the session.") === "The checkout completed and the receipt page showed the order number.");
-  check("judgeProse: 'model' and 'harness' are dropped too", judgeProse("The page loaded with the pricing table visible to a visitor. The model in the harness could not click.") === "The page loaded with the pricing table visible to a visitor.");
-  check("judgeProse: nothing product-facing → null", judgeProse("Our headless browser environment failed.") === null);
-  check("judgeProse: empty → null", judgeProse("") === null && judgeProse(null) === null);
+  // 8 — the pure pieces of the judge (productProse is the shared gate since CHE-180).
+  check("productProse: drops the sentence naming our side, keeps the product", productProse("The checkout completed and the receipt page showed the order number. Our headless browser then lost the session.") === "The checkout completed and the receipt page showed the order number.");
+  check("productProse: 'model' and 'harness' are dropped too", productProse("The page loaded with the pricing table visible to a visitor. The model in the harness could not click.") === "The page loaded with the pricing table visible to a visitor.");
+  check("productProse: nothing product-facing → null", productProse("Our headless browser environment failed.") === null);
+  check("productProse: empty → null", productProse("") === null && productProse(null) === null);
   const fallbackNd = applyJudgeAnswer(brokenStep, { verdict: "not_defect", reason: "The browser did it.", userImpact: "The model says fine." });
   check("applyJudgeAnswer: not_defect with nothing left → fixed product sentence", fallbackNd.status === "ok" && fallbackNd.observed === NOT_DEFECT_FALLBACK && !MACHINERY.test(fallbackNd.observed));
   const fallbackUv = applyJudgeAnswer(archiveStep, { verdict: "unverifiable", reason: "headless", userImpact: "" });

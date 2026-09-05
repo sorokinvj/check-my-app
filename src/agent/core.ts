@@ -16,6 +16,7 @@ import {
   type LlmConfig,
   type UsageTotals,
 } from "./llm";
+import { productProse } from "@/lib/verdict-language";
 import { browserToolsFor, executeTool, type ToolEnv } from "./tools";
 
 export interface AgentLoopArgs {
@@ -57,6 +58,12 @@ export interface AgentLoopResult {
   costUsd: number;
   // Full token/cost breakdown of the loop — feeds the LlmUsage ledger.
   usage: UsageTotals;
+  // CHE-180: "model" when the model stopped requesting tools; "cap" when the
+  // iteration cap (CHE-134) ended the loop while the last response still asked
+  // for tools. In the second case finalText is the model's last thought
+  // mid-action ("Let me try the Reset to Defaults button", run #144), not a
+  // summary, and the caller must not write it as one.
+  endedBy: "model" | "cap";
 }
 
 export interface TranscriptEntry {
@@ -103,6 +110,8 @@ export async function runAgentLoop(args: AgentLoopArgs): Promise<AgentLoopResult
   // CHE-134: the effective cap. Starts at maxIterations and only ever comes
   // down — a second call to the wrap-up tool must not hand the loop new turns.
   let cap = maxIterations;
+  // CHE-180: only the model's own stop flips this; running out of turns does not.
+  let endedBy: "model" | "cap" = "cap";
   // CHE-169: the screenshot tool carries `look` only under vision on demand;
   // with the harness off this is BROWSER_TOOLS, byte for byte.
   const tools = browserToolsFor(env);
@@ -151,7 +160,10 @@ export async function runAgentLoop(args: AgentLoopArgs): Promise<AgentLoopResult
       }
     }
 
-    if (response.stop_reason !== "tool_use" || toolUses.length === 0) break;
+    if (response.stop_reason !== "tool_use" || toolUses.length === 0) {
+      endedBy = "model";
+      break;
+    }
 
     messages.push({ role: "assistant", content: response.content });
 
@@ -204,7 +216,10 @@ export async function runAgentLoop(args: AgentLoopArgs): Promise<AgentLoopResult
       });
 
       if (tool.name === "report_step" && onProgress) {
-        await onProgress(`${input.status}: ${input.label}`);
+        // CHE-180: the note is the live feed the owner watches; the label goes
+        // through the same gate as the written step.
+        const label = String(input.label ?? "");
+        await onProgress(`${input.status}: ${productProse(label, 0) ?? label}`);
       }
     }
 
@@ -221,7 +236,7 @@ export async function runAgentLoop(args: AgentLoopArgs): Promise<AgentLoopResult
     }
   }
 
-  return { finalText, iterations, transcript, messages, costUsd, usage };
+  return { finalText, iterations, transcript, messages, costUsd, usage, endedBy };
 }
 
 const OMITTED_SCREENSHOT: Anthropic.TextBlockParam = {

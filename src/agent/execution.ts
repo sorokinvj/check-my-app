@@ -10,6 +10,7 @@ import { LlmBudgetError, runAgentLoop, finalizeJson, type TranscriptEntry } from
 import {
   knownUrlsFrom,
   prepareAgentPage,
+  productizeStep,
   scrubSecrets,
   type RecordedAction,
   type ToolEnv,
@@ -24,6 +25,7 @@ import { credentialsAlreadyRejected, recordCredentialRejection } from "./credent
 import { WALK_WRAP_UP_ITERATIONS, walkingIterationCap } from "./limits";
 import { walkingVision } from "./harness";
 import { adjudicateStep } from "./judge";
+import { summarizeWalk } from "./summary";
 
 export interface WalkRun extends RunInput {
   id: string;
@@ -48,30 +50,6 @@ function journeyStatus(statuses: StepStatus[]): string {
   if (attempted.length === 0) return "skipped";
   const worst = worstStatus(attempted);
   return worst === "ok" && attempted.length < statuses.length ? "partial" : worst;
-}
-
-// The journey summary is meant to be a 1-2 sentence "what we found" line, but
-// the model often dumps a full markdown report (headings, a step table). That
-// leaks raw markdown into the verdict UI. Strip markdown structure and keep the
-// first bit of prose so the strip caption reads cleanly.
-function cleanSummary(text: string): string | null {
-  const prose = text
-    .split("\n")
-    .map((l) => l.trim())
-    .filter((l) => l && !l.startsWith("#") && !l.startsWith("|") && !l.startsWith("---"))
-    .join(" ")
-    .replace(/\*\*|`|__/g, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    // The UI prints its own "What we found:" lead-in; a model-written
-    // "Summary:" after it reads as stuttering boilerplate.
-    .replace(/^summary\s*[:—-]\s*/i, "");
-  if (prose.length <= 400) return prose || null;
-  // Cut at a sentence boundary instead of mid-word: a caption that ends in
-  // "the /en/login route 307-redi" reads as a bug of ours, not the app's.
-  const window = prose.slice(0, 400);
-  const lastStop = window.lastIndexOf(". ");
-  return lastStop > 150 ? window.slice(0, lastStop + 1) : `${window.trimEnd()}…`;
 }
 
 // The forced-extraction path asks for raw code, but models still wrap it in a
@@ -209,6 +187,9 @@ export async function walkOneJourney(args: {
           scrub: (text) => scrubSecrets(toolEnv, text),
           usage: judgeUsage,
         });
+        // CHE-180: the customer's words, decided after the judge has seen the
+        // model's. Nothing between here and the row may reintroduce ours.
+        productizeStep(step);
         stepStatuses.push(step.status as StepStatus);
         const trail = actionTrail.splice(0);
         await env.db.step.create({
@@ -308,11 +289,17 @@ export async function walkOneJourney(args: {
         }
       }
 
+      // CHE-180: the model's last text is the summary only when the model
+      // stopped on its own and the text is a finished statement; a walk the
+      // cap cut mid-action (run #144: "Let me try the Reset to Defaults
+      // button") is asked once more for the summary alone.
+      const summary = await summarizeWalk(llm, result, usage);
+
       await env.db.journey.update({
         where: { id: journey.id },
         data: {
           status: journeyStatus(stepStatuses),
-          summary: cleanSummary(result.finalText),
+          summary,
         },
       });
     } catch (err) {

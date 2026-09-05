@@ -54,11 +54,54 @@ export function hasEnvironmentLeak(text: string | null | undefined): boolean {
 // shipping a mangled half-sentence.
 export function stripEnvironmentLeak(text: string | null | undefined): string | null {
   if (!text) return null;
-  const sentences = text.split(/(?<=[.!?])\s+/);
+  const sentences = splitSentences(text);
   const kept = sentences.filter((s) => !hasEnvironmentLeak(s));
   const out = kept.join(" ").replace(/\s+/g, " ").trim();
   return out.length >= 20 ? out : null;
 }
+
+export function splitSentences(text: string): string[] {
+  return text.split(/(?<=[.!?])\s+/);
+}
+
+// Words that name our side, on top of the phrase gate above. Written for the
+// judge (CHE-169) and shared since CHE-180: run #144 wrote "requires
+// camera/mic access unavailable in our test environment" into Step.observed,
+// which the phrase gate did not catch and which the customer read on the
+// verdict page. One list, used by every producer of customer-facing prose
+// (judge, step text, journey summary, the live progress note).
+export const MACHINERY_TERMS =
+  /\b(browsers?|headless|environments?|models?|harness(es)?|playwright|screenshots?|checkers?|first reader|tooling|automation|agents?|test environment|our test)\b/i;
+
+// Product-facing prose: the CHE-82 phrase gate first, then the words above,
+// sentence by sentence. Null when nothing survives, so the caller falls back
+// to a fixed product sentence rather than a mangled half-line.
+//
+// The floor (20 characters) applies only when a sentence was actually
+// dropped: a short step text that never mentioned us ("Clicked Sign in.") is
+// intact and must stay as written — the floor exists to catch fragments left
+// by the strip, not to reject brevity. A step label is a few words by design,
+// so its caller sets the floor to 0.
+export function productProse(text: string | null | undefined, floor = 20): string | null {
+  if (!text) return null;
+  const sentences = splitSentences(text);
+  const kept = sentences.filter((s) => !hasEnvironmentLeak(s) && !MACHINERY_TERMS.test(s));
+  const out = kept.join(" ").replace(/\s+/g, " ").trim();
+  if (!out) return null;
+  if (kept.length === sentences.length) return out;
+  return out.length >= floor ? out : null;
+}
+
+// What is written when the model's own words did not survive the scrub. Used
+// by the judge (CHE-169) and by report_step (CHE-180) alike, so the customer
+// meets one sentence for one situation.
+export const NOT_DEFECT_FALLBACK = "This step behaved as a user would expect; nothing failed.";
+export const UNVERIFIABLE_FALLBACK = "We could not confirm this step this run.";
+// A step reported as a problem whose every word was about us (CHE-180). The
+// status still stands — classifyUnverified already turned a problem justified
+// only by our inability into a skipped step, so what reaches here carries
+// hard evidence the model phrased badly.
+export const PROBLEM_FALLBACK = "This step did not behave as a user would expect.";
 
 // The instruction block shared by every prompt that produces customer-facing
 // prose, so the rule is written once.

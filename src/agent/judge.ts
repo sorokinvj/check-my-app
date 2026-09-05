@@ -16,7 +16,7 @@
 
 import type Anthropic from "@anthropic-ai/sdk";
 import type { Page } from "@cloudflare/playwright";
-import { stripEnvironmentLeak } from "@/lib/verdict-language";
+import { NOT_DEFECT_FALLBACK, productProse, UNVERIFIABLE_FALLBACK } from "@/lib/verdict-language";
 import { createWithRetry, LlmBudgetError } from "./core";
 import { addUsage, isVisionModel, type LlmConfig, type UsageTotals } from "./llm";
 import { captureJpeg, classifyUnverified, type ReportedStep } from "./tools";
@@ -106,30 +106,9 @@ export function parseJudgeAnswer(text: string): JudgeAnswer | null {
   return null;
 }
 
-// Words that name our side, on top of the verdict-language gate. The judge is
-// told to describe the product only; this is the mechanism behind the
-// instruction (AGENTS.md): a sentence that names our machinery is dropped.
-const JUDGE_MACHINERY =
-  /\b(browsers?|headless|environments?|models?|harness(es)?|playwright|screenshots?|checkers?|first reader|tooling|automation|agent)\b/i;
-
-// Product-facing prose from the judge: the CHE-82 gate first, then the words
-// above, sentence by sentence. Null when nothing survives, so the caller falls
-// back to a fixed coverage sentence rather than a mangled half-line.
-export function judgeProse(text: string | null | undefined): string | null {
-  const stripped = stripEnvironmentLeak(text);
-  if (!stripped) return null;
-  const kept = stripped
-    .split(/(?<=[.!?])\s+/)
-    .filter((s) => !JUDGE_MACHINERY.test(s))
-    .join(" ")
-    .replace(/\s+/g, " ")
-    .trim();
-  return kept.length >= 20 ? kept : null;
-}
-
-// What is written when the judge's own words did not survive the scrub.
-export const NOT_DEFECT_FALLBACK = "This step behaved as a user would expect; nothing failed.";
-export const UNVERIFIABLE_FALLBACK = "We could not confirm this step this run.";
+// The judge is told to describe the product only; the mechanism behind the
+// instruction (AGENTS.md) is productProse in verdict-language.ts — the word
+// list lived here until CHE-180 made report_step need the same one.
 
 // Apply the judge's answer to the step. Pure. "defect" → the step as reported.
 // "not_defect" → ok, with the judge's product-facing reason as what was
@@ -138,7 +117,7 @@ export const UNVERIFIABLE_FALLBACK = "We could not confirm this step this run.";
 // 2: a step we could not verify is a ticket on our board, never a caveat).
 export function applyJudgeAnswer(step: ReportedStep, answer: JudgeAnswer): ReportedStep {
   if (answer.verdict === "defect") return step;
-  const prose = judgeProse([answer.reason, answer.userImpact].filter(Boolean).join(" "));
+  const prose = productProse([answer.reason, answer.userImpact].filter(Boolean).join(" "));
   if (answer.verdict === "not_defect") {
     return { ...step, status: "ok", observed: prose ?? NOT_DEFECT_FALLBACK, unverifiedReason: undefined };
   }

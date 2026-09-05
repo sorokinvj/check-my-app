@@ -11,6 +11,15 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import type { Page } from "@cloudflare/playwright";
 import { credentialFingerprint } from "@/lib/crypto";
+import {
+  hasEnvironmentLeak,
+  MACHINERY_TERMS,
+  NOT_DEFECT_FALLBACK,
+  PROBLEM_FALLBACK,
+  productProse,
+  splitSentences,
+  UNVERIFIABLE_FALLBACK,
+} from "@/lib/verdict-language";
 
 export interface ToolEnv {
   page: Page;
@@ -403,6 +412,9 @@ export async function executeTool(
         // with a reason alone.
         coerceUnpublished404(step, env);
         classifyUnverified(step);
+        // CHE-180: the step leaves here with the model's words intact — the
+        // judge (CHE-169) rules on them. productizeStep runs in the walk's
+        // onReportStep, after the judge and before the row is written.
         await env.onReportStep?.(step);
         return "Step recorded.";
       }
@@ -1007,6 +1019,41 @@ export function classifyUnverified(step: ReportedStep): void {
           ? "our_capability"
           : "not_applicable";
   }
+}
+
+// CHE-180. Step.attempted / Step.observed are read on the verdict page, and
+// verdict-language.ts guarded only findings and the bottom line: run #144
+// wrote "requires camera/mic access unavailable in our test environment" into
+// a step. Pure helper; the walk (execution.ts onReportStep) calls it LAST —
+// after coerceUnpublished404 and classifyUnverified, which read the machinery
+// phrases to classify a skipped step honestly, and after the judge (CHE-169),
+// whose ruling rests on exactly those words — and before the row is written.
+// Status and unverifiedReason are untouched; only the words change. When
+// nothing product-facing survives, a fixed sentence stands in: coverage for a
+// skipped step, the judge's sentence for an ok one, and for a problem the
+// first sentence with its machinery clause cut, so the evidence that made it
+// a problem is not thrown away together with the excuse. The label has no
+// product-facing substitute, so a label made only of machinery words (never
+// seen in a run) stays as written.
+export function productizeStep(step: ReportedStep): void {
+  step.label = productProse(step.label, 0) ?? step.label;
+  step.attempted = productProse(step.attempted) ?? step.label;
+  step.observed = productProse(step.observed) ?? observedFallback(step);
+}
+
+const CLAUSE_BREAK = /\s+[—–]+\s+|\s+-\s+|;\s+|,\s+(?=(?:it|which|because|since|as|so|but|and|though|although|while)\b)/i;
+
+function observedFallback(step: ReportedStep): string {
+  if (step.status === "skipped") return UNVERIFIABLE_FALLBACK;
+  if (step.status === "ok") return NOT_DEFECT_FALLBACK;
+  const first = splitSentences((step.observed ?? "").trim())[0] ?? "";
+  const clauses = first
+    .split(CLAUSE_BREAK)
+    .map((c) => c.trim())
+    .filter((c) => c && !hasEnvironmentLeak(c) && !MACHINERY_TERMS.test(c));
+  if (clauses.length === 0) return PROBLEM_FALLBACK;
+  const out = clauses.join(", ").replace(/[,;:\s]+$/, "");
+  return /[.!?]$/.test(out) ? out : `${out}.`;
 }
 
 // CHE-171. The navigate refusal tells the model; this makes sure the step

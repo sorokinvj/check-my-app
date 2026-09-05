@@ -58,6 +58,8 @@ jobs:
       - run: npm run verify:one-check
       # Launch analytics: A/B bucketing is deterministic and balanced, the event catalogue is unique, nothing a customer typed for us rides on an event.
       - run: npm run verify:analytics
+      # CHE-180: step text and journey summaries describe the product only; a walk the cap cut still gets a real summary, never the model's last thought.
+      - run: npm run verify:step-language
       # Smoke-build the web worker via OpenNext (catches bundle/runtime issues).
       - run: npx opennextjs-cloudflare build
 
