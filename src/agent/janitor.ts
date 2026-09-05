@@ -68,6 +68,19 @@ export async function sweepTestAccounts(env: AgentEnv, now: Date = new Date()): 
 // only key that is the test account's alone is the run that took the
 // snapshot. Bounded to runs that still point at one, and the pointer is
 // cleared afterwards so the set never grows.
+// A $1 check nobody paid for (src/lib/one-check.ts): the parked form input —
+// including an encrypted test password — outlives its Checkout Session by
+// nothing. Rows that never got a run are deleted once past their expiry; a
+// row with a run is the payment's record and stays. Same shape as the sweeps
+// above: narrow, on every tick, never fails the tick.
+export async function sweepExpiredPendingChecks(env: AgentEnv, now: Date = new Date()): Promise<number> {
+  const { count } = await env.db.pendingCheck.deleteMany({
+    where: { runId: null, expiresAt: { lt: now } },
+  });
+  if (count > 0) console.log(`[janitor] removed ${count} expired unpaid pending check(s)`);
+  return count;
+}
+
 async function sweepOwnerlessSnapshots(env: AgentEnv, cutoff: Date): Promise<void> {
   const runs = await env.db.run.findMany({
     where: {

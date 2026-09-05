@@ -15,7 +15,9 @@
 //   3. a session Stripe reports as anything but paid starts nothing, and the
 //      success page's state is "pending";
 //   4. a session that is paid starts the run from the poll alone, without the
-//      webhook, and reports "started" with the run's public id.
+//      webhook, and reports "started" with the run's public id;
+//   5. the janitor's sweep deletes only pending checks that are past expiry
+//      AND never got a run — a paid one is the payment's record and stays.
 //
 // Usage: npx tsx --tsconfig tsconfig.json scripts/verify-one-check.ts
 
@@ -24,6 +26,8 @@ process.env.CREDENTIALS_SECRET ??= "verify-one-check-secret";
 import type { PrismaClient } from "@/generated/prisma/client";
 import { decryptSecret, encryptSecret } from "@/lib/crypto";
 import { isPaidOneCheck, paidCheckState, startPaidCheck } from "@/lib/one-check";
+import { sweepExpiredPendingChecks } from "@/agent/janitor";
+import type { AgentEnv } from "@/agent/env";
 
 let failures = 0;
 function check(name: string, ok: boolean, detail = "") {
@@ -207,6 +211,32 @@ async function main() {
       `${retrieves()} retrieves`);
     const unknown = await paidCheckState(db, stripe, "cs_test_nobody", deps);
     check("paid: an unknown session is null, not pending", unknown === null);
+  }
+
+  // 5 — the janitor deletes expired rows that never got a run, and nothing else.
+  {
+    const now = new Date("2026-09-06T12:00:00.000Z");
+    const rows = [
+      { id: "expired-unpaid", runId: null, expiresAt: new Date("2026-09-06T11:59:59.000Z") },
+      { id: "expired-paid", runId: "run_1", expiresAt: new Date("2026-09-06T11:00:00.000Z") },
+      { id: "live-unpaid", runId: null, expiresAt: new Date("2026-09-06T13:00:00.000Z") },
+    ];
+    let where: { runId?: string | null; expiresAt?: { lt: Date } } = {};
+    const env = {
+      db: {
+        pendingCheck: {
+          deleteMany: async (args: { where: typeof where }) => {
+            where = args.where;
+            const gone = rows.filter((r) => r.runId === where.runId && r.expiresAt < where.expiresAt!.lt);
+            return { count: gone.length };
+          },
+        },
+      },
+    } as unknown as AgentEnv;
+    const removed = await sweepExpiredPendingChecks(env, now);
+    check("janitor: only the expired row without a run is deleted", removed === 1, `${removed} removed`);
+    check("janitor: the filter is runId null AND expiresAt before now",
+      where.runId === null && where.expiresAt?.lt.toISOString() === now.toISOString(), JSON.stringify(where));
   }
 
   console.log(failures === 0 ? "\nall pass" : `\n${failures} FAILED`);

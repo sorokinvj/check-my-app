@@ -9,7 +9,7 @@
 import { nextRunNumber } from "@/lib/db";
 import type { UserPlan, WatchFrequency } from "@/lib/enums";
 import { PLAN_LIMITS } from "@/lib/plans";
-import { sweepTestAccounts } from "./janitor";
+import { sweepExpiredPendingChecks, sweepTestAccounts } from "./janitor";
 import { sendWatchTrialPaused } from "@/lib/email";
 import { shouldSkipWatch } from "@/lib/plans";
 import { makeAgentEnv, type AgentEnv, type AgentBindings } from "./env";
@@ -52,6 +52,12 @@ export async function runDueWatches(
     await sweepTestAccounts(env, now);
   } catch (err) {
     console.warn(`[janitor] sweep failed: ${err instanceof Error ? err.message : err}`);
+  }
+  // Launch: parked $1 checks that were never paid for.
+  try {
+    await sweepExpiredPendingChecks(env, now);
+  } catch (err) {
+    console.warn(`[janitor] pending-check sweep failed: ${err instanceof Error ? err.message : err}`);
   }
 
   const due = await env.db.watch.findMany({

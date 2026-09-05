@@ -90,15 +90,17 @@ export function utcDayStart(now: Date = new Date()): Date {
 }
 
 // How many free anonymous runs the site has used today, against the cap. The
-// count is by ownerId null — the only runs the free funnel creates. Paid $1
-// runs will be excluded here once a `paidCheckoutSessionId` column exists
-// (that lands with the /api/billing/one-check endpoint).
+// count is by ownerId null — the only runs the free funnel creates — minus the
+// paid $1 runs: a run someone paid for (Run.paidCheckoutSessionId set, see
+// src/lib/one-check.ts) is not a free check and never consumes the free cap.
 export async function anonRunsToday(
   db: PrismaClient,
   now: Date = new Date(),
 ): Promise<{ used: number; cap: number; dayStartIso: string }> {
   const dayStart = utcDayStart(now);
-  const used = await db.run.count({ where: { ownerId: null, createdAt: { gte: dayStart } } });
+  const used = await db.run.count({
+    where: { ownerId: null, paidCheckoutSessionId: null, createdAt: { gte: dayStart } },
+  });
   return { used, cap: ANON_RUNS_PER_DAY_SITE, dayStartIso: dayStart.toISOString() };
 }
 
@@ -243,7 +245,11 @@ export async function assertCanStartRun(
 
   if (!anonKeyHash) return { ok: true };
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-  const used = await db.run.count({ where: { anonKeyHash, createdAt: { gte: since } } });
+  // Same exclusion as the site count: a $1 run this visitor paid for is not
+  // the free one they get a day.
+  const used = await db.run.count({
+    where: { anonKeyHash, paidCheckoutSessionId: null, createdAt: { gte: since } },
+  });
   if (used >= ANON_RUNS_PER_DAY) {
     return {
       ok: false,

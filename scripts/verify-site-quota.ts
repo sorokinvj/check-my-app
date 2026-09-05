@@ -12,7 +12,8 @@
 //      cap on strangers, not on accounts;
 //   4. with the site cap not reached, the per-visitor quota still fires.
 // Plus the counting contract: anonRunsToday counts ownerId null rows created
-// since midnight UTC of the given day, and reports that boundary.
+// since midnight UTC of the given day, and reports that boundary — minus the
+// $1 runs (paidCheckoutSessionId set): a paid run never consumes the free cap.
 //
 // Usage: npx tsx --tsconfig tsconfig.json scripts/verify-site-quota.ts
 
@@ -34,18 +35,23 @@ function check(name: string, ok: boolean, detail = "") {
 type CountWhere = {
   ownerId?: string | null;
   anonKeyHash?: string;
+  paidCheckoutSessionId?: string | null;
   createdAt?: { gte: Date };
 };
 
 // The stub answers run.count the way the gate asks it: site-wide anonymous
 // rows today, this visitor's rows in the last 24h, this owner's rows ever.
-function stubDb(counts: { site: number; visitor: number; owner: number }) {
+// `sitePaid` of the site rows carry a paidCheckoutSessionId; a query that
+// filters those out gets the difference, one that does not gets them all.
+function stubDb(counts: { site: number; visitor: number; owner: number; sitePaid?: number }) {
   const calls: CountWhere[] = [];
   const db = {
     run: {
       count: async ({ where }: { where: CountWhere }) => {
         calls.push(where);
-        if (where.ownerId === null) return counts.site;
+        if (where.ownerId === null) {
+          return where.paidCheckoutSessionId === null ? counts.site - (counts.sitePaid ?? 0) : counts.site;
+        }
         if (where.anonKeyHash) return counts.visitor;
         if (typeof where.ownerId === "string") return counts.owner;
         throw new Error(`unexpected count where: ${JSON.stringify(where)}`);
@@ -72,6 +78,18 @@ async function main() {
     check("anonRunsToday: counts ownerId null rows created since midnight UTC",
       where.ownerId === null && where.createdAt?.gte.toISOString() === "2026-09-05T00:00:00.000Z",
       JSON.stringify(where));
+    check("anonRunsToday: paid runs are excluded from the count",
+      where.paidCheckoutSessionId === null, JSON.stringify(where));
+  }
+
+  // 20 anonymous runs today, one of them paid: 19 free → the next stranger is
+  // let through. A $1 run bought its own slot; it does not take a free one.
+  {
+    const { db } = stubDb({ site: ANON_RUNS_PER_DAY_SITE, sitePaid: 1, visitor: 0, owner: 0 });
+    const today = await anonRunsToday(db);
+    check("20 anonymous runs, 1 paid → free count 19", today.used === ANON_RUNS_PER_DAY_SITE - 1, String(today.used));
+    const gate = await assertCanStartRun(db, null, "hash-p");
+    check("20 anonymous runs, 1 paid → anonymous caller ok", gate.ok, JSON.stringify(gate));
   }
 
   // 1 — 19 site runs today: an anonymous first-timer is let through.
