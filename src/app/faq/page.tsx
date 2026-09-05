@@ -78,8 +78,9 @@ const FAQS: Faq[] = [
     q: "How is the free tier limited?",
     a: (
       <>
-        A typical full first check costs us ~$0.50 of agent compute. Free = 1 check/day
-        without signup, 3 total with a free account; paid plans lift the caps.
+        The site runs 20 free checks a day in total. Without an account that is 1 check per
+        visitor every 24 hours; a free account gets 3 checks. Once the day&apos;s free checks
+        are used up, a check costs $1; paid plans lift the caps.
       </>
     ),
   },
