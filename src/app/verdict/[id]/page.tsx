@@ -174,6 +174,24 @@ export default async function VerdictPage({
           The agent got partway through and paused — this is a partial verdict.
         </p>
       )}
+      {/* Owner decision, 2026-09-05: an anonymous verdict is public and listed.
+          Say it on the page itself, and make signing in the way out of it. */}
+      {run.ownerId === null && (
+        <p className="mb-4 rounded-lg border border-ink-600 bg-ink-800/60 px-4 py-2.5 text-sm text-fg-muted">
+          This check was run without an account, so this verdict is public and listed in{" "}
+          <Link href="/checks/today" className="text-accent underline-offset-2 hover:underline">
+            today&apos;s checks
+          </Link>
+          .{" "}
+          <Link
+            href="/sign-in?redirect_url=%2Fcheck"
+            className="text-accent underline-offset-2 hover:underline"
+          >
+            Sign in
+          </Link>{" "}
+          before your next check to keep it unlisted.
+        </p>
+      )}
       {newerRun && (
         <p className="mb-4 rounded-lg border border-accent/40 bg-accent/10 px-4 py-2.5 text-sm text-accent">
           A newer run of this app exists —{" "}

@@ -84,6 +84,26 @@ const FAQS: Faq[] = [
     ),
   },
   {
+    // Owner decision, 2026-09-05: anonymous checks are public. Owned verdicts
+    // are "unlisted" — reachable by their link, listed nowhere — not "private".
+    q: "Are my checks public?",
+    a: (
+      <>
+        Checks run without an account are public: they appear in{" "}
+        <Link href="/checks/today" className="text-accent hover:underline">
+          today&apos;s checks
+        </Link>
+        , and the next visitor who pastes the same app on{" "}
+        <Link href="/check" className="text-accent hover:underline">
+          /check
+        </Link>{" "}
+        may be shown its previous verdict. With a free account your verdicts are unlisted —
+        they open only by their link — you get 3 checks, and they stay in your dashboard with
+        their history.
+      </>
+    ),
+  },
+  {
     q: "Which trackers are supported?",
     a: <>Linear today (GitHub next), on Growth and above.</>,
   },
