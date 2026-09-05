@@ -9,10 +9,12 @@ import type { MetadataRoute } from "next";
 export default function sitemap(): MetadataRoute.Sitemap {
   const site = process.env.NEXT_PUBLIC_APP_URL ?? "https://checkmyapp.dev";
   const now = new Date();
-  return ["", "/check", "/pricing", "/faq", "/about"].map((path) => ({
+  // /checks/today is public by design: it lists anonymous checks, which are
+  // public anyway, and it changes every day.
+  return ["", "/check", "/checks/today", "/pricing", "/faq", "/about"].map((path) => ({
     url: `${site}${path}`,
     lastModified: now,
-    changeFrequency: "weekly" as const,
+    changeFrequency: path === "/checks/today" ? ("daily" as const) : ("weekly" as const),
     priority: path === "" ? 1 : 0.7,
   }));
 }

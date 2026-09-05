@@ -73,6 +73,35 @@ export const PLAN_LIMITS: Record<UserPlan, PlanLimits> = {
 export const ANON_RUNS_PER_DAY = 1;
 export const FREE_RUNS_LIFETIME = 3;
 
+// Site-wide cap on free anonymous checks per UTC day (owner decision,
+// 2026-09-05, before launch). The per-visitor cap above bounds one stranger;
+// this one bounds the whole site, so a launch-day crowd cannot spend without a
+// ceiling. Economics behind the number: over the last 30 days an anonymous run
+// cost ~$0.28 on average and $0.91 at most, so 20 free runs bound the daily
+// free spend at roughly $6 typical, ~$18 worst case. Past the cap a visitor can
+// still run their check for $1 (which covers the overflow), or read today's
+// checks — every anonymous check is public.
+export const ANON_RUNS_PER_DAY_SITE = 20;
+
+// Start of the current UTC day — the cap resets at midnight UTC, and the copy
+// says so.
+export function utcDayStart(now: Date = new Date()): Date {
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+}
+
+// How many free anonymous runs the site has used today, against the cap. The
+// count is by ownerId null — the only runs the free funnel creates. Paid $1
+// runs will be excluded here once a `paidCheckoutSessionId` column exists
+// (that lands with the /api/billing/one-check endpoint).
+export async function anonRunsToday(
+  db: PrismaClient,
+  now: Date = new Date(),
+): Promise<{ used: number; cap: number; dayStartIso: string }> {
+  const dayStart = utcDayStart(now);
+  const used = await db.run.count({ where: { ownerId: null, createdAt: { gte: dayStart } } });
+  return { used, cap: ANON_RUNS_PER_DAY_SITE, dayStartIso: dayStart.toISOString() };
+}
+
 // Daily Watch on Free is a trial, not a tier (CHE-54): the one free watch runs
 // for this many days so an owner sees the product do its job on their own app,
 // then pauses until they subscribe.
@@ -169,7 +198,9 @@ export async function assertCanAddWatch(
   return { ok: true };
 }
 
-export type RunGate = { ok: true } | { ok: false; reason: string; code: "quota_anon" | "quota_free" };
+export type RunGate =
+  | { ok: true }
+  | { ok: false; reason: string; code: "quota_anon" | "quota_free" | "quota_site" };
 
 // Gate for starting a one-off run from the submit form. Only that route calls
 // it: Watch/scheduler runs are already paid for by the plan that enabled them
@@ -195,6 +226,19 @@ export async function assertCanStartRun(
       };
     }
     return { ok: true };
+  }
+
+  // The site-wide cap comes first: once today's free checks are gone, no
+  // stranger gets one — identifiable or not — and the answer names the two
+  // ways forward instead of the per-visitor line.
+  const site = await anonRunsToday(db);
+  if (site.used >= site.cap) {
+    return {
+      ok: false,
+      code: "quota_site",
+      reason:
+        "Today's free checks are all used up. Run this one for $1, or read today's checks — it opens again at midnight UTC.",
+    };
   }
 
   if (!anonKeyHash) return { ok: true };

@@ -45,6 +45,28 @@ export function SubmitForm({ initialUrl = "" }: { initialUrl?: string }) {
   const [error, setError] = useState<{ message: string; code?: string } | null>(null);
   const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
   const turnstileRef = useRef<HTMLDivElement>(null);
+  // Site-wide free-check counter (owner decision 2026-09-05). null = not
+  // fetched or the fetch failed, and then the line simply isn't rendered.
+  const [today, setToday] = useState<{ left: number; cap: number } | null>(null);
+  // The $1 path once the site cap is hit: POST to /api/billing/one-check with
+  // the same submission, follow the checkout URL it returns.
+  const [paying, setPaying] = useState(false);
+  const [payError, setPayError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/checks/today")
+      .then(async (res) => {
+        if (!res.ok) return;
+        const body = (await res.json()) as { left?: unknown; cap?: unknown };
+        if (cancelled || typeof body.left !== "number" || typeof body.cap !== "number") return;
+        setToday({ left: body.left, cap: body.cap });
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Render the Turnstile widget only when a site key is configured (prod).
   useEffect(() => {
@@ -87,6 +109,34 @@ export function SubmitForm({ initialUrl = "" }: { initialUrl?: string }) {
   }, [normalizedUrl, valid]);
 
   const lookup = valid && lookupState?.forUrl === normalizedUrl ? lookupState.hit : null;
+
+  // Exactly what the form sent to /api/checks, minus the Turnstile token: the
+  // paid endpoint carries the submission through checkout and starts the same
+  // run on payment.
+  async function payForThisCheck() {
+    setPaying(true);
+    setPayError(null);
+    try {
+      const res = await fetch("/api/billing/one-check", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: normalizedUrl, testEmail, testPassword, userNotes, notifyEmail }),
+      });
+      const body = (await res.json().catch(() => ({}))) as { url?: string; error?: string; code?: string };
+      if (res.ok && body.url) {
+        window.location.assign(body.url);
+        return;
+      }
+      if (res.status === 503 && body.code === "billing_unconfigured") {
+        setPayError("Paid checks open shortly — try again in a few minutes.");
+      } else {
+        setPayError(body.error ?? "Something went wrong");
+      }
+    } catch (err) {
+      setPayError(err instanceof Error ? err.message : "Something went wrong");
+    }
+    setPaying(false);
+  }
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -260,18 +310,39 @@ export function SubmitForm({ initialUrl = "" }: { initialUrl?: string }) {
         </div>
       )}
 
-      {error && (
-        <p className="text-center text-sm text-status-broken">
-          {error.message}
-          {error.code === "quota_anon" && (
-            <>
-              {" "}
-              <Link href="/sign-in" className="text-accent transition-colors hover:underline">
-                Sign in →
-              </Link>
-            </>
-          )}
-        </p>
+      {error && error.code === "quota_site" ? (
+        <div className="card animate-fade-up space-y-3 p-5">
+          <p className="text-[15px] font-semibold tracking-tight text-fg">
+            Today&apos;s free checks are used up
+          </p>
+          <p className="text-sm leading-6 text-fg-muted">{error.message}</p>
+          <div className="flex flex-wrap items-center gap-3">
+            <Button type="button" onClick={payForThisCheck} disabled={paying} className="px-4 py-2.5 text-sm">
+              {paying ? "One moment…" : "Run this one now for $1"}
+            </Button>
+            <Link
+              href="/checks/today"
+              className="font-mono text-[13px] text-accent transition-colors hover:underline"
+            >
+              See today&apos;s checks →
+            </Link>
+          </div>
+          {payError && <p className="text-sm text-status-broken">{payError}</p>}
+        </div>
+      ) : (
+        error && (
+          <p className="text-center text-sm text-status-broken">
+            {error.message}
+            {error.code === "quota_anon" && (
+              <>
+                {" "}
+                <Link href="/sign-in" className="text-accent transition-colors hover:underline">
+                  Sign in →
+                </Link>
+              </>
+            )}
+          </p>
+        )
       )}
 
       {TURNSTILE_SITE_KEY && <div ref={turnstileRef} className="flex justify-center" />}
@@ -291,6 +362,15 @@ export function SubmitForm({ initialUrl = "" }: { initialUrl?: string }) {
         No signup. Free first run.
         <br />
         We&apos;ll email you when ready.
+        {today && (
+          <>
+            <br />
+            {today.left} of {today.cap} free checks left today · anonymous checks are{" "}
+            <Link href="/checks/today" className="text-accent transition-colors hover:underline">
+              public
+            </Link>
+          </>
+        )}
       </p>
     </form>
   );

@@ -1,0 +1,123 @@
+// Site-wide free-check cap verification (owner decision 2026-09-05).
+//
+// Before launch, the number of free anonymous checks on the whole site is
+// capped per UTC day (ANON_RUNS_PER_DAY_SITE). Four things must hold, all of
+// them exercised through the real assertCanStartRun with a prisma-like stub —
+// no database, no clock dependence beyond "today":
+//   1. below the cap, an anonymous caller is let through as before;
+//   2. at the cap, the answer is quota_site — for an identifiable client AND
+//      for one we could not identify (the site cap comes before the
+//      per-visitor bypass, or an unidentifiable crowd would walk past it);
+//   3. an owner on the Free plan is never blocked by the site cap — it is a
+//      cap on strangers, not on accounts;
+//   4. with the site cap not reached, the per-visitor quota still fires.
+// Plus the counting contract: anonRunsToday counts ownerId null rows created
+// since midnight UTC of the given day, and reports that boundary.
+//
+// Usage: npx tsx --tsconfig tsconfig.json scripts/verify-site-quota.ts
+
+import type { PrismaClient } from "@/generated/prisma/client";
+import {
+  ANON_RUNS_PER_DAY,
+  ANON_RUNS_PER_DAY_SITE,
+  anonRunsToday,
+  assertCanStartRun,
+  utcDayStart,
+} from "@/lib/plans";
+
+let failures = 0;
+function check(name: string, ok: boolean, detail = "") {
+  if (!ok) failures++;
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? `  →  ${detail}` : ""}`);
+}
+
+type CountWhere = {
+  ownerId?: string | null;
+  anonKeyHash?: string;
+  createdAt?: { gte: Date };
+};
+
+// The stub answers run.count the way the gate asks it: site-wide anonymous
+// rows today, this visitor's rows in the last 24h, this owner's rows ever.
+function stubDb(counts: { site: number; visitor: number; owner: number }) {
+  const calls: CountWhere[] = [];
+  const db = {
+    run: {
+      count: async ({ where }: { where: CountWhere }) => {
+        calls.push(where);
+        if (where.ownerId === null) return counts.site;
+        if (where.anonKeyHash) return counts.visitor;
+        if (typeof where.ownerId === "string") return counts.owner;
+        throw new Error(`unexpected count where: ${JSON.stringify(where)}`);
+      },
+    },
+  };
+  return { db: db as unknown as PrismaClient, calls };
+}
+
+async function main() {
+  check("cap is the owner's number", ANON_RUNS_PER_DAY_SITE === 20, String(ANON_RUNS_PER_DAY_SITE));
+
+  // Counting contract.
+  {
+    const now = new Date("2026-09-05T17:42:11.000Z");
+    check("utcDayStart: midnight UTC of the given instant",
+      utcDayStart(now).toISOString() === "2026-09-05T00:00:00.000Z", utcDayStart(now).toISOString());
+    const { db, calls } = stubDb({ site: 7, visitor: 0, owner: 0 });
+    const today = await anonRunsToday(db, now);
+    check("anonRunsToday: used / cap / dayStartIso",
+      today.used === 7 && today.cap === ANON_RUNS_PER_DAY_SITE && today.dayStartIso === "2026-09-05T00:00:00.000Z",
+      JSON.stringify(today));
+    const where = calls[0];
+    check("anonRunsToday: counts ownerId null rows created since midnight UTC",
+      where.ownerId === null && where.createdAt?.gte.toISOString() === "2026-09-05T00:00:00.000Z",
+      JSON.stringify(where));
+  }
+
+  // 1 — 19 site runs today: an anonymous first-timer is let through.
+  {
+    const { db } = stubDb({ site: ANON_RUNS_PER_DAY_SITE - 1, visitor: 0, owner: 0 });
+    const gate = await assertCanStartRun(db, null, "hash-a");
+    check("19 site runs today → anonymous caller ok", gate.ok, JSON.stringify(gate));
+  }
+
+  // 2 — 20 site runs today: quota_site, with the two ways forward in the copy.
+  {
+    const { db, calls } = stubDb({ site: ANON_RUNS_PER_DAY_SITE, visitor: 0, owner: 0 });
+    const gate = await assertCanStartRun(db, null, "hash-a");
+    check("20 site runs today → quota_site", !gate.ok && gate.code === "quota_site", JSON.stringify(gate));
+    check("quota_site: reason names the $1 run and today's checks and the reset",
+      !gate.ok && /\$1/.test(gate.reason) && /today's checks/i.test(gate.reason) && /midnight UTC/.test(gate.reason),
+      gate.ok ? "" : gate.reason);
+    check("quota_site: the per-visitor count was never consulted",
+      !calls.some((w) => w.anonKeyHash), `${calls.length} count calls`);
+    const unidentified = await assertCanStartRun(db, null, null);
+    check("20 site runs today → an unidentifiable client is blocked too",
+      !unidentified.ok && unidentified.code === "quota_site", JSON.stringify(unidentified));
+  }
+
+  // 3 — an owner on Free with the site cap hit: their own lifetime quota is
+  // the only thing that applies.
+  {
+    const { db, calls } = stubDb({ site: ANON_RUNS_PER_DAY_SITE, visitor: 0, owner: 0 });
+    const gate = await assertCanStartRun(db, { id: "owner-1", plan: "free" }, null);
+    check("owner (free, 0 runs) with site cap hit → ok", gate.ok, JSON.stringify(gate));
+    check("owner: the site-wide count was never consulted",
+      !calls.some((w) => w.ownerId === null), `${calls.length} count calls`);
+    const paid = await assertCanStartRun(db, { id: "owner-2", plan: "starter" }, null);
+    check("owner (starter) with site cap hit → ok", paid.ok, JSON.stringify(paid));
+  }
+
+  // 4 — site cap not reached, this visitor already had theirs: quota_anon.
+  {
+    const { db } = stubDb({ site: 5, visitor: ANON_RUNS_PER_DAY, owner: 0 });
+    const gate = await assertCanStartRun(db, null, "hash-b");
+    check("site cap not reached, visitor at their cap → quota_anon",
+      !gate.ok && gate.code === "quota_anon", JSON.stringify(gate));
+  }
+
+  console.log(failures === 0 ? "\nall pass" : `\n${failures} FAILED`);
+  process.exit(failures === 0 ? 0 : 1);
+}
+
+main();
