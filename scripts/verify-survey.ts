@@ -17,25 +17,44 @@
 // the site alone (§5), which is what makes "the pages they share" the same
 // 50 pages every day.
 //
+// CHE-185 (2026-09-05): run #149 walked joblander.app in full because the raw
+// HTML of every localised homepage differed from the day before — a live
+// counter in the hero, re-rendered hourly per instance. The per-page hash is
+// now a structural digest (§1b): what stays out of it (dates, counters,
+// nonces, ids, attribute order, inline state) and what must still move it (a
+// link, a heading, a field, a bundle, a copy edit) are both checked, with a
+// fixture cut from the joblander hero. A previous snapshot hashed the old way
+// is not comparable (§9c) and a survey whose homepage moved within the crawl
+// is volatile, compared with text-only differences set aside (§9d).
+//
 // Usage: npx tsx --tsconfig tsconfig.json scripts/verify-survey.ts
 
 import {
+  DIGEST_VERSION,
   diffSnapshots,
+  describeDiff,
+  diffIsChange,
   extractBuildId,
   extractBundles,
   extractLinks,
   fingerprintOf,
   normalizeHtml,
+  pageDigest,
   pageHash,
+  pageHashes,
   pathOverlap,
+  stableText,
   surveyApp,
   type FetchLike,
   type SurveyPage,
 } from "@/agent/survey";
 import {
+  applyVolatileRule,
   fullRunGate,
   isComparable,
   mergeSurveyedPages,
+  parseStoredPages,
+  serializeStoredPages,
   smokeTargetsFromSnapshot,
   surveyEvent,
   type SnapshotRecord,
@@ -101,12 +120,18 @@ function record(pages: SurveyPage[], extra: Partial<SnapshotRecord> = {}): Snaps
     sitemapUrls: 0,
     blocked: false,
     truncated: false,
+    digestVersion: DIGEST_VERSION,
+    volatile: false,
     previousId: null,
     changed: null,
     diff: null,
     ...extra,
   };
 }
+
+// Every crawl below runs with the homepage recheck due immediately; §5c is the
+// one place the 20-second rule itself is exercised, with a short delay.
+const FAST = { homepageRecheckDelayMs: 0 };
 
 async function main() {
   // 1 — normalisation: nonces, CSRF values, timestamps and churny inline
@@ -185,7 +210,7 @@ async function main() {
     for (let j = 0; j < 10; j++) farmPages[`/p${i}-${j}`] = farm(`/p${i}-${j}-`);
   }
   const farmLog: string[] = [];
-  const capped = await surveyApp(`${ORIGIN}/`, { fetch: stubFetch(farmPages, farmLog) });
+  const capped = await surveyApp(`${ORIGIN}/`, { fetch: stubFetch(farmPages, farmLog), ...FAST });
   check("cap: exactly 50 pages surveyed", capped.pages.length === 50, String(capped.pages.length));
   check("cap: reported as truncated", capped.truncated);
   check("cap: homepage is the first page, at path /", capped.pages[0].path === "/");
@@ -203,7 +228,7 @@ async function main() {
       return inner(url, init);
     };
   };
-  const again = await surveyApp(`${ORIGIN}/`, { fetch: jitter(() => Math.floor(Math.random() * 4)) });
+  const again = await surveyApp(`${ORIGIN}/`, { fetch: jitter(() => Math.floor(Math.random() * 4)), ...FAST });
   const order = (r: { pages: SurveyPage[] }) => r.pages.map((p) => p.path);
   check("order: the same farm crawled twice gives the same 50 pages in the same order", JSON.stringify(order(capped)) === JSON.stringify(order(again)), order(again).slice(0, 5).join(" "));
   check("order: sitemap first, then homepage links in DOM order, then breadth-first", JSON.stringify(order(capped).slice(0, 12)) === JSON.stringify(["/", ...Array.from({ length: 10 }, (_, i) => `/p${i}`), "/p0-0"]), order(capped).slice(0, 12).join(" "));
@@ -215,6 +240,7 @@ async function main() {
   const timed = await surveyApp(`${ORIGIN}/`, {
     fetch: stubFetch(farmPages, slowLog, 30),
     deadlineMs: 120,
+    ...FAST,
   });
   check("deadline: stopped before the cap", timed.pages.length > 0 && timed.pages.length < 50, String(timed.pages.length));
   check("deadline: reported as truncated", timed.truncated);
@@ -233,7 +259,7 @@ async function main() {
     "/pricing": html(`<h1>Pricing</h1>`, `<title>Pricing – Target</title>`),
     "/login": html(`<form></form><form></form>`, `<title>Sign in</title>`),
   };
-  const surveyed = await surveyApp(`${ORIGIN}/`, { fetch: stubFetch(site, siteLog) });
+  const surveyed = await surveyApp(`${ORIGIN}/`, { fetch: stubFetch(site, siteLog), ...FAST });
   const paths = surveyed.pages.map((p) => p.path).sort();
   check("sitemap + homepage links surveyed", JSON.stringify(paths) === JSON.stringify(["/", "/login", "/pricing"]), JSON.stringify(paths));
   check("sitemap URL count recorded (logout and off-origin excluded)", surveyed.sitemapUrls === 1, String(surveyed.sitemapUrls));
@@ -251,7 +277,7 @@ async function main() {
     ["Vercel protection", () => response(html(`<script src="/_vercel/protection/x.js"></script>`))],
     ["network error", () => { throw new Error("connect ECONNREFUSED"); }],
   ] as Array<[string, () => Response]>) {
-    const blocked = await surveyApp(`${ORIGIN}/`, { fetch: stubFetch({ "/": res }, []) });
+    const blocked = await surveyApp(`${ORIGIN}/`, { fetch: stubFetch({ "/": res }, []), ...FAST });
     check(`blocked homepage (${name}) → blocked: true, no pages`, blocked.blocked && blocked.pages.length === 0);
   }
 
@@ -291,7 +317,7 @@ async function main() {
   // 9b — CHE-179: a truncated survey IS comparable when the two share enough
   // pages; a page only one side reached is unknown, never added or removed.
   const full = record([page("/", "h")]);
-  const cur = (pages: SurveyPage[], truncated = false, blocked = false) => ({ blocked, truncated, pages });
+  const cur = (pages: SurveyPage[], truncated = false, blocked = false) => ({ blocked, truncated, pages, digestVersion: DIGEST_VERSION });
   check("comparable: two complete unblocked snapshots", isComparable(full, cur([page("/", "h")])));
   check("comparable: complete pair with different page sets (no overlap rule)", isComparable(full, cur([page("/", "h"), page("/a", "h"), page("/b", "h"), page("/c", "h")])));
   check("not comparable: current blocked", !isComparable(full, cur([page("/", "h")], false, true)));
@@ -362,6 +388,173 @@ async function main() {
   check("feed: truncated, comparable, changed (CHE-179)", lines[6] === "Surveyed 50 pages (the first 50 of a larger site) — 1 page changed since the last check: /pricing", lines[6]);
   check("feed: truncated, first snapshot", lines[7] === "Surveyed 50 pages (the first 50 of a larger site) — first snapshot of this app", lines[7]);
   check("feed: no crawler mechanics leak", !lines.some((l) => /fetch|crawl|hash|sitemap|headless|browser/i.test(l)));
+
+  // ─── CHE-185 ───────────────────────────────────────────────────────────────
+
+  // 1b — the structural digest. One page in many per-request disguises must
+  // hash the same; one real change of each kind must not.
+  const stable = (mid: string, head = "") =>
+    html(
+      `<header><a href="/pricing">Pricing</a><a href="/docs#intro">Docs</a></header>` +
+        `<main><h1>Welcome home</h1><p>Hello there, friend.</p>${mid}` +
+        `<form><input name="email" type="email"><input type="checkbox" name="tos"><button>Go</button></form></main>` +
+        `<script src="/static/app-abc123.js?v=1"></script><link rel="stylesheet" href="/static/site-def456.css">`,
+      head,
+    );
+  const sameHash = async (name: string, a: string, b: string) =>
+    check(`digest: ${name} → same hash`, (await pageHash(a, `${ORIGIN}/`)) === (await pageHash(b, `${ORIGIN}/`)), pageDigest(b, `${ORIGIN}/`).split("\n").find((l) => l.startsWith("text:")) ?? "");
+  const otherHash = async (name: string, a: string, b: string) =>
+    check(`digest: ${name} → different hash`, (await pageHash(a, `${ORIGIN}/`)) !== (await pageHash(b, `${ORIGIN}/`)));
+  const origin = stable(`<p>Updated Sep 5, 2026 at 15:30 — 1,234 users, 17 teams</p><div data-id="a1b2c3">x</div>`, `<script nonce="n-one">window.__s = {"id":"req-111"}</script>`);
+  await sameHash("a nonce", origin, origin.replace("n-one", "n-two"));
+  await sameHash('a date "Sep 5, 2026"', origin, origin.replace("Sep 5, 2026", "Oct 12, 2027"));
+  await sameHash("an ISO timestamp", stable(`<p>as of 2026-09-05T16:31:00Z</p>`), stable(`<p>as of 2026-09-06T09:02:11.123+02:00</p>`));
+  await sameHash('a clock time "15:30"', origin, origin.replace("15:30", "09:05"));
+  await sameHash('a counter "1,234 users"', origin, origin.replace("1,234 users", "1,301 users"));
+  await sameHash("a plain number", origin, origin.replace("17 teams", "9 teams"));
+  await sameHash("a random data-id", origin, origin.replace('data-id="a1b2c3"', 'data-id="z9y8x7"'));
+  await sameHash("attribute order", origin, origin.replace('<input name="email" type="email">', '<input type="email" name="email">').replace('<a href="/pricing">', '<a class="nav" href="/pricing">'));
+  await sameHash("a link fragment", origin, origin.replace("/docs#intro", "/docs#usage"));
+  await sameHash("an inline __NEXT_DATA__ blob with other ids", stable(`<script id="__NEXT_DATA__" type="application/json">{"props":{"reqId":"aaa","ts":1725500000}}</script>`), stable(`<script id="__NEXT_DATA__" type="application/json">{"props":{"reqId":"bbb","ts":1725586400}}</script>`));
+  await sameHash("an inline script with a per-request id", stable(`<script>window.__id="one"</script>`), stable(`<script>window.__id="two"</script>`));
+  await sameHash("a script query string", origin, origin.replace("app-abc123.js?v=1", "app-abc123.js?v=2"));
+  await sameHash("whitespace and comments", origin, origin.replace("<p>Hello there, friend.</p>", "<p>Hello   there,\n<!-- x -->friend.</p>"));
+  await otherHash("a new link", origin, origin.replace("</header>", `<a href="/blog">Blog</a></header>`));
+  await otherHash("a removed link", origin, origin.replace(`<a href="/docs#intro">Docs</a>`, ""));
+  await otherHash("a changed heading", origin, origin.replace("Welcome home", "Welcome back"));
+  await otherHash("a new form field", origin, origin.replace("</form>", `<input name="phone" type="tel"></form>`));
+  await otherHash("a field type change", origin, origin.replace('<input name="email" type="email">', '<input name="email" type="text">'));
+  await otherHash("a renamed script bundle", origin, origin.replace("app-abc123.js", "app-def456.js"));
+  await otherHash("a renamed stylesheet", origin, origin.replace("site-def456.css", "site-999999.css"));
+  await otherHash("a copy edit", origin, origin.replace("Hello there, friend.", "Hello there, stranger."));
+  await otherHash("a changed title", origin, origin.replace("<title>Target</title>", "<title>Target — new</title>"));
+  await otherHash("a changed meta description", stable("", `<meta name="description" content="One">`), stable("", `<meta content="Two" name="description">`));
+  await otherHash("a new button", origin, origin.replace("<button>Go</button>", "<button>Go</button><button>Reset</button>"));
+  check("digest: text is taken from <main> when there is one", !pageDigest(origin).includes("Pricing Docs"), pageDigest(origin).split("\n").pop() ?? "");
+  check("digest: links are absolute, sorted, unique, fragment-free", JSON.stringify(pageDigest(origin, `${ORIGIN}/x/`).split("\n").filter((l) => l.startsWith("a:"))) === JSON.stringify([`a:${ORIGIN}/docs`, `a:${ORIGIN}/pricing`]), JSON.stringify(pageDigest(origin, `${ORIGIN}/x/`).split("\n").filter((l) => l.startsWith("a:"))));
+  check("digest: form fields in document order as tag|name|type", pageDigest(origin).includes("field:input|email|email\nfield:input|tos|checkbox"));
+  check("digest: assets without query strings", pageDigest(origin).includes("asset:/static/app-abc123.js\nasset:/static/site-def456.css"));
+  check("digest: control counts", pageDigest(origin).includes("buttons:1\ninputs:2"));
+  const dated = "<p>Sep 5, 2026 · 5 September 2026 · Friday, March 24, 2026 · 2026-09-05 · 05/09/2026 · 15:30 · 4:05 pm · 1,234 users · v2.1 · 12 345</p>";
+  check("stableText: dates, times and numbers gone, words intact", stableText(dated) === "· · · · · · · users · v ·", JSON.stringify(stableText(dated)));
+  check("stableText: a month name outside a date is text", stableText("<p>May I decorate in March</p>") === "May I decorate in March", stableText("<p>May I decorate in March</p>"));
+  const hashes = await pageHashes(origin, `${ORIGIN}/`);
+  check("pageHashes: hash, rawHash and skeletonHash are three different sha256s", /^[0-9a-f]{64}$/.test(hashes.hash) && /^[0-9a-f]{64}$/.test(hashes.rawHash) && /^[0-9a-f]{64}$/.test(hashes.skeletonHash) && new Set([hashes.hash, hashes.rawHash, hashes.skeletonHash]).size === 3);
+  check("pageHashes: rawHash is the old normalised-HTML hash and still moves with a counter", hashes.rawHash !== (await pageHashes(origin.replace("1,234 users", "1,301 users"), `${ORIGIN}/`)).rawHash);
+  check("pageHashes: skeletonHash ignores a copy edit", hashes.skeletonHash === (await pageHashes(origin.replace("friend.", "stranger."), `${ORIGIN}/`)).skeletonHash);
+  check("pageHashes: skeletonHash sees a new link", hashes.skeletonHash !== (await pageHashes(origin.replace("</header>", `<a href="/blog">B</a></header>`), `${ORIGIN}/`)).skeletonHash);
+  check("pageHashes: skeletonHash sees a renamed bundle", hashes.skeletonHash !== (await pageHashes(origin.replace("app-abc123.js", "app-def456.js"), `${ORIGIN}/`)).skeletonHash);
+
+  // 1c — the joblander shape (run #149). Two real renders of
+  // https://joblander.app/ on 2026-09-05 (etags zt094t3lma48aj at 17:17 and
+  // q1367t6xwx48aj at 17:43, 197,677 chars both) differed in exactly one
+  // fragment, inside an inline flight-data script: the initialCanonicalUrl
+  // carried the _rsc cache-buster of whichever request had triggered that ISR
+  // regeneration. The fixture is that script, verbatim in shape, inside the
+  // page's chrome, plus the hero's live figure — the other thing on the page
+  // that moves the bytes. Two renders must hash the same; a copy edit, a
+  // bundle rename or a build id change must not.
+  const joblander = (rsc: string, figure = "169,500", copy = "insights delivered this month", buildId = "KsTYig8L1zpL2GwSgPCrL") =>
+    `<!DOCTYPE html><html lang="en"><head><meta charSet="utf-8"/><title>JobLander – AI Interview Copilot</title>` +
+    `<meta name="description" content="Real-time AI hints during your job interview."/>` +
+    `<script src="/_next/static/chunks/webpack-3b051936b880caf9.js" async=""></script>` +
+    `<script src="/_next/static/chunks/main-app-a8c44041507ebd1f.js" async=""></script></head>` +
+    `<body class="__className_44151c notranslate"><!--$!--><template data-dgst="BAILOUT_TO_CLIENT_SIDE_RENDERING"></template><!--/$-->` +
+    `<header class="flex justify-between w-full"><nav><a href="/">Home</a><a href="/practice">Practice</a><a href="/pricing">Pricing</a></nav>` +
+    `<button data-href="/signup" data-label="Create account">Create account</button></header>` +
+    `<main class="flex flex-col gap-20"><h1 class="font-semibold text-4xl">Your ultimate<br/>job interview co-pilot</h1>` +
+    `<p class="max-w-2xl text-lg">Real-time hints during your actual interview.</p>` +
+    `<div class="flex flex-col items-center gap-0.5 text-center"><p class="font-mono text-[11px] uppercase">Real interview hints, delivered in real time</p>` +
+    `<p class="text-sm text-slate-500"><span class="font-semibold text-accent">${figure}</span> <!-- -->${copy}</p></div>` +
+    `<h2>How it works in a real interview</h2></main>` +
+    `<footer>© 2026 JobLander</footer>` +
+    `<script>self.__next_f.push([1,"0:[null,[\\"$\\",\\"$La\\",null,{\\"buildId\\":\\"${buildId}\\",\\"assetPrefix\\":\\"\\",\\"initialCanonicalUrl\\":\\"/?_rsc=${rsc}\\",\\"initialTree\\":[\\"\\",{\\"children\\":[[\\"lang\\",\\"en\\",\\"d\\"]]}]}]]\\n"])</script>` +
+    `<script>self.__next_f.push([1,"3:I[1234,[\\"9946\\"],\\"\\"]\\n"])</script>` +
+    `<script>self.__next_f.push([1,"5:[\\"$\\",\\"$L6\\",null,{\\"figure\\":\\"${figure}\\"}]\\n"])</script></body></html>`;
+  const jl1 = joblander("p18k4");
+  const jlRsc = joblander("1j6xg");
+  const jl2 = joblander("p18k4", "171,000");
+  check("joblander: the two real renders' shape — a different _rsc in the flight data — hash the same", (await pageHash(jl1, "https://joblander.app/")) === (await pageHash(jlRsc, "https://joblander.app/")));
+  check("joblander: … while the old hash moved on it (this is what run #149 compared)", (await pageHashes(jl1, "https://joblander.app/")).rawHash !== (await pageHashes(jlRsc, "https://joblander.app/")).rawHash);
+  check("joblander: two renders with a different hero counter hash the same", (await pageHash(jl1, "https://joblander.app/")) === (await pageHash(jl2, "https://joblander.app/")), pageDigest(jl2, "https://joblander.app/").split("\n").pop() ?? "");
+  check("joblander: the old hash moved on the counter too", (await pageHashes(jl1, "https://joblander.app/")).rawHash !== (await pageHashes(jl2, "https://joblander.app/")).rawHash);
+  check("joblander: the App Router build id is read off the escaped flight data", extractBuildId(jl1) === "KsTYig8L1zpL2GwSgPCrL", String(extractBuildId(jl1)));
+  check("joblander: a new build id (a deploy) is a different build id", extractBuildId(joblander("p18k4", "169,500", "insights delivered this month", "NEWBUILD0000000000000")) === "NEWBUILD0000000000000");
+  check("joblander: the counter's line survives as words", pageDigest(jl1).includes("insights delivered this month") && !/\d/.test(pageDigest(jl1).split("\n").pop() ?? "x"));
+  check("joblander: a copy edit on the same line still changes the hash", (await pageHash(jl1, "https://joblander.app/")) !== (await pageHash(joblander("169,500", "answers delivered this month"), "https://joblander.app/")));
+  check("joblander: a new bundle name (a deploy) still changes the hash", (await pageHash(jl1)) !== (await pageHash(jl1.replace("main-app-a8c44041507ebd1f", "main-app-0000000000000000"))));
+
+  // 5c — the homepage recheck: a second homepage fetch at least
+  // homepageRecheckDelayMs after the first, skipped when the deadline could
+  // not hold it. A stub whose skeleton moves on every request is volatile; a
+  // stub whose only movement is a counter is not — the digest absorbed it.
+  const stamps: Array<{ url: string; at: number }> = [];
+  let hits = 0;
+  const churny = (skeletonMoves: boolean): FetchLike => async (url) => {
+    stamps.push({ url, at: Date.now() });
+    const u = new URL(url);
+    if (u.pathname !== "/") return response("not found", { status: 404, url });
+    hits += 1;
+    const body = skeletonMoves
+      ? html(`<h1>Home</h1><a href="/promo-${hits}">now</a><p>${hits * 100} visitors</p>`)
+      : html(`<h1>Home</h1><a href="/promo">now</a><p>${hits * 100} visitors</p>`);
+    return response(body, { url });
+  };
+  const counted = await surveyApp(`${ORIGIN}/`, { fetch: churny(false), homepageRecheckDelayMs: 60 });
+  const homeHits = stamps.filter((s) => s.url === `${ORIGIN}/`);
+  check("recheck: the homepage was fetched twice", homeHits.length === 2, String(homeHits.length));
+  check("recheck: the second fetch came at least 60 ms after the first", homeHits.length === 2 && homeHits[1].at - homeHits[0].at >= 60, homeHits.length === 2 ? `${homeHits[1].at - homeHits[0].at} ms` : "");
+  check("recheck: a moving counter alone is not volatile", !counted.volatile && counted.digestVersion === DIGEST_VERSION);
+  check("recheck: the snapshot keeps what the crawl saw first (one homepage row)", counted.pages.filter((p) => p.path === "/").length === 1);
+  stamps.length = 0;
+  hits = 0;
+  const moving = await surveyApp(`${ORIGIN}/`, { fetch: churny(true), ...FAST });
+  check("recheck: a homepage whose link set moves between fetches is volatile", moving.volatile);
+  stamps.length = 0;
+  hits = 0;
+  const noRoom = await surveyApp(`${ORIGIN}/`, { fetch: churny(true), homepageRecheckDelayMs: 5_000, deadlineMs: 200, requestTimeoutMs: 50 });
+  check("recheck: skipped when the deadline cannot hold it (one homepage fetch, not volatile)", stamps.filter((s) => s.url === `${ORIGIN}/`).length === 1 && !noRoom.volatile);
+  check("survey result carries digestVersion and rawHash/skeletonHash per page", surveyed.digestVersion === DIGEST_VERSION && surveyed.pages.every((p) => /^[0-9a-f]{64}$/.test(p.rawHash ?? "") && /^[0-9a-f]{64}$/.test(p.skeletonHash ?? "")));
+
+  // 9c — compatibility: a previous snapshot hashed the old way is not
+  // comparable, the fuse decides for that one day, and the feed says so in
+  // terms of their pages.
+  const oldRow = record([page("/", "old-h")], { digestVersion: 1 });
+  check("not comparable: previous snapshot has digest v1", !isComparable(oldRow, cur([page("/", "new-h")])));
+  check("comparable: previous snapshot has the current digest version", isComparable(record([page("/", "h")]), cur([page("/", "h")])));
+  const v1Line = surveyEvent({ snapshot: record([page("/", "h"), page("/a", "h")]), previous: oldRow, comparable: false }).text;
+  check("feed: first snapshot with the new digest speaks of a baseline, not of digests", v1Line === "Surveyed 2 pages — a new baseline for this app; changes are reported from the next check", v1Line);
+  check("feed: … and leaks nothing", !/digest|hash|version|fetch|crawl/i.test(v1Line));
+  check("gate: v1 previous at 3 days → not forced (the fuse, not a diff)", !fullRunGate({ comparable: false, changed: null, lastWalkAgeDays: 3, maxAgeDays: 7 }).force);
+  check("gate: v1 previous at 8 days → the fuse fires", fullRunGate({ comparable: false, changed: null, lastWalkAgeDays: 8, maxAgeDays: 7 }).force);
+  const bare = parseStoredPages(JSON.stringify([page("/", "h")]));
+  check("stored pages: a bare array (pre-2026-09-05 row) parses as digest v1, not volatile", bare.digestVersion === 1 && !bare.volatile && bare.pages.length === 1);
+  const envelope = parseStoredPages(serializeStoredPages({ digestVersion: DIGEST_VERSION, volatile: true, pages: [page("/", "h")] }));
+  check("stored pages: the envelope round-trips", envelope.digestVersion === DIGEST_VERSION && envelope.volatile && envelope.pages[0].hash === "h");
+  check("stored pages: garbage parses as an empty v1", parseStoredPages("nope").pages.length === 0 && parseStoredPages("nope").digestVersion === 1);
+
+  // 9d — the volatile rule, as defined in snapshot.ts: on a volatile side, a
+  // changed page with the same status and the same skeletonHash on both sides
+  // is set aside; anything else stays a change.
+  const sk = (path: string, hash: string, skeletonHash: string | undefined, status: number | null = 200): SurveyPage => ({ ...page(path, hash, status), skeletonHash });
+  const vPrev = { volatile: false, pages: [sk("/", "h1", "s1"), sk("/a", "h2", "s2"), sk("/b", "h3", "s3"), sk("/c", "h4", "s4"), sk("/old", "h5", undefined)] };
+  const vCurr = { volatile: true, pages: [sk("/", "h1x", "s1"), sk("/a", "h2x", "s2-moved"), sk("/b", "h3x", "s3", 500), sk("/c", "h4", "s4"), sk("/old", "h5x", undefined)] };
+  const vDiff = diffSnapshots({ ...vPrev, bundles: [], buildId: null }, { ...vCurr, bundles: ["new.js"], buildId: null });
+  const ruled = applyVolatileRule(vPrev, vCurr, vDiff);
+  check("volatile: text-only change (same status, same skeleton) is set aside", JSON.stringify(ruled.ignored) === JSON.stringify(["/"]), JSON.stringify(ruled.ignored));
+  check("volatile: a skeleton change stays a change", ruled.diff.changedPaths.includes("/a"));
+  check("volatile: a status change stays a change", ruled.diff.changedPaths.includes("/b"));
+  check("volatile: a page without a skeletonHash on one side stays a change", ruled.diff.changedPaths.includes("/old"));
+  check("volatile: an unchanged page is neither", !ruled.diff.changedPaths.includes("/c") && !ruled.ignored.includes("/c"));
+  check("volatile: ignored paths are recorded on the diff, bundles untouched", JSON.stringify(ruled.diff.ignoredPaths) === JSON.stringify(["/"]) && ruled.diff.bundlesChanged);
+  const onlyText = applyVolatileRule(vPrev, { volatile: true, pages: [sk("/", "h1x", "s1")] }, diffSnapshots({ pages: vPrev.pages.slice(0, 1), bundles: [], buildId: null }, { pages: [sk("/", "h1x", "s1")], bundles: [], buildId: null }));
+  check("volatile: when only text moved, the snapshot is unchanged", !diffIsChange(onlyText.diff) && onlyText.diff.changedPaths.length === 0, JSON.stringify(onlyText.diff));
+  check("volatile: describeDiff does not list the set-aside pages", describeDiff(onlyText.diff) === "nothing changed since the last check", describeDiff(onlyText.diff));
+  const calm = applyVolatileRule({ ...vPrev, volatile: false }, { ...vCurr, volatile: false }, vDiff);
+  check("not volatile: the same diff is left exactly as it was", calm.ignored.length === 0 && calm.diff === vDiff);
+  const prevVolatile = applyVolatileRule({ ...vPrev, volatile: true }, { ...vCurr, volatile: false }, vDiff);
+  check("volatile on the previous side alone also applies the rule", JSON.stringify(prevVolatile.ignored) === JSON.stringify(["/"]));
+  check("volatile snapshots are still comparable", isComparable(record(vPrev.pages, { volatile: true }), { ...cur(vCurr.pages), digestVersion: DIGEST_VERSION }));
 
   console.log(failures === 0 ? "\nall pass" : `\n${failures} FAILED`);
   process.exit(failures === 0 ? 0 : 1);

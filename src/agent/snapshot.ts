@@ -22,6 +22,14 @@
 // null every day and the change-driven walk this file exists for never fired
 // for anyone but the five-page checkmyapp.dev.
 //
+// CHE-185 (2026-09-05): what a page hashes to changed from its HTML to a
+// structural digest (survey.ts), because run #149 walked joblander.app in full
+// over a counter in the hero. Two consequences live here: a previous snapshot
+// hashed the old way is not comparable — the fuse applies for one day, then
+// the next pair compares normally — and a survey whose homepage digest moved
+// between two fetches within the same crawl is `volatile`, and is compared
+// with text-only differences set aside (applyVolatileRule).
+//
 // fullRunGate is pure so the rule is checked by scripts/verify-survey.ts and
 // not by waiting a week in production.
 
@@ -52,9 +60,40 @@ export interface SnapshotRecord {
   sitemapUrls: number;
   blocked: boolean;
   truncated: boolean;
+  /** survey.ts DIGEST_VERSION the page hashes were computed with; 1 for rows written before 2026-09-05. */
+  digestVersion: number;
+  /** The homepage digest moved between two fetches within this survey (CHE-185). */
+  volatile: boolean;
   previousId: string | null;
   changed: boolean | null;
   diff: SnapshotDiff | null;
+}
+
+// The `pages` column, since CHE-185, is either the bare SurveyPage[] every row
+// before 2026-09-05 holds (digest version 1, not volatile) or this envelope.
+// An envelope rather than a column so no migration was needed and an old row
+// still parses; digestVersion lives with the hashes it describes.
+interface StoredPages {
+  digestVersion: number;
+  volatile: boolean;
+  pages: SurveyPage[];
+}
+
+export function parseStoredPages(raw: string): StoredPages {
+  const parsed = parseJson<SurveyPage[] | StoredPages>(raw);
+  if (Array.isArray(parsed)) return { digestVersion: 1, volatile: false, pages: parsed };
+  if (parsed && typeof parsed === "object" && Array.isArray(parsed.pages)) {
+    return {
+      digestVersion: typeof parsed.digestVersion === "number" ? parsed.digestVersion : 1,
+      volatile: parsed.volatile === true,
+      pages: parsed.pages,
+    };
+  }
+  return { digestVersion: 1, volatile: false, pages: [] };
+}
+
+export function serializeStoredPages(stored: StoredPages): string {
+  return JSON.stringify({ digestVersion: stored.digestVersion, volatile: stored.volatile, pages: stored.pages });
 }
 
 export interface SurveyOutcome {
@@ -72,16 +111,49 @@ export const COMPARABLE_OVERLAP = 0.8;
 
 /**
  * Whether this survey can be read against an earlier one at all: neither
- * blocked, and either both complete or (CHE-179) enough pages in common to
- * compare on.
+ * blocked, hashes of the same digest version (CHE-185), and either both
+ * complete or (CHE-179) enough pages in common to compare on.
  */
 export function isComparable(
   previous: SnapshotRecord | null,
-  current: { blocked: boolean; truncated: boolean; pages: Pick<SurveyPage, "path">[] },
+  current: { blocked: boolean; truncated: boolean; digestVersion: number; pages: Pick<SurveyPage, "path">[] },
 ): boolean {
   if (!previous || previous.blocked || current.blocked) return false;
+  if (previous.digestVersion !== current.digestVersion) return false;
   if (!previous.truncated && !current.truncated) return true;
   return pathOverlap(previous.pages, current.pages) >= COMPARABLE_OVERLAP;
+}
+
+/**
+ * The volatile rule (CHE-185). When either side's homepage moved between two
+ * fetches of the same crawl, a page in `changedPaths` is set aside — recorded
+ * in `ignoredPaths`, not counted as a change — exactly when all of these hold:
+ * its status is the same on both sides, both sides carry a skeletonHash, and
+ * the two skeletonHashes are equal (headings, link set, form fields and asset
+ * URLs unchanged — survey.ts pageSkeleton). A page whose skeleton moved, or
+ * whose status moved, or that only one side hashed the new way, stays a
+ * change. Added and removed paths, bundles and the build id are untouched: a
+ * volatile site that deployed still walks.
+ */
+export function applyVolatileRule(
+  previous: { volatile: boolean; pages: Pick<SurveyPage, "path" | "status" | "skeletonHash">[] },
+  current: { volatile: boolean; pages: Pick<SurveyPage, "path" | "status" | "skeletonHash">[] },
+  diff: SnapshotDiff,
+): { diff: SnapshotDiff; ignored: string[] } {
+  if (!previous.volatile && !current.volatile) return { diff, ignored: [] };
+  const before = new Map(previous.pages.map((p) => [p.path, p]));
+  const after = new Map(current.pages.map((p) => [p.path, p]));
+  const ignored: string[] = [];
+  const kept: string[] = [];
+  for (const path of diff.changedPaths) {
+    const a = before.get(path);
+    const b = after.get(path);
+    const textOnly =
+      !!a && !!b && a.status === b.status && !!a.skeletonHash && !!b.skeletonHash && a.skeletonHash === b.skeletonHash;
+    (textOnly ? ignored : kept).push(path);
+  }
+  if (ignored.length === 0) return { diff, ignored };
+  return { diff: { ...diff, changedPaths: kept, ignoredPaths: ignored }, ignored };
 }
 
 export const NO_SURVEY: SurveyOutcome = { snapshot: null, previous: null, comparable: false };
@@ -105,19 +177,22 @@ interface SnapshotRow {
 }
 
 function toRecord(row: SnapshotRow): SnapshotRecord {
+  const stored = parseStoredPages(row.pages);
   return {
     id: row.id,
     appSlug: row.appSlug,
     runId: row.runId,
     takenAt: row.takenAt.toISOString(),
     fingerprint: row.fingerprint,
-    pages: parseJson<SurveyPage[]>(row.pages) ?? [],
+    pages: stored.pages,
     bundles: parseJson<string[]>(row.bundles) ?? [],
     buildId: row.buildId,
     tech: parseJson<string[]>(row.tech) ?? [],
     sitemapUrls: row.sitemapUrls,
     blocked: row.blocked,
     truncated: row.truncated,
+    digestVersion: stored.digestVersion,
+    volatile: stored.volatile,
     previousId: row.previousId,
     changed: row.changed,
     diff: parseJson<SnapshotDiff>(row.diff),
@@ -154,8 +229,26 @@ export async function takeSnapshot(
   });
   const previous = previousRow ? toRecord(previousRow) : null;
 
+  if (previous && previous.digestVersion !== survey.digestVersion) {
+    console.warn(
+      `[survey] ${run.appSlug}: last snapshot hashed with digest v${previous.digestVersion}, this one v${survey.digestVersion} — not compared`,
+    );
+  }
+  if (survey.volatile) {
+    console.warn(`[survey] ${run.appSlug}: homepage digest moved between two fetches of this survey — volatile`);
+  }
+
   const comparable = isComparable(previous, survey);
-  const diff = comparable && previous ? diffSnapshots(previous, survey) : null;
+  let diff = comparable && previous ? diffSnapshots(previous, survey) : null;
+  if (diff && previous) {
+    const ruled = applyVolatileRule(previous, survey, diff);
+    if (ruled.ignored.length > 0) {
+      console.warn(
+        `[survey] ${run.appSlug}: volatile — set aside ${ruled.ignored.length} text-only change(s): ${ruled.ignored.join(", ")}`,
+      );
+    }
+    diff = ruled.diff;
+  }
   const changed = diff ? diffIsChange(diff) : null;
 
   const row = await env.db.appSnapshot.create({
@@ -164,7 +257,7 @@ export async function takeSnapshot(
       appId: run.appId,
       runId: run.id,
       fingerprint: survey.fingerprint,
-      pages: JSON.stringify(survey.pages),
+      pages: serializeStoredPages({ digestVersion: survey.digestVersion, volatile: survey.volatile, pages: survey.pages }),
       bundles: JSON.stringify(survey.bundles),
       buildId: survey.buildId,
       tech: JSON.stringify(survey.tech),
@@ -280,6 +373,12 @@ export function surveyEvent(outcome: SurveyOutcome): Omit<RunEvent, "at" | "phas
   const seen =
     `Surveyed ${n} page${n === 1 ? "" : "s"}` + (s.truncated ? ` (the first ${n} of a larger site)` : "");
   if (!outcome.previous) return { icon: "ok", text: `${seen} — first snapshot of this app` };
+  // The last snapshot hashed pages the old way (CHE-185): nothing to compare
+  // this once, and the pages are the baseline from here on. Said in terms of
+  // their pages, not of what changed on our side.
+  if (outcome.previous.digestVersion !== s.digestVersion) {
+    return { icon: "ok", text: `${seen} — a new baseline for this app; changes are reported from the next check` };
+  }
   if (s.changed === null) return { icon: "info", text: `${seen} — more pages than could be compared this run` };
   if (s.changed === false || !s.diff) {
     return { icon: "ok", text: `${seen} — nothing changed since the last check` };
