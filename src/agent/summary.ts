@@ -15,7 +15,7 @@
 // forced spec uses — so the verify script drives this exact function with a
 // scripted model.
 
-import { productProse, splitSentences } from "@/lib/verdict-language";
+import { productProse, splitSentences, stripNarration, summaryFallback } from "@/lib/verdict-language";
 import { finalizeJson, type AgentLoopResult } from "./core";
 import type { LlmConfig, UsageTotals } from "./llm";
 
@@ -92,23 +92,35 @@ export const SUMMARY_INSTRUCTION =
 // itself and the text is a finished statement; otherwise one more call for the
 // summary alone, whose cost lands in the walk's usage like the forced spec's.
 // Null when even that reply is a plan — and always product prose (CHE-82).
+//
+// CHE-197: the walker's envelope and first person are cut from the closing
+// text, so "Journey complete. No records were created; nothing to clean up.
+// Summary: The signup journey …" is written as "The signup journey …", and a
+// closing text that was only the envelope ("Journey complete. Nothing to
+// clean up.") is what it is: not a summary, so the walk asks once more, as it
+// does for a plan. A reply that is a finished statement with nothing left
+// once the walker's words are gone is not a plan — it gets the fixed
+// sentence for the journey's roll-up (`status`), never an empty summary.
 export async function summarizeWalk(
   llm: LlmConfig,
   result: Pick<AgentLoopResult, "finalText" | "messages" | "endedBy">,
   usage: UsageTotals,
+  status?: string,
 ): Promise<string | null> {
-  let text = cleanSummary(result.finalText) ?? "";
-  if (result.endedBy === "cap" || looksLikeIntent(text)) {
+  let raw = cleanSummary(result.finalText) ?? "";
+  let text = stripNarration(raw, "");
+  if (result.endedBy === "cap" || looksLikeIntent(raw) || !text) {
     console.log(
       `[walk] summary requested: loop ended by ${result.endedBy}` +
-        (result.endedBy === "model" ? `, last text reads as intent: ${JSON.stringify(text.slice(0, 80))}` : ""),
+        (result.endedBy === "model" ? `, last text reads as intent or envelope: ${JSON.stringify(raw.slice(0, 80))}` : ""),
     );
     const reply = await finalizeJson(llm, result.messages, SUMMARY_INSTRUCTION, usage);
-    text = cleanSummary(reply) ?? "";
-    if (looksLikeIntent(text)) {
-      console.warn(`[walk] summary reply is still a plan, writing none: ${JSON.stringify(text.slice(0, 80))}`);
+    raw = cleanSummary(reply) ?? "";
+    if (looksLikeIntent(raw)) {
+      console.warn(`[walk] summary reply is still a plan, writing none: ${JSON.stringify(raw.slice(0, 80))}`);
       return null;
     }
+    text = stripNarration(raw, "");
   }
-  return productProse(text);
+  return productProse(text) ?? summaryFallback(status);
 }

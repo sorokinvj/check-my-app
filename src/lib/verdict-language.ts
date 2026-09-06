@@ -15,6 +15,11 @@
 //
 // CHE-191 added the soft imperative ("worth confirming …") — the same
 // hand-off without any of the words the first gate keyed on.
+//
+// CHE-197 added the walker's own voice: the wrap-up envelope ("Journey
+// complete. Nothing to clean up. Summary: …") and the first person narrating
+// the walk ("During the walkthrough, I signed in …") — see the narration
+// section below.
 
 // Phrases that name our machinery.
 const ENVIRONMENT_TERMS = [
@@ -244,6 +249,257 @@ export function stripHomework(text: string, fallback = HOMEWORK_FALLBACK): strin
   return out.length > 0 ? out : fallback;
 }
 
+// ─── Walk narration (CHE-197) ────────────────────────────────────────────────
+//
+// Runs #153 (joblander.app) and #154 (meetbashar.com), 2026-09-06, stored as
+// Journey.summary: "Journey complete. No records were created; nothing to
+// clean up. Summary: The signup journey and sign-in path both work — …" and
+// "… During the walkthrough, I signed in with the test credentials, selected
+// the Aria coach on /practice, and started a live call session that greeted
+// me by name." Neither the phrase tables above nor MACHINERY_TERMS key on the
+// walker's own voice: the wrap-up envelope the model writes for itself
+// (journey complete, nothing to clean up, "Summary:") and the first person
+// singular narrating the walk. The customer reads a statement about the
+// product, not the walker's diary (CLAUDE.md rule 1).
+//
+// Two shapes, both cut deterministically, sentence by sentence:
+//   1. the envelope — lead-ins stripped from the front of a sentence until
+//      none is left ("Journey complete.", "Here's what I found:", "Summary:",
+//      "Perfect!", "During the walkthrough,"), and a sentence that is only
+//      bookkeeping dropped ("No records were created; nothing to clean up.",
+//      "This was a read-only run — …");
+//   2. the first person — I / me / my / myself as the walker: the clause it
+//      sits in goes, and everything after it; what stood before it stays
+//      (cutHomework's rule, the same CLAUSE_SEP). "We" is the house voice
+//      ("we could not confirm X this run") and stays; CHE-191 kept "we
+//      confirmed …" as evidence for the same reason.
+// The product's own "I" survives: quoted copy ('Tell me about yourself'), a
+// reported label (the placeholder reads Tell me about yourself), a
+// label-shaped phrase (Show me my app, Notify me, Prepare my stories, My
+// Stories), a question the page asks (How do I transfer to another
+// registrar?). Prod data, 2026-09-07: 559 stored summaries and 2,651 stored
+// steps were read against these rules before they were written down.
+
+// Stripped from the front of a sentence, repeatedly, until none applies.
+const LEAD_INS: RegExp[] = [
+  // "Journey complete.", "The journey is complete!", "Journey completed
+  // successfully —", "Journey walked.", 'Journey complete — "Read the About
+  // / pricing overview".' Only when the sentence ends or breaks right there:
+  // "Journey completed with partial verification." is a statement and stays.
+  /^(?:the\s+)?(?:full\s+|entire\s+|whole\s+)?journey\s+(?:is\s+|was\s+|has\s+been\s+)?(?:complete|completed|done|finished|over|walked)(?:\s+(?:successfully|cleanly|fully))?(?:\s*[—–-]+\s*["“][^"”]*["”])?(?=\s*(?:$|[.!:;,—–-]|✅|✓))/i,
+  // The summary marker: "Summary:", "Journey Summary:", "Here's the summary:",
+  // "Here's what I found:", "What I found:", "Summary of findings —", "Let me
+  // provide a summary of findings:", "Key findings:".
+  /^(?:here(?:['’]s|\s+is)\s+(?:the|my|a|an)\s+(?:brief\s+|quick\s+|short\s+|final\s+)?summary(?:\s+of\s+(?:what\s+i\s+found|(?:the\s+|my\s+)?findings|the\s+journey|the\s+walk))?|here(?:['’]s|\s+is)\s+what\s+i\s+found|what\s+i\s+found|(?:journey\s+|final\s+|walk\s+|overall\s+)?summary(?:\s+of\s+(?:(?:the\s+|my\s+)?findings|what\s+i\s+found|the\s+journey))?|in\s+summary|(?:key\s+)?findings|let\s+me\s+(?:provide|give|summari[sz]e|write|share|report)\b[^:]{0,40})\s*[:.—–-]/i,
+  // An interjection: "Perfect!", "Good —", "Interesting!". Not one that
+  // closes a quotation (the page's own "… before it's finished. Nice.").
+  /^(?:perfect|great|excellent|interesting|good|done|okay|ok|nice|alright)\s*[!.,:—–-](?!\s*["”'’)\]])/i,
+  // Narration as a lead-in: "During the walkthrough, …" — the rest is the
+  // statement, capitalised below.
+  /^(?:during|in|throughout|over|across)\s+(?:the|this|my|our)\s+(?:walk-?through|walk|session|run|test(?:ing)?|check|exploration|visit)\s*[,:—–-](?=\s|$)/i,
+];
+// What is left in front once a lead-in is gone: the punctuation that closed
+// it, a tick, a bullet.
+const LEAD_JUNK = /^[\s✅✓✔•*\-—–:!.]+/;
+
+// A sentence that is the walker's bookkeeping, wherever the phrase sits.
+const BOOKKEEPING =
+  /\b(?:nothing\s+(?:to\s+clean\s*up|needs?\s+clean(?:ing)?\s*up|to\s+(?:delete|remove|undo|revert|roll\s+back))|no\s+clean-?up\s+(?:is\s+|was\s+)?(?:needed|required|necessary)|clean-?up\s+(?:is\s+|was\s+)?(?:complete|done|finished|not\s+(?:needed|required)|unnecessary)|(?:were|was|been)\s+cleaned\s+up|read-only\s+run)\b/i;
+// "No records were created." on its own is bookkeeping; inside a longer
+// sentence ("the form submitted but no records were created in the list") it
+// may be the customer's defect, so only the bare sentence goes.
+const RECORDS_ONLY = /^(?:no\s+(?:new\s+)?(?:test\s+)?records?\s+(?:were|was)\s+(?:created|left(?:\s+behind)?)|nothing\s+was\s+created)\s*[.!]?$/i;
+
+function unwrapEnvelope(sentences: string[]): { sentences: string[]; changed: boolean } {
+  let changed = false;
+  const out: string[] = [];
+  for (const raw of sentences) {
+    // A tick or a bullet in front is looked past to find the lead-in, but a
+    // sentence with no lead-in is pushed exactly as it came.
+    const trimmed = raw.replace(LEAD_JUNK, "");
+    let s = trimmed;
+    for (let stripped = true; stripped; ) {
+      stripped = false;
+      for (const re of LEAD_INS) {
+        const next = s.replace(re, "").replace(LEAD_JUNK, "");
+        if (next !== s) {
+          s = next;
+          stripped = true;
+        }
+      }
+    }
+    if (s === trimmed) s = raw;
+    else {
+      changed = true;
+      s = s.charAt(0).toUpperCase() + s.slice(1);
+    }
+    if (!s || BOOKKEEPING.test(s) || RECORDS_ONLY.test(s)) {
+      changed = true;
+      continue;
+    }
+    out.push(s);
+  }
+  return { sentences: out, changed };
+}
+
+// The walker's pronoun. "I" only in upper case ("what should i ask you about
+// it" is the page's copy); a token joined by a hyphen or slash (my-stories)
+// is a path, not a person.
+const WALKER = /(?<![\w/-])(?:I(?:['’](?:m|ve|d|ll))?|[Mm]e|[Mm]y|[Mm]yself)(?![\w/-])/g;
+// The walk's tools, named in a customer sentence (run #154: "all playable via
+// oEmbed"). oEmbed is how verify_links resolves a YouTube link; the rest are
+// the loop's tool names. Cut at the clause like the pronoun — but the
+// commonest shape is a tag on a product statement ("every link returns HTTP
+// 200 via the YouTube oEmbed API", "(OK via oEmbed API)"), and the statement
+// is the owner's answer, so that tag is scrubbed first and the sentence kept.
+const TOOL_NAMES = /\b(?:oembed|verify_links|read_page|report_step|write_e2e_test|record_created|record_deleted|get_network_log)\b/i;
+const TOOL_TAGS = [
+  /\s*\([^()]*\boembed\b[^()]*\)/gi,
+  /\s*(?:via|through|using|with|by)\s+(?:the\s+)?(?:youtube(?:['’]s)?\s+)?oembed(?:\s+(?:api|verification|check|lookup|endpoint|response|call))?/gi,
+];
+function scrubTools(sentence: string): string {
+  if (!TOOL_NAMES.test(sentence)) return sentence;
+  return TOOL_TAGS.reduce((s, re) => s.replace(re, ""), sentence).replace(/\s{2,}/g, " ");
+}
+// A capitalised word right before the pronoun makes a label ("Show me",
+// "Notify me", "Prepare my stories", "Type I") — unless it is a sentence
+// opener or connector, or a past-tense verb ("Selected my coach").
+const NOT_A_LABEL_WORD =
+  /^(?:Let|Then|Now|Next|Also|Here|Finally|First|Second|Third|Lastly|So|But|And|Yet|Still|Later|Afterwards|Meanwhile|However|Instead|Otherwise|Therefore|Thus|Hence|Since|Because|Although|Though|While|When|After|Before|Once|If|Unless|Until|As|Per|For|With|Without|Despite|Given|Following|Overall|Additionally|Note|Notes|Result|Results|Observed|Attempted|Expected|Actual|Summary|Update|Status|Interesting|Perfect|Great|Good|Excellent|Done|OK|Okay|What|Which|Where|Why|How|Who|That|This|These|Those|There|It|In|On|At|To|From|By|Of|Or|Nor|Than|Everything|Something|Nothing|Anything|All|Both|Neither|Either|Each|Every|Any|Some|No|None|Not|Only|Just|Even|Again|Thankfully|Unfortunately|Sadly|Luckily|Please|Yes|Ah|Oh|Hmm|Well|Today|Yesterday)$/;
+const QUESTION_END = /\?["'”’)\]]*\s*$/;
+
+// Is this pronoun the product's, not the walker's?
+function isProductVoice(sentence: string, index: number, length: number, prevExemptEnd: number): boolean {
+  const before = sentence.slice(0, index);
+  const token = sentence.slice(index, index + length);
+  const after = sentence.slice(index + length);
+  // A quote that opens right before the pronoun ("a 'My favourite top 10'
+  // section") is an opening, not a closing — the letter appended keeps
+  // insideQuotes from reading it as the end of a word.
+  if (insideQuotes(`${before}x`)) return true;
+  const lead = lastClause(before);
+  const intro = lead.trim() ? lead : lastClause(before.replace(TAIL_BREAK, ""));
+  if (REPORTING_VERB.test(intro)) return true;
+  // "Show me my app": the second pronoun rides on the first.
+  if (prevExemptEnd >= 0 && /^\s+$/.test(sentence.slice(prevExemptEnd, index))) return true;
+  const word = before.match(/([A-Z][\w'’]*)\s+$/)?.[1];
+  if (word && !NOT_A_LABEL_WORD.test(word) && !/(?:ed|ing)$/.test(word)) return true;
+  // "My Stories", "my Account"; "I AM" (a title in capitals).
+  if (/^[Mm]y$/.test(token) && /^\s+[A-Z]/.test(after)) return true;
+  if (/^\s+[A-Z]{2,}\b/.test(after)) return true;
+  // A capital "My" that does not open the sentence is a page's name ("the My
+  // account page"); the walker's own "my" is lower case there.
+  if (/^M/.test(token) && before.trim().length > 0) return true;
+  // A list is the page's: "(Currently Reading, Music is life, I run
+  // sometimes)", "live insights → mirror mode → my stories → …". The walker's
+  // own aside "(which I did not click)" has no list in it.
+  if (/→/.test(lead + firstClause(after))) return true;
+  const open = before.lastIndexOf("(");
+  if (open >= 0 && before.indexOf(")", open) < 0) {
+    const close = sentence.indexOf(")", index);
+    const inside = sentence.slice(open + 1, close < 0 ? undefined : close);
+    if (/→|\s\/\s/.test(inside) || (inside.match(/,/g) ?? []).length >= 2) return true;
+  }
+  // A question is the page's: "How do I transfer to another registrar?"
+  return QUESTION_END.test(firstClause(after));
+}
+
+// Where the walker first speaks in a sentence — a pronoun that is not the
+// product's, or a tool of ours by name — or null.
+export function walkerIn(sentence: string): number | null {
+  let at: number | null = null;
+  let prevExemptEnd = -1;
+  for (const m of sentence.matchAll(WALKER)) {
+    if (isProductVoice(sentence, m.index, m[0].length, prevExemptEnd)) {
+      prevExemptEnd = m.index + m[0].length;
+      continue;
+    }
+    at = m.index;
+    break;
+  }
+  const tool = TOOL_NAMES.exec(sentence);
+  if (tool && (at === null || tool.index < at)) at = tool.index;
+  return at;
+}
+
+const CLAUSE_SPLIT = new RegExp(`(${CLAUSE_SEP_SOURCE})`, "i");
+// A head that opens with a subordinator was leading up to the walker's clause
+// ("Per the no-wandering rule on third-party sites, I stayed …") and cannot
+// stand on its own.
+const DANGLING_HEAD = /^(?:per|since|because|although|though|while|when|whenever|after|before|if|unless|until|as|despite|given|without|due\s+to|owing\s+to|so|once|whereas|even\s+though)\b/i;
+// A single clause that opens with a preposition was the setting for what
+// followed ("From the example.com home page, I located …") — with more than
+// one clause it is a statement ("On mobile, the header covers the CTA").
+const SETTING_HEAD = /^(?:from|on|at|in|into|with|via|through|inside|within|under|over|across|starting|using)\b/i;
+
+// The clause the walker speaks in goes, with everything after it; the clauses
+// before it stay, closed with a full stop — never a fragment (20 characters,
+// as cutHomework), never a head that still speaks or that only led up to it.
+function cutNarration(sentences: string[]): { sentences: string[]; changed: boolean } {
+  let changed = false;
+  const out: string[] = [];
+  for (const raw of sentences) {
+    const s = scrubTools(raw);
+    if (s !== raw) changed = true;
+    const at = walkerIn(s);
+    if (at === null) {
+      out.push(s);
+      continue;
+    }
+    changed = true;
+    const parts = s.slice(0, at).split(CLAUSE_SPLIT);
+    parts.pop(); // the clause the pronoun opens or sits in
+    parts.pop(); // the break before it (undefined when the pronoun is in the first clause)
+    // A bracket the cut left open, and the punctuation that led on, go too.
+    const head = parts.join("").replace(/\s*\([^)]*$/, "").replace(/[\s,;:—–-]+$/, "").trim();
+    if (head.length < 20 || DANGLING_HEAD.test(head) || walkerIn(head) !== null) continue;
+    if (SETTING_HEAD.test(head) && !CLAUSE_SEP.test(head)) continue;
+    out.push(/[.!?]$/.test(head) ? head : `${head}.`);
+  }
+  return { sentences: out, changed };
+}
+
+// The sentences of a text that carry the walker's voice — for the retro
+// sweep's report and the verify script; what productProse acts on.
+export function narrationIn(text: string | null | undefined): string[] {
+  if (!text) return [];
+  const found: string[] = [];
+  for (const raw of splitSentences(text)) {
+    const unwrapped = unwrapEnvelope([raw]);
+    if (unwrapped.changed || cutNarration(unwrapped.sentences).changed) found.push(raw);
+  }
+  return found;
+}
+
+export function hasNarration(text: string | null | undefined): boolean {
+  return narrationIn(text).length > 0;
+}
+
+// The envelope unwrapped and the walker cut, nothing else — the retro sweep
+// and summarizeWalk apply this on its own; productProse runs it with the
+// machinery and homework gates. Text without the walker's voice comes back
+// as written; text that was only the walker's voice becomes the fallback.
+export function stripNarration(text: string, fallback = HOMEWORK_FALLBACK): string {
+  const unwrapped = unwrapEnvelope(splitSentences(text));
+  const cut = cutNarration(unwrapped.sentences);
+  if (!unwrapped.changed && !cut.changed) return text;
+  const out = cut.sentences.join(" ").replace(/\s+/g, " ").trim();
+  return out.length > 0 ? out : fallback;
+}
+
+// What a journey summary becomes when the walker's words were all it had.
+// The step fallbacks below are for one step; a journey rolls its steps up,
+// so the sentence names the journey and follows the roll-up (execution.ts
+// journeyStatus): coverage when part or all of it went unverified, the
+// no-defect sentence when it was ok, the problem sentence otherwise.
+export const JOURNEY_OK_FALLBACK = "This journey behaved as a user would expect; nothing failed.";
+export const JOURNEY_PROBLEM_FALLBACK = "This journey did not behave as a user would expect.";
+export function summaryFallback(status?: string | null): string {
+  if (status === "ok") return JOURNEY_OK_FALLBACK;
+  if (!status || status === "skipped" || status === "partial") return HOMEWORK_FALLBACK;
+  return JOURNEY_PROBLEM_FALLBACK;
+}
+
 // A sentence that names our machinery (the CHE-82 tables). Homework is judged
 // separately, because it is cut at the clause rather than the sentence.
 function leaksMachinery(sentence: string): boolean {
@@ -289,11 +545,18 @@ export function splitSentences(text: string): string[] {
 // which the phrase gate did not catch and which the customer read on the
 // verdict page. One list, used by every producer of customer-facing prose
 // (judge, step text, journey summary, the live progress note).
+//
+// CHE-197 added the walk's own tools: oEmbed is how verify_links resolves a
+// YouTube link (run #154: "all playable via oEmbed"), and the tool names are
+// the loop's vocabulary, never the product's.
 export const MACHINERY_TERMS =
-  /\b(browsers?|headless|environments?|models?|harness(es)?|playwright|screenshots?|checkers?|first reader|tooling|automation|agents?|test environment|our test)\b/i;
+  /\b(browsers?|headless|environments?|models?|harness(es)?|playwright|screenshots?|checkers?|first reader|tooling|automation|agents?|test environment|our test|oembed|verify_links|read_page|report_step|write_e2e_test|record_created|record_deleted|get_network_log)\b/i;
 
-// Product-facing prose: the CHE-82 phrase gate and the words above, sentence
-// by sentence, then the homework cut (CHE-191) — so a step, a journey summary
+// Product-facing prose: the walker's envelope unwrapped and the walker's
+// first person cut at the clause (CHE-197, before the sentence gate so that
+// "The product is a chat app; I tested the flow via oEmbed" keeps its
+// product half), the CHE-82 phrase gate and the words above sentence by
+// sentence, then the homework cut (CHE-191) — so a step, a journey summary
 // or the judge's sentence ending in "worth checking …" loses that clause
 // here, whichever producer wrote it. Null when nothing survives, so the
 // caller falls back to a fixed product sentence rather than a mangled
@@ -306,12 +569,14 @@ export const MACHINERY_TERMS =
 // so its caller sets the floor to 0.
 export function productProse(text: string | null | undefined, floor = 20): string | null {
   if (!text) return null;
-  const sentences = splitSentences(text);
-  const kept = sentences.filter((s) => !leaksMachinery(s) && !MACHINERY_TERMS.test(s));
+  const unwrapped = unwrapEnvelope(splitSentences(text));
+  const voiced = cutNarration(unwrapped.sentences);
+  const kept = voiced.sentences.filter((s) => !leaksMachinery(s) && !MACHINERY_TERMS.test(s));
   const cut = cutHomework(kept);
   const out = cut.sentences.join(" ").replace(/\s+/g, " ").trim();
   if (!out) return null;
-  if (kept.length === sentences.length && !cut.changed) return out;
+  const untouched = !unwrapped.changed && !voiced.changed && kept.length === voiced.sentences.length && !cut.changed;
+  if (untouched) return out;
   return out.length >= floor ? out : null;
 }
 
