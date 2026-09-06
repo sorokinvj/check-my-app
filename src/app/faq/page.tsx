@@ -75,6 +75,19 @@ const FAQS: Faq[] = [
     ),
   },
   {
+    // CHE-137: the numbers are PLAN_LIMITS[plan].fullRechecksPerMonth in
+    // src/lib/plans.ts and on /pricing — change all three together.
+    q: "What is the difference between a re-check and a full re-check?",
+    a: (
+      <>
+        A re-check re-walks what changed since the last check and is what to press after a
+        deploy. It is not limited on paid plans. A full re-check walks every journey of your
+        app from scratch, as if for the first time, and is limited per plan: 5 a month on
+        Starter, 20 on Growth, 100 on Business.
+      </>
+    ),
+  },
+  {
     q: "How is the free tier limited?",
     a: (
       <>
