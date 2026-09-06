@@ -7,7 +7,8 @@
 import { launch } from "@cloudflare/playwright";
 import type { Browser, Page } from "@cloudflare/playwright";
 import { detectTech } from "@/lib/tech-signals";
-import { putScreenshot, type AgentEnv } from "./env";
+import { putScreenshot, type AgentBindings, type AgentEnv } from "./env";
+import { selfCheckHeaders } from "./self-hosts";
 
 export async function launchAgentBrowser(env: AgentEnv): Promise<Browser> {
   return launch(env.bindings.MYBROWSER);
@@ -32,6 +33,24 @@ export function agentContextOptions(browser: Browser): NonNullable<Parameters<Br
   };
 }
 
+// CHE-193: the options every run's context is built from. Identical to
+// agentContextOptions for a customer's app; when the run targets one of OUR
+// hosts (self-hosts.ts) the context also announces itself with the
+// x-checkmyapp-checker header, which the web app answers with 403 on every
+// creating/mutating API. This is the deterministic half of "a self-check never
+// creates a run for a stranger's app or marks a stranger's verdict" (run #146
+// did both). The header rides on every request the context makes, which is
+// why it is attached only when the TARGET is ours: a customer's product must
+// never see it.
+export function selfCheckContextOptions(
+  browser: Browser,
+  targetUrl: string,
+  bindings: Pick<AgentBindings, "SELF_CHECK_HOSTS">,
+): NonNullable<Parameters<Browser["newContext"]>[0]> {
+  const extraHTTPHeaders = selfCheckHeaders(targetUrl, bindings.SELF_CHECK_HOSTS);
+  return { ...agentContextOptions(browser), ...(extraHTTPHeaders ? { extraHTTPHeaders } : {}) };
+}
+
 export async function applyNameShim(page: Page): Promise<void> {
   await page.addInitScript("window.__name = (fn) => fn;");
 }
@@ -48,7 +67,7 @@ export async function surfaceScan(
   browser: Browser,
   targetUrl: string,
 ): Promise<SurfaceScanResult> {
-  const context = await browser.newContext(agentContextOptions(browser));
+  const context = await browser.newContext(selfCheckContextOptions(browser, targetUrl, env.bindings));
   const page = await context.newPage();
   await applyNameShim(page);
   try {

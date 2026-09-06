@@ -20,6 +20,7 @@ import {
   splitSentences,
   UNVERIFIABLE_FALLBACK,
 } from "@/lib/verdict-language";
+import { isSelfCheckRedirect, isSelfUrl, selfCheckRefusalIn } from "./self-hosts";
 
 export interface ToolEnv {
   page: Page;
@@ -75,6 +76,27 @@ export interface ToolEnv {
   // are knownUrlKey() strings. Optional so scripts still build a bare ToolEnv;
   // absent = the gate is off.
   knownUrls?: Set<string>;
+  // CHE-193: the SELF_CHECK_HOSTS binding — extra hosts that count as ours
+  // beside checkmyapp.dev (self-hosts.ts). Whether the target is ours is
+  // decided from targetOrigin against that list; this only carries the list.
+  selfCheckHosts?: string;
+}
+
+// CHE-193: is this run checking CheckMyApp itself?
+function isSelfTarget(env: Pick<ToolEnv, "targetOrigin" | "selfCheckHosts">): boolean {
+  return isSelfUrl(env.targetOrigin, env.selfCheckHosts);
+}
+
+// CHE-193: what the model is told when our own product refused the self-check
+// — by a 403 on a mutating request, or by a server action redirecting back
+// with ?self_check=read_only. Same text either way: the answer is the same.
+function selfCheckRefusedText(verb: string, evidence: string): string {
+  return (
+    `${verb}, and the product refused the action (${evidence}): it is not available to ` +
+    `this account. That is the correct answer, not a defect — do NOT report this control as ` +
+    `broken or confusing, and do not try it again by another route. Report the step ` +
+    `"skipped" with unverifiedReason "not_applicable" and move on.`
+  );
 }
 
 // CHE-171: one spelling per address — lower-cased origin, path without a
@@ -414,6 +436,8 @@ export async function executeTool(
         // by the time classifyUnverified looks, and that one leaves a step
         // with a reason alone.
         coerceUnpublished404(step, env);
+        // CHE-193: on our own hosts a refused create/mark is not a defect.
+        coerceSelfCheck403(step, env);
         classifyUnverified(step);
         // CHE-190 after both: a risky step is never judged (CHE-169) and never
         // classified above, so a link we could not reach had no gate at all.
@@ -480,6 +504,12 @@ async function navigate(env: ToolEnv, url: string): Promise<string> {
   // Where the navigation ended up is published by definition (a redirect target
   // is the product's own choice), unless the product said the address is gone.
   if (status !== 404 && status !== 410) rememberUrls(env, [env.page.url()]);
+  // CHE-193: a server action on our own product answered the self-check by
+  // redirecting back with ?self_check=read_only. Not a page to judge.
+  if (isSelfTarget(env) && isSelfCheckRedirect(env.page.url(), env.selfCheckHosts)) {
+    console.warn(`[navigate] self-check refused by the product: ${env.page.url()}`);
+    return selfCheckRefusedText(`Navigated to ${env.page.url()}`, "redirected back as read-only");
+  }
   // CHE-169: a page that answered with an error, or loaded a media/WebRTC
   // surface, is a place where the digest alone has misled the walk before.
   const looked = await lookIfJudgmentMoment(env, {
@@ -689,8 +719,33 @@ const SAFE_SUBMITS = /\b(search|filter|apply filter|log ?in|sign ?in|continue|ne
 const STATE_TOGGLE_VERBS =
   /\b(enable|disable|resume|reactivate|activate|deactivate|pause|unpause|cancel|upgrade|downgrade|subscribe|unsubscribe|renew|restore|archive|revoke|start watching|turn (on|off))\b/i;
 
+// CHE-193: controls on OUR OWN product that act on real users' data. The
+// self-check of 2026-09-05 (run #146) pressed "Re-check now" on a stranger's
+// public verdict page and created two real runs (#147, #148), then pressed
+// "Looks right ✓" and graded a stranger's verdict. None of these labels is a
+// create or a toggle in the CREATE_VERBS / STATE_TOGGLE_VERBS sense, so a new
+// list, applied only when the target is one of our hosts (self-hosts.ts) — on
+// a customer's app "Export" or "Check now" is theirs to have pressed. The web
+// half answers 403 to the same actions when the self-check header is present;
+// this gate keeps the walk from even asking. The list is the ticket's: the $1
+// check, a re-check, the verdict lens ("Looks right", "Something's off",
+// "That's fine", "Mark as fixed", "Dispute"), tickets and exports. "Enable
+// Daily Watch" is caught by STATE_TOGGLE_VERBS, in every mode.
+export const SELF_HOST_GUARDED_VERBS =
+  /\b(re-?check|check now|run check|run (this one|it|one) now|run now|looks right|something'?s off|that'?s fine|mark as|dispute|file ticket|create ticket|export)\b/i;
+
 async function click(env: ToolEnv, input: Record<string, unknown>): Promise<string> {
   const label = [input.name, input.selector].filter(Boolean).map(String).join(" ");
+  if (label && SELF_HOST_GUARDED_VERBS.test(label) && isSelfTarget(env)) {
+    console.warn(`[click] refused self-host guarded click: ${label}`);
+    return (
+      `Refused: "${label}" acts on real data of this product's users — a check that costs ` +
+      `money, a verdict that belongs to someone else, a ticket on someone's board. That is ` +
+      `never ours to press. Confirm the control is present and reachable, report the step ` +
+      `"skipped" with unverifiedReason "not_applicable", and say in the step that acting on ` +
+      `it would have changed another user's data.`
+    );
+  }
   // CHE-100: five attempts with a stale password locked a customer's account
   // and refused a real user. One rejection is the whole answer for the run.
   if (env.credentials?.rejected && label && SIGN_IN_LABEL.test(label)) {
@@ -834,6 +889,20 @@ async function click(env: ToolEnv, input: Record<string, unknown>): Promise<stri
       `unverifiedReason "missing_access", say plainly that the sign-in details we were given no ` +
       `longer work, and spend the rest of this run on what a signed-out visitor can reach.`
     );
+  }
+  // CHE-193: on our own hosts, a mutating request answered 403 — or a server
+  // action redirecting back with ?self_check=read_only — is the product
+  // refusing the self-check by contract (the header), not a defect. Read after
+  // the credential rejection so a sign-in 403 on our own Clerk keeps its CHE-100
+  // meaning. A customer's 403 never reaches here — the guard is self-host only.
+  if (isSelfTarget(env)) {
+    const selfRefusal =
+      selfCheckRefusalIn(fresh, env.selfCheckHosts) ??
+      (isSelfCheckRedirect(env.page.url(), env.selfCheckHosts) ? `redirected back as read-only: ${env.page.url()}` : null);
+    if (selfRefusal) {
+      console.warn(`[click] self-check refused by the product: ${selfRefusal}`);
+      return selfCheckRefusedText("Clicked", selfRefusal);
+    }
   }
 
   const observed = `${reaction.requests} network request${reaction.requests === 1 ? "" : "s"}, ${reaction.mutations} DOM mutation${reaction.mutations === 1 ? "" : "s"}${reaction.navigated ? ", navigated" : ""}`;
@@ -1203,6 +1272,43 @@ export function coerceUnreachable(step: ReportedStep, env: Pick<ToolEnv, "target
   step.unverifiedReason = "our_capability";
   const observed = (step.observed ?? "").trim();
   step.observed = `${observed}${observed && !/[.!?]$/.test(observed) ? "." : ""} Could not confirm ${listHosts(foreign)} this run.`.trim();
+}
+
+// CHE-193. The click result tells the model; this makes sure the step cannot
+// say otherwise. On one of our own hosts, a broken/confusing step whose
+// evidence is the read-only guard answering the self-check — a 403 on a
+// mutating request, or a server action redirecting back with
+// ?self_check=read_only — becomes skipped/not_applicable, the same pattern as
+// coerceUnpublished404. The refusal must be visible to the machine: a mutating
+// 403 to one of our hosts in the request log, a recorded action that landed on
+// the redirect, or the step text citing 403/forbidden/self_check=read_only.
+// Only self hosts: a customer's 403 stays whatever the model and the existing
+// rules say.
+const FORBIDDEN = /\b403\b|\bforbidden\b|self_check=read_only/i;
+
+export function coerceSelfCheck403(
+  step: ReportedStep,
+  env: Pick<ToolEnv, "targetOrigin" | "selfCheckHosts" | "networkLog" | "actionTrail">,
+): void {
+  if (!isSelfTarget(env)) return;
+  if (step.status !== "broken" && step.status !== "confusing") return;
+  const text = `${step.observed ?? ""} ${step.attempted ?? ""}`;
+  const cited = FORBIDDEN.test(text);
+  const logged =
+    selfCheckRefusalIn(env.networkLog ?? [], env.selfCheckHosts) !== null ||
+    (env.actionTrail ?? []).some((a) => isSelfCheckRedirect(a.outcome.urlAfter, env.selfCheckHosts));
+  if (!cited && !logged) return;
+  // A server error is the product's own word; a 403 next to it is not the story.
+  if (/\b5\d{2}\b/.test(step.observed ?? "")) return;
+  // The log is a rolling window: a refusal from an earlier click must not
+  // erase a step that stands on its own evidence (a crash, an exception, some
+  // other error response the step actually cites).
+  if (!cited && /\b4\d{2}\b|console error|exception|stack|crash/i.test(step.observed ?? "")) return;
+  console.warn(`[report_step] "${step.label}": ${step.status} on a self-check 403 → skipped`);
+  step.status = "skipped";
+  step.unverifiedReason = "not_applicable";
+  const observed = (step.observed ?? "").trim();
+  step.observed = `${observed}${observed && !/[.!?]$/.test(observed) ? "." : ""} This action is not available to the account used for this check.`.trim();
 }
 
 // Bulk outbound-link verification (CHE-81 follow-up). Run #92 inventoried 200+

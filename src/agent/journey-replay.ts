@@ -185,7 +185,8 @@ function withinBudget(work: Promise<string>, ms: number): Promise<string> {
 // contextOptions is passed in rather than imported from ./browser because that
 // module pulls @cloudflare/playwright's runtime (cloudflare:workers) at import,
 // and this file must load on plain Node for the verify script. The workflow
-// passes agentContextOptions(browser); nothing else is meant to call this.
+// passes selfCheckContextOptions(browser, run.targetUrl, bindings) (CHE-193:
+// the self-check header on our hosts only); nothing else is meant to call this.
 export async function replayJourney(
   env: AgentEnv,
   browser: Browser,
@@ -200,6 +201,10 @@ export async function replayJourney(
     const toolEnv: ToolEnv = {
       page,
       targetOrigin: originOf(run.targetUrl),
+      // CHE-193: lets the click gate know which extra hosts are ours. Optional
+      // chaining because verify-replay-actions.ts drives this loop with a bare
+      // env (db only); production always has bindings.
+      selfCheckHosts: env.bindings?.SELF_CHECK_HOSTS,
       testEmail: run.testEmail ?? undefined,
       testPassword: run.testPasswordEnc ? decryptSecret(run.testPasswordEnc) : undefined,
       networkLog: [],
