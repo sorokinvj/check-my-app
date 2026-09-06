@@ -485,9 +485,10 @@ async function main() {
   check("joblander: a new bundle name (a deploy) still changes the hash", (await pageHash(jl1)) !== (await pageHash(jl1.replace("main-app-a8c44041507ebd1f", "main-app-0000000000000000"))));
 
   // 5c — the homepage recheck: a second homepage fetch at least
-  // homepageRecheckDelayMs after the first, skipped when the deadline could
-  // not hold it. A stub whose skeleton moves on every request is volatile; a
-  // stub whose only movement is a counter is not — the digest absorbed it.
+  // homepageRecheckDelayMs after the survey started, skipped when the deadline
+  // could not hold it. A stub whose skeleton moves on every request is
+  // volatile; a stub whose only movement is a counter is not — the digest
+  // absorbed it.
   const stamps: Array<{ url: string; at: number }> = [];
   let hits = 0;
   const churny = (skeletonMoves: boolean): FetchLike => async (url) => {
@@ -500,10 +501,23 @@ async function main() {
       : html(`<h1>Home</h1><a href="/promo">now</a><p>${hits * 100} visitors</p>`);
     return response(body, { url });
   };
-  const counted = await surveyApp(`${ORIGIN}/`, { fetch: churny(false), homepageRecheckDelayMs: 60 });
+  // The pause is measured from just before the call — the survey's own anchor
+  // is its start time, a hair later — and with an allowance: Node compares
+  // millisecond-truncated clock readings, so a timer may fire up to 1 ms early
+  // against Date.now(), and a threshold equal to the delay failed CI at 59 ms
+  // (CHE-195). Without the pause the second fetch lands within a few
+  // milliseconds of the call, so the allowance cannot hide a missing pause.
+  const RECHECK_DELAY_MS = 60;
+  const TIMER_ALLOWANCE_MS = 10;
+  const calledAt = Date.now();
+  const counted = await surveyApp(`${ORIGIN}/`, { fetch: churny(false), homepageRecheckDelayMs: RECHECK_DELAY_MS });
   const homeHits = stamps.filter((s) => s.url === `${ORIGIN}/`);
   check("recheck: the homepage was fetched twice", homeHits.length === 2, String(homeHits.length));
-  check("recheck: the second fetch came at least 60 ms after the first", homeHits.length === 2 && homeHits[1].at - homeHits[0].at >= 60, homeHits.length === 2 ? `${homeHits[1].at - homeHits[0].at} ms` : "");
+  check(
+    `recheck: the second fetch waited out the ${RECHECK_DELAY_MS} ms pause (at least ${RECHECK_DELAY_MS - TIMER_ALLOWANCE_MS} ms after the call)`,
+    homeHits.length === 2 && homeHits[1].at - calledAt >= RECHECK_DELAY_MS - TIMER_ALLOWANCE_MS,
+    homeHits.length === 2 ? `${homeHits[1].at - calledAt} ms after the call` : "",
+  );
   check("recheck: a moving counter alone is not volatile", !counted.volatile && counted.digestVersion === DIGEST_VERSION);
   check("recheck: the snapshot keeps what the crawl saw first (one homepage row)", counted.pages.filter((p) => p.path === "/").length === 1);
   stamps.length = 0;
