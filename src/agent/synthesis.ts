@@ -14,7 +14,9 @@ import type { AppKnowledge } from "./knowledge";
 import {
   CUSTOMER_LANGUAGE_RULES,
   hasEnvironmentLeak,
+  hasHomework,
   stripEnvironmentLeak,
+  stripHomework,
 } from "@/lib/verdict-language";
 
 const APP_LENS_RULES = `You just observed a web app for a while. Produce two things.
@@ -249,32 +251,17 @@ export async function synthesizeVerdict(args: {
   {
     const before = parsed.findings.length;
     const cleanedFindings = parsed.findings
-      .map((f): SynthesizedFinding | null => {
-        const detail = f.detail ?? {};
-        // The title IS the claim: if it names our machinery, the whole finding
-        // is an artifact of how we check, not a fact about the product.
-        if (hasEnvironmentLeak(f.title)) return null;
-        const whatHappened = hasEnvironmentLeak(detail.whatHappened)
-          ? stripEnvironmentLeak(detail.whatHappened)
-          : (detail.whatHappened ?? null);
-        // Nothing left to say once our machinery is removed → nothing was
-        // actually observed about the product.
-        if (detail.whatHappened && !whatHappened) return null;
-        const whyItMatters = hasEnvironmentLeak(detail.whyItMatters)
-          ? stripEnvironmentLeak(detail.whyItMatters)
-          : (detail.whyItMatters ?? null);
-        return {
-          ...f,
-          detail: {
-            ...detail,
-            ...(whatHappened ? { whatHappened } : {}),
-            ...(whyItMatters ? { whyItMatters } : {}),
-          },
-        };
-      })
+      .map(cleanFindingLanguage)
       .filter((f): f is SynthesizedFinding => f !== null);
 
     let bottomLine = parsed.bottomLine;
+    // CHE-191: a trailing "Worth checking …" is one sentence to cut, not a
+    // reason to spend a model call rewriting the line. Cut first; what is
+    // left goes through the machinery check below as before.
+    if (hasHomework(bottomLine)) {
+      console.warn(`[synthesis] bottom line handed the customer homework — cutting the sentence: ${bottomLine}`);
+      bottomLine = stripHomework(bottomLine!, BOTTOM_LINE_FALLBACK);
+    }
     if (hasEnvironmentLeak(bottomLine)) {
       console.warn(`[synthesis] bottom line leaked our environment — rewriting: ${bottomLine}`);
       const rewritten = await rewriteBottomLine(llm, bottomLine!).catch(() => null);
@@ -285,8 +272,7 @@ export async function synthesizeVerdict(args: {
       bottomLine =
         rewritten && !hasEnvironmentLeak(rewritten.text)
           ? rewritten.text
-          : (stripEnvironmentLeak(bottomLine) ??
-            "We checked what we could reach this run; some paths went unverified.");
+          : (stripEnvironmentLeak(bottomLine) ?? BOTTOM_LINE_FALLBACK);
     }
 
     if (cleanedFindings.length !== before) {
@@ -315,6 +301,54 @@ export async function synthesizeVerdict(args: {
     verdict = "needs_attention";
   }
   return { ...parsed, verdict, costUsd, usage };
+}
+
+// The bottom line when nothing the model wrote about the product survived.
+export const BOTTOM_LINE_FALLBACK = "We checked what we could reach this run; some paths went unverified.";
+
+// One finding through the customer-language gate (CHE-82, CHE-191). Null means
+// the finding is not written. Exported so verify-homework-gate.ts runs the
+// exact function the workflow runs.
+//
+// The title IS the claim: if it names our machinery or hands the reader
+// homework, the whole finding is an artifact of how we check, not a fact about
+// the product. whatHappened is the evidence: once our machinery and the ask
+// are cut, nothing left means nothing was observed → not written. whyItMatters
+// is the consequence: a homework sentence is cut and the rest stays (run #147:
+// "VK and OK are among the most-used networks …" survives, "Worth confirming
+// both share flows …" does not); when the ask was ALL of it, the coverage
+// sentence stands in rather than an empty panel. whatWeTried is a list: an
+// entry that was an ask is removed, the others stay.
+export function cleanFindingLanguage(f: SynthesizedFinding): SynthesizedFinding | null {
+  const detail = f.detail ?? {};
+  if (hasEnvironmentLeak(f.title)) return null;
+  const whatHappened = hasEnvironmentLeak(detail.whatHappened)
+    ? stripEnvironmentLeak(detail.whatHappened)
+    : (detail.whatHappened ?? null);
+  if (detail.whatHappened && !whatHappened) return null;
+  let whyItMatters: string | null = detail.whyItMatters ?? null;
+  if (whyItMatters && hasHomework(whyItMatters)) whyItMatters = stripHomework(whyItMatters);
+  if (whyItMatters && hasEnvironmentLeak(whyItMatters)) whyItMatters = stripEnvironmentLeak(whyItMatters);
+  const whatWeTried = Array.isArray(detail.whatWeTried)
+    ? detail.whatWeTried
+        .filter((s): s is string => typeof s === "string")
+        .map((s) => (hasEnvironmentLeak(s) ? stripEnvironmentLeak(s) : s))
+        .filter((s): s is string => !!s)
+    : undefined;
+  const where =
+    typeof detail.where === "string" && hasEnvironmentLeak(detail.where)
+      ? (stripEnvironmentLeak(detail.where) ?? undefined)
+      : detail.where;
+  return {
+    ...f,
+    detail: {
+      ...detail,
+      ...(where !== undefined ? { where } : {}),
+      ...(whatWeTried !== undefined ? { whatWeTried } : {}),
+      ...(whatHappened ? { whatHappened } : {}),
+      ...(whyItMatters ? { whyItMatters } : {}),
+    },
+  };
 }
 
 const VERDICT_RANK: Verdict[] = ["all_good", "mostly_ok", "needs_attention", "broken"];
