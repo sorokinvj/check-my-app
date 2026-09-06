@@ -13,6 +13,8 @@ import { ExportSpecs } from "@/components/export-specs";
 import { TrackOnView, TrackedLink } from "@/components/track";
 import { canMutateOwned, getOptionalUser } from "@/lib/auth";
 import { viewerCapabilities } from "@/lib/viewer-capabilities";
+import { fullRechecksRemaining } from "@/lib/plans";
+import type { UserPlan } from "@/lib/enums";
 import type { AppLens, RunEvent } from "@/lib/types";
 import { OG_IMAGE } from "@/lib/site-metadata";
 
@@ -132,6 +134,19 @@ export default async function VerdictPage({
     viewerApp,
     canMutate: await canMutateOwned(prisma, run.ownerId),
   });
+  // CHE-137: the full re-check is metered per plan and UTC month, and the
+  // button says what is left before it is pressed. `caps.fullRecheck` holds
+  // only when the viewer is the run's owner (an owned run, canMutateOwned), so
+  // the viewer's plan is the plan the server gates on (src/lib/recheck.ts
+  // reads the owner's current plan).
+  const fullRecheckAllowance =
+    caps.fullRecheck && viewer
+      ? await fullRechecksRemaining(prisma, { id: viewer.id, plan: viewer.plan as UserPlan })
+      : null;
+  // The refusal of a full re-check comes back as ?recheck=<reason>, worded by
+  // fullRecheckGate in src/lib/plans.ts; both of its refusals start with
+  // "Full re-checks". The page records the denial once, on render.
+  const fullRecheckDenied = typeof recheck === "string" && /^Full re-checks\b/.test(recheck);
   // CHE-108: what a run cost us, which models produced it and which deploy it
   // ran against are OUR operating figures, and they belong to nobody outside
   // this business — not a stranger who opened a shared link, and not the
@@ -178,6 +193,9 @@ export default async function VerdictPage({
           isOwner: viewer !== null && viewer.id === run.ownerId,
         }}
       />
+      {fullRecheckDenied && (
+        <TrackOnView event="full_recheck_denied" props={{ appSlug: run.appSlug, remaining: 0 }} />
+      )}
       {run.status === "partial" && (
         <p className="mb-4 rounded-lg border border-status-confusing/40 bg-status-confusing/10 px-4 py-2.5 text-sm text-status-confusing">
           The agent got partway through and paused — this is a partial verdict.
@@ -244,8 +262,14 @@ export default async function VerdictPage({
             </div>
             {(caps.recheck || caps.fullRecheck || caps.enableWatch || caps.watchSettings) && (
               <div className="flex shrink-0 items-center gap-2.5">
-                {caps.recheck && <RecheckButton runId={run.publicId} />}
-                {caps.fullRecheck && <FullRecheckButton runId={run.publicId} />}
+                {caps.recheck && <RecheckButton runId={run.publicId} appSlug={run.appSlug} />}
+                {caps.fullRecheck && (
+                  <FullRecheckButton
+                    runId={run.publicId}
+                    appSlug={run.appSlug}
+                    allowance={fullRecheckAllowance}
+                  />
+                )}
                 {(caps.enableWatch || caps.watchSettings) && (
                   <EnableWatchButton
                     runId={run.publicId}
