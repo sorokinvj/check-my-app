@@ -3,9 +3,10 @@
 // target/credentials/owner, previous run as baseline for the verdict diff.
 
 import type { PrismaClient } from "@/generated/prisma/client";
+import type { UserPlan } from "@/lib/enums";
 import { nextRunNumber } from "@/lib/db";
 import { canMutateOwned } from "@/lib/auth";
-import { assertCanStartRun } from "@/lib/plans";
+import { assertCanStartRun, fullRecheckGate, fullRechecksUsed } from "@/lib/plans";
 import { effectiveSiteCap } from "@/lib/site-cap";
 import { triggerRun } from "@/lib/trigger";
 
@@ -14,19 +15,39 @@ export type RecheckResult =
   | { kind: "unauthorized" }
   | { kind: "quota"; reason: string }
   | { kind: "reused"; publicId: string }
-  | { kind: "ok"; publicId: string };
+  // `remaining` is set only for an owner's FULL re-check: how many full
+  // re-checks the plan still allows this month after this one (null =
+  // unlimited). A regular (ladder) re-check carries no allowance (CHE-137).
+  | { kind: "ok"; publicId: string; remaining?: number | null };
+
+// The pieces of createRecheckRun that reach outside the database (Clerk, the
+// Workflow binding, the worker env). Production callers pass none and get the
+// real ones; the verify script passes stubs, so the gate can be exercised
+// without a request context.
+export interface RecheckDeps {
+  canMutate: (db: PrismaClient, ownerId: string | null) => Promise<boolean>;
+  trigger: (runId: string) => Promise<void>;
+  siteCap: () => number;
+  now: () => Date;
+}
 
 // How long an anonymous visitor gets the existing verdict instead of a new run
 // (CHE-94). A verdict page URL is public by design, so an unguarded re-check
 // button is an open tap on our LLM spend: one shared link, one bot, unlimited
 // $0.30-$2.30 runs. Owners are unaffected — they may re-check whenever they
-// like, including the full walk.
+// like; the full walk is metered per plan (CHE-137).
 const ANON_REUSE_WINDOW_MS = 6 * 60 * 60 * 1000;
 
 export async function createRecheckRun(
   prisma: PrismaClient,
   publicId: string,
   opts: { full?: boolean; anonKeyHash?: string | null } = {},
+  deps: RecheckDeps = {
+    canMutate: canMutateOwned,
+    trigger: triggerRun,
+    siteCap: effectiveSiteCap,
+    now: () => new Date(),
+  },
 ): Promise<RecheckResult> {
   const prev = await prisma.run.findUnique({
     where: { publicId },
@@ -43,13 +64,16 @@ export async function createRecheckRun(
       watchId: true,
       appId: true,
       ownerId: true,
+      // CHE-137: the owner's CURRENT plan decides the full re-check allowance,
+      // so an upgrade takes effect on the next click with nothing to sync.
+      owner: { select: { plan: true } },
     },
   });
   if (!prev) return { kind: "not_found" };
 
   // A recheck spends money + may touch the owner's app — owned runs require the
   // owner; anonymous runs are authorized by the unguessable publicId (CHE-33).
-  if (!(await canMutateOwned(prisma, prev.ownerId))) return { kind: "unauthorized" };
+  if (!(await deps.canMutate(prisma, prev.ownerId))) return { kind: "unauthorized" };
 
   // CHE-94. Everything below is about the ANONYMOUS path: the caller proved
   // nothing except that they have the link.
@@ -67,7 +91,7 @@ export async function createRecheckRun(
       where: {
         appSlug: prev.appSlug,
         status: "completed",
-        completedAt: { gte: new Date(Date.now() - ANON_REUSE_WINDOW_MS) },
+        completedAt: { gte: new Date(deps.now().getTime() - ANON_REUSE_WINDOW_MS) },
       },
       orderBy: { completedAt: "desc" },
       select: { publicId: true },
@@ -79,9 +103,21 @@ export async function createRecheckRun(
     // did, which left the same tap open one step further down the funnel — a
     // shared link could produce a run every time the reuse window lapsed.
     const gate = await assertCanStartRun(prisma, null, opts.anonKeyHash ?? null, {
-      siteCap: effectiveSiteCap(),
+      siteCap: deps.siteCap(),
     });
     if (!gate.ok) return { kind: "quota", reason: gate.reason };
+  }
+
+  // CHE-137: the owner's full re-check is metered per plan and UTC month. The
+  // regular re-check (the ladder) is not gated here — it is the product's
+  // "re-check after a deploy", and it costs what the survey says changed.
+  let remaining: number | null | undefined;
+  if (opts.full && prev.ownerId) {
+    const plan = (prev.owner?.plan ?? "free") as UserPlan;
+    const used = await fullRechecksUsed(prisma, prev.ownerId, deps.now());
+    const gate = fullRecheckGate(plan, used, deps.now());
+    if (!gate.ok) return { kind: "quota", reason: gate.reason };
+    remaining = gate.remaining;
   }
 
   const run = await prisma.run.create({
@@ -100,6 +136,7 @@ export async function createRecheckRun(
       ownerId: prev.ownerId,
       baselineRunId: prev.id,
       // CHE-74: an explicit full re-check must not be eaten by smoke/partial.
+      // The same flag is what the monthly allowance counts (CHE-137).
       forceFull: opts.full ?? false,
       // Anonymous re-checks count against the same daily allowance as
       // anonymous submissions (CHE-97).
@@ -109,6 +146,8 @@ export async function createRecheckRun(
     select: { id: true, publicId: true },
   });
 
-  await triggerRun(run.id);
-  return { kind: "ok", publicId: run.publicId };
+  await deps.trigger(run.id);
+  return remaining === undefined
+    ? { kind: "ok", publicId: run.publicId }
+    : { kind: "ok", publicId: run.publicId, remaining };
 }

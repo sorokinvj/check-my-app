@@ -19,6 +19,17 @@ export interface PlanLimits {
   // still run — as smoke passes, which cost ~$0.01 and still catch an app
   // going down. Set against revenue: Starter is $29/mo/app ≈ $0.97/day.
   dailyBudgetUsd: number;
+  // CHE-137: how many FULL re-checks an owner may start per UTC calendar
+  // month; null = unlimited. The default re-check is the ladder (smoke /
+  // partial / full, decided by the survey — re-walk only what changed, map
+  // reused from Daily Watch) and is not limited here. A full re-check skips
+  // the ladder and walks everything, which on the current model tiers costs
+  // $0.16–0.24 a run (CHE-184: run #145 at $0.193), so it is metered per plan
+  // against what the plan pays: Starter $29/mo carries 5, Growth $99/mo 20,
+  // Business 100. Free carries none — the ladder re-check is the trial. The
+  // "30 runs a month" Starter promise was dropped with this (owner,
+  // 2026-09-06).
+  fullRechecksPerMonth: number | null;
 }
 
 export const PLAN_LIMITS: Record<UserPlan, PlanLimits> = {
@@ -33,6 +44,7 @@ export const PLAN_LIMITS: Record<UserPlan, PlanLimits> = {
     apiAccess: false,
     // A trial should be able to show its best work once a day.
     dailyBudgetUsd: 1.2,
+    fullRechecksPerMonth: 0,
   },
   starter: {
     maxWatches: 1,
@@ -40,6 +52,7 @@ export const PLAN_LIMITS: Record<UserPlan, PlanLimits> = {
     trackerIntegration: true,
     apiAccess: false,
     dailyBudgetUsd: 1.2,
+    fullRechecksPerMonth: 5,
   },
   growth: {
     maxWatches: 5,
@@ -49,6 +62,7 @@ export const PLAN_LIMITS: Record<UserPlan, PlanLimits> = {
     // $99/mo across 5 apps ≈ $0.66/day/app of revenue; one deep walk a day
     // plus smoke on the other ticks fits inside it.
     dailyBudgetUsd: 0.8,
+    fullRechecksPerMonth: 20,
   },
   business: {
     maxWatches: 50,
@@ -56,6 +70,7 @@ export const PLAN_LIMITS: Record<UserPlan, PlanLimits> = {
     trackerIntegration: true,
     apiAccess: true,
     dailyBudgetUsd: 4,
+    fullRechecksPerMonth: 100,
   },
   enterprise: {
     maxWatches: Number.MAX_SAFE_INTEGER,
@@ -63,6 +78,7 @@ export const PLAN_LIMITS: Record<UserPlan, PlanLimits> = {
     trackerIntegration: true,
     apiAccess: true,
     dailyBudgetUsd: 10,
+    fullRechecksPerMonth: null,
   },
 };
 
@@ -281,4 +297,104 @@ export async function assertCanStartRun(
     };
   }
   return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// Full re-checks per month (CHE-137).
+//
+// The allowance is a UTC calendar month, and the count is Run rows with
+// forceFull set for the same owner since the month began — no counter row to
+// keep in sync, no schema change, and the number the owner is shown is the
+// number the gate enforces. Every forceFull row counts, including one whose
+// run later failed: the allowance is what the owner asked to start.
+
+// Start of the current UTC month — the allowance resets there, and the copy
+// names that date.
+export function utcMonthStart(now: Date = new Date()): Date {
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+}
+
+// The first day of the following UTC month, as the copy says it: "October 1".
+// A fixed English table rather than Intl so the wording is the same on every
+// runtime (workerd, Node in a verify script).
+const MONTH_NAMES = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
+export function nextUtcMonthLabel(now: Date = new Date()): string {
+  const next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+  return `${MONTH_NAMES[next.getUTCMonth()]} 1`;
+}
+
+// How many full re-checks this owner has started this UTC month.
+export async function fullRechecksUsed(
+  db: PrismaClient,
+  ownerId: string,
+  now: Date = new Date(),
+): Promise<number> {
+  return db.run.count({
+    where: { ownerId, forceFull: true, createdAt: { gte: utcMonthStart(now) } },
+  });
+}
+
+export type FullRecheckGate =
+  // `remaining` is what is left AFTER the re-check being gated; null = the
+  // plan has no limit.
+  | { ok: true; remaining: number | null }
+  | { ok: false; reason: string };
+
+// Pure decision: may an owner on `plan`, having started `used` full re-checks
+// this month, start one more? Split from the count so the rule and its wording
+// can be asserted without a database (scripts/verify-recheck-limits.ts).
+//
+// The wording names the plan's own number and the reset date, and always says
+// that the regular re-check is still there — the limit is on the expensive
+// mode, never on re-checking.
+export function fullRecheckGate(plan: UserPlan, used: number, now: Date = new Date()): FullRecheckGate {
+  const limit = PLAN_LIMITS[plan].fullRechecksPerMonth;
+  if (limit === null) return { ok: true, remaining: null };
+  if (limit === 0) {
+    return {
+      ok: false,
+      reason:
+        `Full re-checks aren't included on the ${planLabel(plan)} plan. ` +
+        `Upgrade to Starter for ${PLAN_LIMITS.starter.fullRechecksPerMonth} a month. ` +
+        REGULAR_RECHECK_STILL_AVAILABLE,
+    };
+  }
+  if (used >= limit) {
+    return {
+      ok: false,
+      reason:
+        `Full re-checks on your plan: ${limit} a month, all used until ${nextUtcMonthLabel(now)}. ` +
+        REGULAR_RECHECK_STILL_AVAILABLE,
+    };
+  }
+  return { ok: true, remaining: limit - used - 1 };
+}
+
+const REGULAR_RECHECK_STILL_AVAILABLE =
+  "A regular re-check is still available and re-walks what changed.";
+
+function planLabel(plan: UserPlan): string {
+  return plan.charAt(0).toUpperCase() + plan.slice(1);
+}
+
+// What the dashboard shows: the month's allowance, how much of it is used, and
+// what is left right now (nothing pending — unlike the gate's `remaining`,
+// which is after the re-check it is deciding). `limit` and `remaining` null =
+// unlimited.
+export async function fullRechecksRemaining(
+  db: PrismaClient,
+  owner: { id: string; plan: UserPlan },
+  now: Date = new Date(),
+): Promise<{ used: number; limit: number | null; remaining: number | null; resetsOn: string }> {
+  const limit = PLAN_LIMITS[owner.plan].fullRechecksPerMonth;
+  const used = await fullRechecksUsed(db, owner.id, now);
+  return {
+    used,
+    limit,
+    remaining: limit === null ? null : Math.max(0, limit - used),
+    resetsOn: nextUtcMonthLabel(now),
+  };
 }
