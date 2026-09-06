@@ -312,14 +312,12 @@ export async function walkOneJourney(args: {
       // stopped on its own and the text is a finished statement; a walk the
       // cap cut mid-action (run #144: "Let me try the Reset to Defaults
       // button") is asked once more for the summary alone.
-      const summary = await summarizeWalk(llm, result, usage);
+      const status = journeyStatus(stepStatuses);
+      const summary = await summarizeWalk(llm, result, usage, status);
 
       await env.db.journey.update({
         where: { id: journey.id },
-        data: {
-          status: journeyStatus(stepStatuses),
-          summary,
-        },
+        data: { status, summary },
       });
     } catch (err) {
       // Per-journey isolation: one failure must not abort the rest of the run.
