@@ -19,10 +19,27 @@
 //   e. the feed line the owner reads says what answered and what did not,
 //      about their pages only.
 //
+// CHE-187, 2026-09-06 — the console class of the same regression. Run #153
+// on joblander.app went full on "75 console errors while loading the pages":
+// a limit of five, written for a six-page pass (CHE-51), applied as a total
+// across the thirty pages CHE-132 now hands over. The rule now:
+//   f. thirty-one pages at three errors each → ok, the total recorded and
+//      not trouble; one page at six → trouble naming that page; the counter
+//      resets between pages (four on one page, four on the next → ok);
+//   g. errors our own environment causes (a blocked tracker, an aborted
+//      request, a third party's 4xx, a report-only CSP violation) are recorded
+//      on the probe and never counted — six of them → ok; the same 4xx on
+//      the product's own origin still counts; an uncaught exception is still
+//      trouble on its own;
+//   h. the trouble line names the page and its count; the ok line has no
+//      console sentence at all.
+//
 // Usage: npx tsx --tsconfig tsconfig.json scripts/verify-smoke-gate.ts
 
 import {
+  CONSOLE_ERROR_LIMIT,
   CORE_SMOKE_PAGES,
+  IGNORED_CONSOLE_ERRORS,
   MAX_SMOKE_PAGES,
   PAGE_TIMEOUT_MS,
   RETRY_TIMEOUT_MS,
@@ -46,6 +63,18 @@ const u = (path: string) => `${ORIGIN}${path}`;
 // "slow" to time out on the first attempt and answer 200 on the next.
 type Behaviour = number | "timeout" | "slow";
 
+/** A console error the stub page logs while a navigation is in flight. */
+interface ConsoleError {
+  text: string;
+  /** The resource the message is about, as Playwright's msg.location().url. */
+  url?: string;
+}
+
+/** What a Playwright ConsoleMessage looks like to the listener in smoke.ts. */
+function consoleError(text: string, url = ""): unknown {
+  return { type: () => "error", text: () => text, location: () => ({ url, lineNumber: 0, columnNumber: 0 }) };
+}
+
 interface Stub {
   page: ProbePage;
   /** Every navigation as "<path> @<timeout>" in order. */
@@ -53,16 +82,24 @@ interface Stub {
   fire: (event: "console" | "pageerror", payload: unknown) => void;
 }
 
-function stubPage(behaviour: Record<string, Behaviour>): Stub {
+function stubPage(
+  behaviour: Record<string, Behaviour>,
+  /** Console errors each path logs during its navigation (CHE-187). */
+  logs: (path: string) => ConsoleError[] = () => [],
+): Stub {
   const calls: string[] = [];
   const attempts = new Map<string, number>();
   const handlers = new Map<string, Array<(payload: unknown) => void>>();
+  const fire = (event: string, payload: unknown) => {
+    for (const h of handlers.get(event) ?? []) h(payload);
+  };
   const page = {
     goto: async (url: string, opts?: { timeout?: number }) => {
       const path = new URL(url).pathname;
       calls.push(`${path} @${opts?.timeout ?? 0}`);
       const n = (attempts.get(path) ?? 0) + 1;
       attempts.set(path, n);
+      for (const e of logs(path)) fire("console", consoleError(e.text, e.url));
       const b = behaviour[path] ?? 200;
       if (b === "timeout" || (b === "slow" && n === 1)) {
         throw new Error(`page.goto: Timeout ${opts?.timeout ?? 0}ms exceeded.`);
@@ -76,13 +113,7 @@ function stubPage(behaviour: Record<string, Behaviour>): Stub {
     waitForTimeout: async () => {},
     screenshot: async () => Buffer.from(""),
   } as unknown as ProbePage;
-  return {
-    page,
-    calls,
-    fire: (event, payload) => {
-      for (const h of handlers.get(event) ?? []) h(payload);
-    },
-  };
+  return { page, calls, fire };
 }
 
 async function main() {
@@ -154,9 +185,9 @@ async function main() {
     check("d: an uncaught JS error is trouble", out.failures.some((f) => f.startsWith("uncaught JS error on load")), out.failures.join("; "));
     const stubBurst = stubPage({});
     const pendingBurst = probeTargets(stubBurst.page, u("/"), { core, extra });
-    for (let i = 0; i < 5; i++) stubBurst.fire("console", { type: () => "error" });
+    for (let i = 0; i < 5; i++) stubBurst.fire("console", consoleError(`TypeError: cannot read properties of undefined (${i})`, u("/app.js")));
     const burst = await pendingBurst;
-    check("d: five console errors are trouble", burst.failures.some((f) => f === "5 console errors while loading the pages"), burst.failures.join("; "));
+    check("d: five console errors on one page are trouble, naming the page", burst.failures.some((f) => f === "/ logged 5 console errors"), burst.failures.join("; "));
     const order = stubPage({});
     await probeTargets(order.page, u("/"), { core, extra });
     check("d: homepage, then core, then extra", JSON.stringify(order.calls.map((c) => c.split(" @")[0])) === JSON.stringify(["/", "/sign-in", "/pricing", "/tutorials/103-safe-practice-mock-interviews", "/learn/does-bashar-contradict-himself", "/docs"]), order.calls.join(" | "));
@@ -191,6 +222,86 @@ async function main() {
     const trouble = smokeOutcomeLine({ ok: false, healthy: 4, unreached: [u("/sign-in")], failures: ["/sign-in did not answer in time"], baselineRunNumber: 134 }, u("/"));
     check("e: trouble names the page and the fact", trouble === "Smoke found trouble: /sign-in did not answer in time — running the full check", trouble);
     check("e: no machinery leaks into either line", !hasEnvironmentLeak(line) && !hasEnvironmentLeak(trouble) && !/page\.goto|playwright|headless|browser/i.test(line + trouble));
+  }
+
+  // f — the console limit is per page (CHE-187). Run #153's shape: thirty-one
+  // pages, a few errors on each, none of them a burst.
+  {
+    const known = Array.from({ length: CORE_SMOKE_PAGES }, (_, i) => u(`/k${i}`));
+    const surveyed = Array.from({ length: MAX_SMOKE_PAGES }, (_, i) => u(`/s${i}`));
+    const sets = splitSmokeTargets(known, surveyed);
+    const chatty = (path: string) => [
+      { text: "Failed to load resource: the server responded with a status of 404 ()", url: u(`${path}/hero.webp`) },
+      { text: "Uncaught (in promise) TypeError: Cannot read properties of null", url: u("/app.js") },
+      { text: "Warning: a widget failed to hydrate", url: u("/app.js") },
+    ];
+    const stub = stubPage({}, chatty);
+    const out = await probeTargets(stub.page, u("/"), sets);
+    check("f: 31 pages × 3 errors → smoke ok", out.failures.length === 0 && out.probes.length === 31, `failures=${out.failures.join("; ")} probes=${out.probes.length}`);
+    check("f: … the total is recorded as a fact (93), not a rule", out.consoleErrors === 93, String(out.consoleErrors));
+    check("f: … and each probe carries its own count", out.probes.every((p) => p.consoleErrors === 3 && p.ignoredConsoleErrors === 0), JSON.stringify(out.probes.slice(0, 2)));
+    check("f: … with the first counted message kept for diagnosis", out.probes[0].consoleSample === chatty("/")[0].text, out.probes[0].consoleSample);
+    const one = stubPage({}, (path) => (path === "/s3" ? Array.from({ length: 6 }, (_, i) => ({ text: `ReferenceError: x${i} is not defined`, url: u("/app.js") })) : []));
+    const burst = await probeTargets(one.page, u("/"), sets);
+    check("f: one page with 6 → trouble naming that page", JSON.stringify(burst.failures) === JSON.stringify(["/s3 logged 6 console errors"]), burst.failures.join("; "));
+    check("f: … the burst page's probe says 6; the total says 6", burst.probes.find((p) => p.url === u("/s3"))?.consoleErrors === 6 && burst.consoleErrors === 6, String(burst.consoleErrors));
+    const four = (path: string) => (path === "/sign-in" || path === "/pricing" ? Array.from({ length: 4 }, (_, i) => ({ text: `TypeError: t${i}`, url: u("/app.js") })) : []);
+    const split = stubPage({}, four);
+    const reset = await probeTargets(split.page, u("/"), { core, extra });
+    check("f: the counter resets between pages (4 on A, 4 on B → ok, total 8)", reset.failures.length === 0 && reset.consoleErrors === 8, `failures=${reset.failures.join("; ")} total=${reset.consoleErrors}`);
+    check("f: the limit that decides is the exported one", CONSOLE_ERROR_LIMIT === 5, String(CONSOLE_ERROR_LIMIT));
+    // The homepage's errors arrive after domcontentloaded, during the settle;
+    // they belong to the homepage, not to the first core page.
+    const late = stubPage({});
+    (late.page as unknown as { waitForTimeout: () => Promise<void> }).waitForTimeout = async () => {
+      for (let i = 0; i < 5; i++) late.fire("console", consoleError(`TypeError: late ${i}`, u("/app.js")));
+    };
+    const settled = await probeTargets(late.page, u("/"), { core, extra });
+    check("f: errors logged while the homepage settles count for the homepage", JSON.stringify(settled.failures) === JSON.stringify(["/ logged 5 console errors"]) && settled.probes[0].consoleErrors === 5 && settled.probes[1].consoleErrors === 0, settled.failures.join("; "));
+  }
+
+  // g — noise our own environment causes is recorded, never counted.
+  {
+    const blocked = stubPage({}, (path) => (path === "/pricing" ? Array.from({ length: 6 }, () => ({ text: "Failed to load resource: net::ERR_BLOCKED_BY_CLIENT", url: "https://www.googletagmanager.com/gtm.js" })) : []));
+    const out = await probeTargets(blocked.page, u("/"), { core, extra });
+    check("g: 6 errors that are all ERR_BLOCKED_BY_CLIENT → ok", out.failures.length === 0 && out.consoleErrors === 0, `failures=${out.failures.join("; ")} total=${out.consoleErrors}`);
+    check("g: … recorded on the probe for diagnosis", out.probes.find((p) => p.url === u("/pricing"))?.ignoredConsoleErrors === 6, JSON.stringify(out.probes.find((p) => p.url === u("/pricing"))));
+    const noise: ConsoleError[] = [
+      { text: "Failed to load resource: net::ERR_ABORTED 200", url: u("/api/session") },
+      { text: "Failed to load resource: the server responded with a status of 404 ()", url: u("/favicon.ico") },
+      { text: "Failed to load resource: the server responded with a status of 403 ()", url: "https://www.google-analytics.com/collect" },
+      { text: "Failed to load resource: net::ERR_CONNECTION_REFUSED", url: "https://o123.ingest.us.sentry.io/api/1/envelope/" },
+      { text: "POST https://api.segment.io/v1/t 400", url: "https://cdn.segment.com/analytics.js" },
+      { text: "Failed to load resource: the server responded with a status of 401 ()", url: "https://api-iam.intercom.io/messenger/web/ping" },
+      { text: "[Report Only] Refused to load the script 'https://cdn.example.com/x.js' because it violates the following Content Security Policy directive", url: u("/") },
+      { text: "Failed to load resource: the server responded with a status of 403 ()", url: "https://fonts.example-cdn.com/inter.woff2" },
+      { text: "Failed to load resource: the server responded with a status of 429 ()", url: "https://connect.facebook.net/en_US/fbevents.js" },
+    ];
+    const all = stubPage({}, (path) => (path === "/docs" ? noise : []));
+    const ignored = await probeTargets(all.page, u("/"), { core, extra });
+    const docs = ignored.probes.find((p) => p.url === u("/docs"));
+    check("g: every listed kind of noise is ignored", ignored.failures.length === 0 && docs?.consoleErrors === 0 && docs.ignoredConsoleErrors === noise.length, JSON.stringify(docs));
+    check("g: every rule carries its why", IGNORED_CONSOLE_ERRORS.every((r) => r.why.length > 0), String(IGNORED_CONSOLE_ERRORS.length));
+    const own = stubPage({}, (path) => (path === "/docs" ? Array.from({ length: 5 }, (_, i) => ({ text: "Failed to load resource: the server responded with a status of 404 ()", url: u(`/assets/${i}.js`) })) : []));
+    const missing = await probeTargets(own.page, u("/"), { core, extra });
+    check("g: the same 4xx on the product's own origin counts (5 missing assets → trouble)", JSON.stringify(missing.failures) === JSON.stringify(["/docs logged 5 console errors"]), missing.failures.join("; "));
+    const fb = stubPage({}, (path) => (path === "/docs" ? Array.from({ length: 5 }, () => ({ text: "Facebook login failed: invalid app id", url: u("/app.js") })) : []));
+    const product = await probeTargets(fb.page, u("/"), { core, extra });
+    check("g: a product's own message that names a tracker still counts", product.failures.length === 1, product.failures.join("; "));
+    const stub = stubPage({}, (path) => (path === "/pricing" ? [{ text: "Failed to load resource: net::ERR_BLOCKED_BY_CLIENT", url: "https://www.googletagmanager.com/gtm.js" }] : []));
+    const pending = probeTargets(stub.page, u("/"), { core, extra });
+    stub.fire("pageerror", new Error("TypeError: x is undefined"));
+    const uncaught = await pending;
+    check("g: an uncaught exception is still trouble on its own", JSON.stringify(uncaught.failures) === JSON.stringify(['uncaught JS error on load — "TypeError: x is undefined"']), uncaught.failures.join("; "));
+  }
+
+  // h — the feed line: the count appears only when it decided something.
+  {
+    const trouble = smokeOutcomeLine({ ok: false, healthy: 31, unreached: [], failures: ["/tutorials/103-safe-practice-mock-interviews logged 6 console errors"], baselineRunNumber: 152 }, u("/"));
+    check("h: trouble names the page and its count", trouble === "Smoke found trouble: /tutorials/103-safe-practice-mock-interviews logged 6 console errors — running the full check", trouble);
+    const ok = smokeOutcomeLine({ ok: true, healthy: 31, unreached: [], failures: [], baselineRunNumber: 152 }, u("/"));
+    check("h: the ok line has no console sentence (93 errors recorded, none spoken)", !/console/i.test(ok), ok);
+    check("h: no machinery leaks", !hasEnvironmentLeak(trouble) && !hasEnvironmentLeak(ok));
   }
 
   console.log(failures === 0 ? "\nall pass" : `\n${failures} FAILED`);

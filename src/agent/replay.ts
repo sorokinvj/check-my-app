@@ -115,6 +115,7 @@ export interface SmokeReport {
   /** Known pages left unvisited because the probe budget ran out (CHE-132). */
   skipped: number;
   failures: string[];
+  /** Counted console errors across every page — a fact; the rule is per page (CHE-187). */
   consoleErrors: number;
   pageErrors: number;
   screenshotUrl: string | null;
