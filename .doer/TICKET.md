@@ -1,17 +1,16 @@
-# Verdict page: the actions on a finding cannot be used
+# A mark on a finding records neither who set it nor when
 
-GitHub issue: sorokinvj/check-my-app#3
+GitHub issue: sorokinvj/check-my-app#10
 
-On a verdict page showing a finding, the three actions offered on it — **Mark as fixed**, **Dispute** and **Create ticket** — cannot be used. They are present in the page but never reachable: every attempt to click one fails because the control is not visible.
+When someone marks a finding — *watch*, *that's fine*, *fixed*, *dispute* — the mark is stored and nothing else. Not who set it, not when.
 
-**Where:** `/verdict/<runId>`, the "What we found" card, on a run with at least one finding.
-**Seen on:** run #100, 27 August — https://checkmyapp.dev/verdict/cmtbmwuxp0003x00nistyw2q0
+That gap produced a wrong statement to a customer: a daily email opened with *"On your flagged analytics concern"* about something the owner had never touched, because a six-week-old mark existed and we assumed it was his. We could not tell whether he set it or one of our own automated sessions did while walking a verdict page. Both have happened before.
 
-**Why it matters.** Those three actions are the only way an owner tells us we were wrong, or that they fixed something. With them unreachable, the entire accuracy loop is one-directional: we report, and they have no way to answer. The number on `/dashboard/accuracy` is built from exactly these answers.
+**Why it matters.** Anything we say about what the customer asked for has to be something we can show. Without an author and a date on a mark, the product is guessing about its own user and telling them what they wanted.
 
-**How to know it is gone.** On a verdict with a finding, each of the three controls can be clicked and does what it says. Nothing about the fix needs to be visible to anyone; only that.
+**How to know it is gone.** For any mark, it can be said who set it and when — and text shown to a customer only attributes a mark when that record says it was theirs.
 
-Source ticket: CHE-88 · https://linear.app/joblander/issue/CHE-88
+Source ticket: CHE-109 · https://linear.app/joblander/issue/CHE-109
 
 ---
-*Filed for the doer. The symptom, the evidence, and how to know it is gone — diagnosis and approach are the implementer's (CLAUDE.md §9).*
+*Filed for the doer (CLAUDE.md §9).*
