@@ -15,7 +15,7 @@ import {
   type RecordedAction,
   type ToolEnv,
 } from "./tools";
-import { agentContextOptions } from "./browser";
+import { selfCheckContextOptions } from "./browser";
 import { walkingSystem } from "./instructions";
 import type { AppKnowledge } from "./knowledge";
 import { harnessMode, putScreenshot, putText, walkImageWindow, type AgentEnv } from "./env";
@@ -109,7 +109,8 @@ export async function walkOneJourney(args: {
   await env.db.journey.deleteMany({ where: { runId: run.id, order: index } });
 
   {
-    const context = await browser.newContext(agentContextOptions(browser));
+    // CHE-193: on our own hosts the context announces itself (self-hosts.ts).
+    const context = await browser.newContext(selfCheckContextOptions(browser, run.targetUrl, env.bindings));
     const page = await context.newPage();
 
     const journey = await env.db.journey.create({
@@ -127,6 +128,8 @@ export async function walkOneJourney(args: {
     const toolEnv: ToolEnv = {
       page,
       targetOrigin: originOf(run.targetUrl),
+      // CHE-193: lets the click gate know which extra hosts are ours.
+      selfCheckHosts: env.bindings.SELF_CHECK_HOSTS,
       // CHE-168 decides whether the nav model sees at all (llm.navVision);
       // CHE-169 decides when — every capture, or only at a judgment moment.
       visionScreenshots: vision.visionScreenshots,

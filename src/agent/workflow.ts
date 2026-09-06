@@ -32,7 +32,7 @@ import { parseJson } from "@/lib/json";
 import type { RunEvent, RunPhase } from "@/lib/types";
 import { discoveryMemoryEnabled, makeAgentEnv, putText, type AgentBindings, type AgentEnv } from "./env";
 import { makeLlm, type UsageTotals } from "./llm";
-import { agentContextOptions, launchAgentBrowser, surfaceScan } from "./browser";
+import { launchAgentBrowser, selfCheckContextOptions, surfaceScan } from "./browser";
 import { LlmBudgetError } from "./core";
 import { dedupKeyForFinding } from "@/lib/tracker/file";
 import { discoverApp, type KnownMap, type ProposedJourney, type RunInput } from "./discovery";
@@ -948,7 +948,14 @@ async function auditJourneyReplay(env: AgentEnv, run: WalkRun, order: number): P
   try {
     const browser = await launchAgentBrowser(env);
     try {
-      result = await replayJourney(env, browser, run, journey, agentContextOptions(browser));
+      // CHE-193: the replay context announces itself on our own hosts too.
+      result = await replayJourney(
+        env,
+        browser,
+        run,
+        journey,
+        selfCheckContextOptions(browser, run.targetUrl, env.bindings),
+      );
     } finally {
       await browser.close().catch(() => {});
     }

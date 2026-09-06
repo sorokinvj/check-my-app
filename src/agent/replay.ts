@@ -38,7 +38,7 @@ import type { Verdict } from "@/lib/enums";
 import type { AppAnatomy } from "@/lib/types";
 import { normalizeAnatomy } from "@/lib/anatomy";
 import { parseJson } from "@/lib/json";
-import { agentContextOptions, applyNameShim, launchAgentBrowser } from "./browser";
+import { applyNameShim, launchAgentBrowser, selfCheckContextOptions } from "./browser";
 import { putScreenshot, type AgentEnv } from "./env";
 import {
   MAX_SMOKE_PAGES,
@@ -330,7 +330,8 @@ async function probePages(
   targets: SmokeTargetSets,
 ): Promise<ProbeOutcome> {
   const browser: Browser = await launchAgentBrowser(env);
-  const context = await browser.newContext(agentContextOptions(browser));
+  // CHE-193: on our own hosts the context announces itself (self-hosts.ts).
+  const context = await browser.newContext(selfCheckContextOptions(browser, targetUrl, env.bindings));
   try {
     const page: Page = await context.newPage();
     await applyNameShim(page);

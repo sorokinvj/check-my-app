@@ -66,6 +66,13 @@ export interface AgentBindings {
   // (no new provider, no new key). Set to a Claude id to judge on Anthropic
   // while navigating on OpenRouter.
   ANTHROPIC_JUDGE_MODEL?: string;
+  // CHE-193: extra hosts that count as OURS, comma-separated (a preview or
+  // staging deploy). checkmyapp.dev and its subdomains are always ours. A run
+  // targeting one of these hosts announces itself with the
+  // x-checkmyapp-checker header and is refused every create/mark control —
+  // the self-check of 2026-09-05 (run #146) created two real runs on a
+  // stranger's app and graded a stranger's verdict. Unset → production only.
+  SELF_CHECK_HOSTS?: string;
 }
 
 export interface AgentEnv {
