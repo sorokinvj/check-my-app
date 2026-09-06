@@ -158,8 +158,8 @@ export default function PricingPage() {
         </div>
 
         <p className="mx-auto max-w-2xl text-center font-mono text-[13px] leading-6 text-fg-faint">
-          Launch pricing. A full first check of a typical app runs ~$0.50 of agent compute — we
-          keep the free tier honest, not infinite.
+          Launch pricing. The first check is free so you can judge a verdict before paying for
+          the daily one — the free tier is honest, not infinite.
         </p>
       </div>
     </main>
