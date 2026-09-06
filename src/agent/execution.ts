@@ -25,6 +25,7 @@ import { credentialsAlreadyRejected, recordCredentialRejection } from "./credent
 import { WALK_WRAP_UP_ITERATIONS, walkingIterationCap } from "./limits";
 import { walkingVision } from "./harness";
 import { adjudicateStep } from "./judge";
+import { classifyGap, gapEvidenceText } from "./gap-classes";
 import { summarizeWalk } from "./summary";
 
 export interface WalkRun extends RunInput {
@@ -190,6 +191,20 @@ export async function walkOneJourney(args: {
           scrub: (text) => scrubSecrets(toolEnv, text),
           usage: judgeUsage,
         });
+        // CHE-198: the capability is named HERE, on the model's own words
+        // (reported — the judge may have replaced the observed text) and the
+        // machine trail, before productizeStep cuts every sentence that names
+        // our side. The filer (capability-gaps.ts) used to re-read the stored
+        // text and could not find the words it keyed on.
+        if (step.unverifiedReason === "our_capability") {
+          step.gapClass = classifyGap({
+            text: gapEvidenceText(reported.label, reported.attempted, reported.observed, step.observed),
+            actions: actionTrail,
+            targetOrigin: toolEnv.targetOrigin,
+          });
+        } else {
+          step.gapClass = undefined;
+        }
         // CHE-180: the customer's words, decided after the judge has seen the
         // model's. Nothing between here and the row may reintroduce ours.
         productizeStep(step);
@@ -206,6 +221,7 @@ export async function walkOneJourney(args: {
             consoleLog: step.consoleExcerpt ?? null,
             networkLog: step.networkExcerpt ?? null,
             unverifiedReason: step.unverifiedReason ?? null,
+            gapClass: step.gapClass ?? null,
             actions: trail.length ? JSON.stringify(trail) : null,
             screenshotUrl: lastScreenshot?.storageUrl ?? null,
             evidence: lastScreenshot

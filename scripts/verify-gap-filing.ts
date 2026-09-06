@@ -1,0 +1,367 @@
+// CHE-198 verification: every our_capability step files a gap ticket that
+// names the capability, deduped by that capability; the unclassified bucket
+// is the last resort, and it records the step so it can be classified next
+// time; the classes that already had tickets keep their dedup keys.
+//
+// Two real steps from prod D1 (2026-09-06) drive this, byte for byte as the
+// rows were stored: run #153 (joblander.app) "Modify Insight Preferences
+// (slider) and Save/Reset" and run #154 (meetbashar.com) "Click a ▶ Video
+// link (YouTube session)". Both were skipped / our_capability and both landed
+// on CHE-86 "unclassified" (its Linear comments at 17:00:30 and 19:26:28 UTC).
+//
+// The filing path is the real one — fileCapabilityGaps → fileFindingTicket →
+// dedupKeyForFinding — over a prisma-like stub and a stub tracker; no
+// network, no model, no database. The dedup keys asserted for the existing
+// classes are the keys on the IssueLink rows in prod (CHE-85/86/94/96/104/
+// 146/164), so a label that drifts fails here before it forks a ticket.
+//
+// Usage: npx tsx --tsconfig tsconfig.json scripts/verify-gap-filing.ts
+
+import type { PrismaClient } from "@/generated/prisma/client";
+import type { AgentEnv } from "@/agent/env";
+import { fileCapabilityGaps, type GapBoard } from "@/agent/capability-gaps";
+import { GAP_CLASSES, classifyGap, gapEvidenceText, type GapClass } from "@/agent/gap-classes";
+import type { RecordedAction, ReportedStep } from "@/agent/tools";
+import { productizeStep } from "@/agent/tools";
+import { dedupKeyForFinding } from "@/lib/tracker/file";
+import type { CreatedIssue, IssueOutcome, TicketDraft, Tracker } from "@/lib/tracker/types";
+
+let failures = 0;
+function check(name: string, ok: boolean, detail = "") {
+  if (!ok) failures++;
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? `  →  ${detail}` : ""}`);
+}
+
+// ─── The two steps, as stored in prod D1 ─────────────────────────────────────
+
+interface StoredStep {
+  label: string;
+  attempted: string | null;
+  observed: string | null;
+  gapClass: string | null;
+  actions: string | null;
+  journey: { title: string };
+}
+
+// Run #153, step cmtq217j4001cu60n4newo9er.
+const SLIDER_153: StoredStep = {
+  label: "Modify Insight Preferences (slider) and Save/Reset",
+  attempted:
+    'Set the Widget opacity range slider to a new value, and clicked "Reset to Defaults". Attempted to move the four visible styling sliders (Brief/Detailed, Generic/Personalized, Neutral/Promotional, Simple/Technical) to enable "Save Changes".',
+  observed: 'The Widget opacity range input accepted a fill (78). "Reset to Defaults" is clickable and produced no error.',
+  gapClass: null,
+  actions: JSON.stringify([
+    { kind: "click", role: "slider", name: "Widget opacity", outcome: { urlAfter: "https://joblander.app/settings", navigated: false, requests: 1, mutations: 14 } },
+    { kind: "fill", selector: "input[type=range]", value: "78", outcome: { urlAfter: "https://joblander.app/settings" } },
+    { kind: "click", role: "button", name: "Reset to Defaults", outcome: { urlAfter: "https://joblander.app/settings", navigated: false, requests: 2, mutations: 15 } },
+  ]),
+  journey: { title: "Configure Settings & Insight Preferences" },
+};
+
+// Run #154, step cmtq6u8tp000o3j0nnj71pcz3. The stored observed text begins
+// "Note:" — the sentence before it named our side and was cut by CHE-180.
+const NEW_TAB_154: StoredStep = {
+  label: "Click a ▶ Video link (YouTube session)",
+  attempted: 'Click the "▶ Video" link for the Mass Consciousness session to open it on YouTube.',
+  observed:
+    "Note: the destination is not a defect — the YouTube video was already confirmed live and playable via the oEmbed check (HTTP 200), and the Archive page link for the same session resolves.",
+  gapClass: null,
+  actions: JSON.stringify([
+    { kind: "click", role: "link", name: "▶ Video", outcome: { urlAfter: "https://meetbashar.com/transmissions", navigated: false, requests: 0, mutations: 0 } },
+  ]),
+  journey: { title: "Explore the Transmissions Archive" },
+};
+
+// A step nothing recognises.
+const UNCLASSIFIED: StoredStep = {
+  label: "Print the invoice",
+  attempted: "Pressed the Print button on the invoice page.",
+  observed: "We could not confirm this step this run.",
+  gapClass: null,
+  actions: null,
+  journey: { title: "Billing" },
+};
+
+// ─── Prod dedup keys (IssueLink rows on the checkmyapp.dev app, 2026-09-06) ──
+
+const PROD_KEYS: Record<Exclude<GapClass, "range_input" | "third_party_block" | "egress_unreachable">, { key: string; ticket: string }> = {
+  new_tab: { key: "50f4130bdfc6e121332065e6892d9dde", ticket: "(never filed in prod — the class existed, no step ever reached it)" },
+  oauth: { key: "e779e9daa0f7f7503f1b278c5e505918", ticket: "CHE-94" },
+  passwordless: { key: "7d30740aec630a9e52633dec39f3a78e", ticket: "CHE-104" },
+  verification_code: { key: "f3d12bda7508c94011262fe12dae34b2", ticket: "(no row yet)" },
+  media_devices: { key: "b8430aa8ae1ec3275318f88b667aa9d8", ticket: "CHE-164" },
+  captcha: { key: "bdcfa29fd68ba54f8456ee8978f60784", ticket: "CHE-85" },
+  test_records: { key: "421f8e7cba3273ec98e3ebbb81d0c255", ticket: "CHE-96" },
+  file_transfer: { key: "e9c71381208c556ca91c5f6e110bb527", ticket: "CHE-146" },
+  unclassified: { key: "5745adef5df702c26f73e14ef3dd9b8c", ticket: "CHE-86" },
+};
+
+// The key the filer produces for a class, through the same function the
+// ledger uses.
+function keyFor(cls: GapClass): string {
+  return dedupKeyForFinding(
+    {
+      title: GAP_CLASSES[cls].label,
+      category: "broken",
+      severity: "high",
+      detail: JSON.stringify({ where: "CheckMyApp agent capability" }),
+    },
+    { appSlug: "checkmyapp.dev" },
+  );
+}
+
+// ─── Stubs ───────────────────────────────────────────────────────────────────
+
+interface Filed {
+  kind: "created" | "commented";
+  identifier: string;
+  title?: string;
+  dedupKey?: string;
+  body?: string;
+}
+
+function stubWorld(steps: StoredStep[], opts: { existing?: Record<string, string> } = {}) {
+  const filed: Filed[] = [];
+  const comments: { issueId: string; body: string }[] = [];
+  const links = new Map<string, { id: string; externalIssueId: string; status: string; occurrences: number; escalatedAt: null; defectClass: null }>();
+  for (const [key, identifier] of Object.entries(opts.existing ?? {})) {
+    links.set(key, { id: `link-${identifier}`, externalIssueId: identifier, status: "open", occurrences: 1, escalatedAt: null, defectClass: null });
+  }
+  let counter = 200;
+
+  const tracker: Tracker = {
+    async createIssue(draft: TicketDraft): Promise<CreatedIssue> {
+      const identifier = `CHE-${++counter}`;
+      filed.push({ kind: "created", identifier, title: draft.title });
+      return { id: identifier, identifier, url: `https://linear.app/x/${identifier}` };
+    },
+    async addComment(issueId: string, body: string) {
+      comments.push({ issueId, body });
+    },
+    async getIssueOutcome(): Promise<IssueOutcome> {
+      return "open";
+    },
+  };
+
+  const run = {
+    id: "run-1",
+    runNumber: 153,
+    publicId: "pub-1",
+    startedAt: new Date("2026-09-06T16:45:42Z"),
+    appSlug: "joblander.app",
+    targetUrl: "https://joblander.app",
+    appId: "app-customer",
+  };
+
+  const db = {
+    run: { findUnique: async () => run },
+    step: { findMany: async () => steps },
+    createdResource: { findMany: async () => [], count: async () => 0 },
+    issueLink: {
+      findUnique: async ({ where }: { where: { appId_dedupKey: { dedupKey: string } } }) =>
+        links.get(where.appId_dedupKey.dedupKey) ?? null,
+      update: async ({ where, data }: { where: { id: string }; data: { occurrences: { increment: number } } }) => {
+        const link = [...links.values()].find((l) => l.id === where.id);
+        if (!link) throw new Error(`update of unknown link ${where.id}`);
+        link.occurrences += data.occurrences.increment;
+        filed.push({ kind: "commented", identifier: link.externalIssueId });
+        return link;
+      },
+      upsert: async ({ where, create }: { where: { appId_dedupKey: { dedupKey: string } }; create: { externalIssueId: string } }) => {
+        const key = where.appId_dedupKey.dedupKey;
+        const last = filed[filed.length - 1];
+        if (last?.kind === "created" && last.identifier === create.externalIssueId) last.dedupKey = key;
+        const link = { id: `link-${create.externalIssueId}`, externalIssueId: create.externalIssueId, status: "open", occurrences: 1, escalatedAt: null, defectClass: null };
+        links.set(key, link);
+        return link;
+      },
+    },
+    settledSignature: { findFirst: async () => null, create: async () => ({}) },
+  };
+
+  const self = {
+    id: "app-self",
+    appSlug: "checkmyapp.dev",
+    ownerId: "owner-self",
+    policy: null,
+    tracker: { teamId: "team" },
+  };
+  const board = { self, tracker, baseUrl: "https://checkmyapp.dev" } as unknown as GapBoard;
+  const env = { db: db as unknown as PrismaClient, bindings: {} } as unknown as AgentEnv;
+  return { env, board, filed, comments };
+}
+
+async function main() {
+  // 0 — the root cause, reproduced: the words the classifier keys on are the
+  // words CHE-180 cuts before the row is written. A step reported with the
+  // model's sentence classifies on that sentence; the stored copy no longer
+  // has it.
+  {
+    const reported: ReportedStep = {
+      label: NEW_TAB_154.label,
+      status: "skipped",
+      unverifiedReason: "our_capability",
+      attempted: NEW_TAB_154.attempted ?? "",
+      observed: `The link opens in a new tab, which our browser cannot follow. ${NEW_TAB_154.observed}`,
+    };
+    const raw = gapEvidenceText(reported.label, reported.attempted, reported.observed);
+    productizeStep(reported);
+    check(
+      "root cause: productizeStep cuts the sentence naming the new tab",
+      !/new tab/i.test(reported.observed) && reported.observed.startsWith("Note:"),
+      reported.observed,
+    );
+    check("…and the model's own words classify as new_tab", classifyGap({ text: raw }) === "new_tab");
+  }
+
+  // 1 — #153 slider and #154 new-tab through the real filing path: two
+  // tickets, two dedup keys, two capability-named titles, neither CHE-86's.
+  {
+    const w = stubWorld([SLIDER_153, NEW_TAB_154]);
+    const notes = await fileCapabilityGaps(w.env, "run-1", { board: w.board });
+    const created = w.filed.filter((f) => f.kind === "created");
+    check("#153 + #154: two tickets created", created.length === 2, notes.map((n) => n.text).join(" | "));
+    const titles = created.map((f) => f.title ?? "");
+    check(
+      "#153: title names the range input",
+      titles.some((t) => t.startsWith("[Checker gap]") && t.endsWith(GAP_CLASSES.range_input.label)),
+      titles.join(" | "),
+    );
+    check(
+      "#154: title names the new tab",
+      titles.some((t) => t.startsWith("[Checker gap]") && t.endsWith(GAP_CLASSES.new_tab.label)),
+      titles.join(" | "),
+    );
+    const keys = created.map((f) => f.dedupKey ?? "");
+    check("two distinct dedup keys", keys[0] !== keys[1] && keys.every(Boolean), keys.join(", "));
+    check("neither key is CHE-86's", !keys.includes(PROD_KEYS.unclassified.key));
+    check("the new-tab key is the one the class always had", keys.includes(PROD_KEYS.new_tab.key));
+    check("the range-input key is the class's own", keys.includes(keyFor("range_input")));
+    check("no comment landed on CHE-86", w.comments.length === 0);
+  }
+
+  // 2 — a class recorded on the row wins over re-classification.
+  {
+    const w = stubWorld([{ ...SLIDER_153, gapClass: "oauth" }]);
+    await fileCapabilityGaps(w.env, "run-1", { board: w.board });
+    check(
+      "Step.gapClass on the row is used as written",
+      w.filed[0]?.title?.endsWith(GAP_CLASSES.oauth.label) === true,
+      w.filed[0]?.title,
+    );
+  }
+
+  // 3 — an unclassified step still files, on CHE-86's key; on recurrence the
+  // step text goes on the ticket.
+  {
+    const w = stubWorld([UNCLASSIFIED]);
+    await fileCapabilityGaps(w.env, "run-1", { board: w.board });
+    check("unclassified step files", w.filed.length === 1 && w.filed[0].kind === "created");
+    check("…on the unclassified key (CHE-86)", w.filed[0]?.dedupKey === PROD_KEYS.unclassified.key, w.filed[0]?.dedupKey);
+
+    const again = stubWorld([UNCLASSIFIED], { existing: { [PROD_KEYS.unclassified.key]: "CHE-86" } });
+    await fileCapabilityGaps(again.env, "run-1", { board: again.board });
+    check("unclassified recurrence comments on CHE-86", again.filed[0]?.kind === "commented" && again.filed[0].identifier === "CHE-86");
+    const withStep = again.comments.find((c) => c.issueId === "CHE-86" && c.body.includes(UNCLASSIFIED.label));
+    check("…and the comment carries the step text", Boolean(withStep), again.comments.map((c) => c.body).join(" || "));
+  }
+
+  // 4 — the existing classes keep their prod dedup keys, and their inputs
+  // still map to them.
+  {
+    for (const [cls, { key, ticket }] of Object.entries(PROD_KEYS) as [keyof typeof PROD_KEYS, { key: string; ticket: string }][]) {
+      check(`dedup key unchanged: ${cls} ${ticket}`, keyFor(cls) === key, keyFor(cls));
+    }
+    const samples: [string, GapClass][] = [
+      ["Link opens in a new tab which could not be followed", "new_tab"],
+      ["Sign in with Google via OAuth popup", "oauth"],
+      ["Magic link sign-in required; passwordless flow", "passwordless"],
+      ["A verification code was emailed; MFA required", "verification_code"],
+      ["Camera and microphone prompt for the call", "media_devices"],
+      ["Signup shows a reCAPTCHA challenge", "captcha"],
+      ["Records still present: note \"cma-1\"", "test_records"],
+      ["The file upload picker did not accept a file", "file_transfer"],
+    ];
+    for (const [text, cls] of samples) {
+      check(`existing class still matched: ${cls}`, classifyGap({ text }) === cls, classifyGap({ text }));
+    }
+    // The order among the original classes is unchanged: new-tab wins over
+    // oauth as before when a text says both.
+    check("original order kept (new_tab before oauth)", classifyGap({ text: "OAuth opens in a new tab" }) === "new_tab");
+  }
+
+  // 5 — the new classes: the machine trail decides when the words say
+  // nothing, third-party and egress are told apart by host and phrase.
+  {
+    const trail = (a: RecordedAction[]) => a;
+    check(
+      "trail: link click with no navigation, no request, no mutation → new_tab",
+      classifyGap({ text: "Clicked the link.", actions: trail(JSON.parse(NEW_TAB_154.actions ?? "[]")) }) === "new_tab",
+    );
+    check(
+      "trail: a click on a slider role → range_input",
+      classifyGap({ text: "Set the value.", actions: trail(JSON.parse(SLIDER_153.actions ?? "[]")) }) === "range_input",
+    );
+    check(
+      "trail: a fill into input[type=range] → range_input",
+      classifyGap({ text: "Set the value.", actions: [{ kind: "fill", selector: "input[type=range]", value: "5", outcome: { urlAfter: "x" } }] }) === "range_input",
+    );
+    check(
+      "trail: a link click that navigated is not a new tab",
+      classifyGap({ text: "Clicked the link.", actions: [{ kind: "click", role: "link", name: "Docs", outcome: { urlAfter: "x", navigated: true, requests: 3, mutations: 9 } }] }) === "unclassified",
+    );
+    check("words: drag-and-drop is not the range class", classifyGap({ text: "Drag-and-drop the file onto the area" }) !== "range_input");
+
+    // CHE-86's own body, run #96: the Cloudflare challenge on hugedomains.com
+    // while the target was your-app.com.
+    const hugedomains =
+      "Could not access the domain profile page due to Cloudflare security verification blocking automated access (HTTP 403). The actual domain profile content on hugedomains.com was never loaded.";
+    check(
+      "CHE-86's hugedomains steps → third_party_block (foreign host)",
+      classifyGap({ text: hugedomains, targetOrigin: "https://your-app.com" }) === "third_party_block",
+      classifyGap({ text: hugedomains, targetOrigin: "https://your-app.com" }),
+    );
+    check(
+      "the same challenge on the target itself → captcha",
+      classifyGap({ text: hugedomains, targetOrigin: "https://hugedomains.com" }) === "captcha",
+    );
+    check(
+      "no target known → captcha, never a third party by guess",
+      classifyGap({ text: hugedomains }) === "captcha",
+    );
+    check(
+      "verify_links' UNREACHABLE (HTTP 403 from vk.com) → third_party_block",
+      classifyGap({ text: "UNREACHABLE (HTTP 403 from vk.com) https://vk.com/share.php", targetOrigin: "https://theins.ru" }) === "third_party_block",
+    );
+    check(
+      "coerceUnreachable's surviving sentence → egress_unreachable",
+      classifyGap({ text: "The share button did nothing visible. Could not confirm vk.com this run.", targetOrigin: "https://theins.ru" }) === "egress_unreachable",
+    );
+    check(
+      "UNREACHABLE (timeout) → egress_unreachable",
+      classifyGap({ text: "UNREACHABLE (timeout) https://t.me/share", targetOrigin: "https://theins.ru" }) === "egress_unreachable",
+    );
+    check("the three new labels are distinct from every old one", new Set(Object.values(GAP_CLASSES).map((c) => c.label)).size === Object.keys(GAP_CLASSES).length);
+    for (const cls of ["range_input", "third_party_block", "egress_unreachable"] as const) {
+      check(`new class ${cls} has its own key`, !Object.values(PROD_KEYS).some((p) => p.key === keyFor(cls)), keyFor(cls));
+    }
+  }
+
+  // 6 — a run with several gaps of one class files one ticket; a mix files
+  // one per class, and a legacy row without gapClass is classified from what
+  // it has.
+  {
+    const w = stubWorld([SLIDER_153, { ...SLIDER_153, label: "Move the opacity slider again" }, NEW_TAB_154, UNCLASSIFIED]);
+    await fileCapabilityGaps(w.env, "run-1", { board: w.board });
+    const created = w.filed.filter((f) => f.kind === "created");
+    check("four gaps in three classes → three tickets", created.length === 3, created.map((f) => f.title).join(" | "));
+  }
+
+  console.log(failures ? `\n${failures} check(s) FAILED` : "\nall checks passed");
+  process.exit(failures ? 1 : 0);
+}
+
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

@@ -12,9 +12,13 @@
 
 import { LinearTracker } from "@/lib/tracker/linear";
 import { fileFindingTicket, type TicketFinding, type TicketRun } from "@/lib/tracker/file";
+import type { Tracker } from "@/lib/tracker/types";
 import { freshLinearToken } from "@/lib/tracker/token";
+import { parseJson } from "@/lib/json";
 import { findOrphans } from "./cleanup";
 import type { AgentEnv } from "./env";
+import { GAP_CLASSES, classifyGap, gapEvidenceText, isGapClass, type GapClass } from "./gap-classes";
+import type { RecordedAction } from "./tools";
 
 export interface CapabilityNote {
   icon: "ok" | "warn";
@@ -22,63 +26,28 @@ export interface CapabilityNote {
 }
 
 // One ticket per CAPABILITY, not per customer app: the same missing ability
-// hit on ten apps is one thing to build. These labels are the dedup identity,
-// so they must stay stable — the customer's own words never enter them.
-const CAPABILITIES: { match: RegExp; label: string; why: string }[] = [
-  {
-    match: /new tab|target=_?"?_blank|could not follow|cannot follow|opens? in a new/i,
-    label: "Checker cannot follow links that open in a new tab",
-    why: "Outbound links are a large share of what owners worry about. verify_links resolves them server-side — the walker must reach for it automatically instead of leaving the step unverified.",
-  },
-  {
-    match: /oauth|continue with google|social login|sign in with (google|github|apple)/i,
-    label: "Checker cannot complete third-party OAuth sign-in",
-    why: "Any app whose only login is Google/GitHub is unverifiable behind the login wall — a whole class of customers we cannot serve end to end.",
-  },
-  {
-    // CHE-104: "email link" alone used to land here, so an ordinary mailto:
-    // contact link on nkem.dev was filed as a missing sign-in capability. The
-    // match now needs sign-in context; mailto: is handled by verify_links and
-    // is not a gap at all.
-    match: /magic link|passwordless|(email|sign-?in|login)[ -]link (sign|log)[ -]?in|sign-?in (by|via) email/i,
-    label: "Checker cannot complete passwordless / magic-link sign-in",
-    why: "Magic-link products have NO password to hand us — no amount of owner input unblocks it. We need a mailbox the agent can read for test accounts; until then the entire signed-in half of every passwordless app is invisible to us.",
-  },
-  {
-    match: /verification code|2fa|mfa|one-?time (code|password)|otp/i,
-    label: "Checker cannot complete an emailed/SMS verification code step",
-    why: "MFA-protected accounts stop the walk at the door. Needs a mailbox/code channel the agent can read for test accounts.",
-  },
-  {
-    match: /camera|microphone|media device|getusermedia|webrtc/i,
-    label: "Checker has no camera/microphone for media flows",
-    why: "Video/voice products cannot be walked past the device prompt without synthetic media devices.",
-  },
-  {
-    match: /captcha|turnstile|recaptcha|bot (check|protection)/i,
-    label: "Checker is blocked by CAPTCHA/bot protection on the target",
-    why: "Owners must be able to allowlist us, or we silently lose coverage of their signup/login.",
-  },
-  {
-    match: /leaves its test records|records still present|cleanup audit/i,
-    label: "Checker leaves test records behind in the customer's product",
-    why: "Cleanup is the whole basis on which owners let us create anything. One orphan and the permission is rightly withdrawn — and the product fills with our junk (our own self-check left a live app plus a daily watch on your-app.com).",
-  },
-  {
-    match: /file (upload|picker)|download/i,
-    label: "Checker cannot drive file upload/download flows",
-    why: "Upload-centric products (documents, images, CVs) have their core action unverified.",
-  },
-];
-
-function classify(text: string): { label: string; why: string } {
-  const hit = CAPABILITIES.find((c) => c.match.test(text));
-  return (
-    hit ?? {
-      label: "Checker could not verify a step for an unclassified reason",
-      why: "Unclassified coverage gaps are the ones we learn least from — the step text below should become its own capability entry.",
-    }
-  );
+// hit on ten apps is one thing to build. The classes and their labels live in
+// gap-classes.ts (CHE-198); the labels are the dedup identity, so they must
+// stay stable — the customer's own words never enter them.
+//
+// A step written since CHE-198 carries its class (Step.gapClass), decided at
+// report time on the model's own words. Older rows, and a row that somehow
+// has none, are classified here from what survived — the customer's copy and
+// the machine trail — with "unclassified" as the last resort. It still files.
+function classOf(g: {
+  label: string;
+  attempted: string | null;
+  observed: string | null;
+  gapClass: string | null;
+  actions: string | null;
+  targetOrigin?: string;
+}): GapClass {
+  if (isGapClass(g.gapClass)) return g.gapClass;
+  return classifyGap({
+    text: gapEvidenceText(g.observed, g.attempted, g.label),
+    actions: parseJson<RecordedAction[]>(g.actions),
+    targetOrigin: g.targetOrigin,
+  });
 }
 
 // Our own app row (the one watching checkmyapp.dev) owns the tracker connection
@@ -100,11 +69,19 @@ async function ourApp(env: AgentEnv) {
 
 type OurApp = NonNullable<Awaited<ReturnType<typeof ourApp>>>;
 
-// The board we file our own defects onto. Null when the CheckMyApp app has no
-// tracker connected yet — callers say so out loud rather than swallowing it.
-async function ourBoard(
-  env: AgentEnv,
-): Promise<{ self: OurApp; tracker: LinearTracker; baseUrl: string } | null> {
+// The board we file our own defects onto: our app row, the tracker to file
+// through, and the web origin verdict links are built on. Exported as a type
+// so the acceptance script (verify-gap-filing.ts) can hand the real filing
+// path a stub tracker instead of a Linear token.
+export interface GapBoard {
+  self: OurApp;
+  tracker: Tracker;
+  baseUrl: string;
+}
+
+// Null when the CheckMyApp app has no tracker connected yet — callers say so
+// out loud rather than swallowing it.
+async function ourBoard(env: AgentEnv): Promise<GapBoard | null> {
   const self = await ourApp(env);
   if (!self?.tracker?.teamId) return null;
   const tracker = new LinearTracker(
@@ -134,16 +111,29 @@ function selfPolicy(self: OurApp, titleFormat: string) {
       };
 }
 
-export async function fileCapabilityGaps(env: AgentEnv, runId: string): Promise<CapabilityNote[]> {
+// `opts.board` is for the acceptance script only: the real board is looked
+// up from our own app row and its Linear connection.
+export async function fileCapabilityGaps(
+  env: AgentEnv,
+  runId: string,
+  opts: { board?: GapBoard } = {},
+): Promise<CapabilityNote[]> {
   const run = await env.db.run.findUnique({
     where: { id: runId },
-    select: { id: true, runNumber: true, publicId: true, startedAt: true, appSlug: true },
+    select: { id: true, runNumber: true, publicId: true, startedAt: true, appSlug: true, targetUrl: true },
   });
   if (!run) return [];
 
   const gaps = await env.db.step.findMany({
     where: { unverifiedReason: "our_capability", journey: { runId } },
-    select: { label: true, attempted: true, observed: true, journey: { select: { title: true } } },
+    select: {
+      label: true,
+      attempted: true,
+      observed: true,
+      gapClass: true,
+      actions: true,
+      journey: { select: { title: true } },
+    },
   });
 
   // CHE-90: leaving a test record behind is our defect too, not just an
@@ -156,6 +146,8 @@ export async function fileCapabilityGaps(env: AgentEnv, runId: string): Promise<
             label: "Checker leaves its test records behind",
             attempted: "Create → read → update → delete lifecycle with guaranteed cleanup",
             observed: `Records still present: ${orphans.lines.slice(0, 5).join(" · ")}`,
+            gapClass: "test_records",
+            actions: null,
             journey: { title: "Cleanup audit" },
           },
         ]
@@ -164,7 +156,7 @@ export async function fileCapabilityGaps(env: AgentEnv, runId: string): Promise<
   const allGaps = [...gaps, ...orphanGaps];
   if (allGaps.length === 0) return [];
 
-  const board = await ourBoard(env);
+  const board = opts.board ?? (await ourBoard(env));
   if (!board) {
     // Nothing to file into yet — still say it out loud in the run feed so the
     // gap is never silent.
@@ -178,16 +170,17 @@ export async function fileCapabilityGaps(env: AgentEnv, runId: string): Promise<
   const { self, tracker, baseUrl } = board;
 
   // Collapse this run's gaps onto capabilities before filing.
-  const byCapability = new Map<string, { why: string; examples: string[] }>();
+  const byCapability = new Map<GapClass, string[]>();
   for (const g of allGaps) {
-    const { label, why } = classify(`${g.observed ?? ""} ${g.attempted ?? ""} ${g.label}`);
-    const entry = byCapability.get(label) ?? { why, examples: [] };
-    entry.examples.push(`${run.appSlug} · ${g.journey.title} → ${g.label}: ${g.observed ?? ""}`.slice(0, 300));
-    byCapability.set(label, entry);
+    const cls = classOf({ ...g, targetOrigin: run.targetUrl });
+    const examples = byCapability.get(cls) ?? [];
+    examples.push(`${run.appSlug} · ${g.journey.title} → ${g.label}: ${g.observed ?? ""}`.slice(0, 300));
+    byCapability.set(cls, examples);
   }
 
   const notes: CapabilityNote[] = [];
-  for (const [label, { why, examples }] of byCapability) {
+  for (const [cls, examples] of byCapability) {
+    const { label, why } = GAP_CLASSES[cls];
     const finding: TicketFinding = {
       runId: run.id,
       number: 0,
@@ -224,6 +217,18 @@ export async function fileCapabilityGaps(env: AgentEnv, runId: string): Promise<
         ownerId: self.ownerId,
         verdictUrl: `${baseUrl}/verdict/${run.publicId}`,
       });
+      // The unclassified bucket is the exception that gets investigated, not
+      // the rule that absorbs everything: the recurrence comment alone said
+      // "still present in run #N" and CHE-86's body still lists only run
+      // #96's steps. The steps themselves go on the ticket every time, so the
+      // next class can be written from them.
+      if (cls === "unclassified" && outcome.kind === "commented") {
+        await tracker.addComment(
+          outcome.identifier,
+          `Unclassified in run #${run.runNumber} — the step(s), so this becomes a named capability:\n` +
+            examples.map((e) => `- ${e}`).join("\n"),
+        );
+      }
       notes.push({
         icon: "ok",
         text:
