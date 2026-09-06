@@ -1,5 +1,5 @@
 // The smoke pass itself: which pages to re-visit, in what order, and what
-// each answer means (CHE-51, CHE-132, CHE-179).
+// each answer means (CHE-51, CHE-132, CHE-179, CHE-187).
 //
 // Split out of replay.ts because this half has to run against a stub page:
 // replay.ts launches Browser Rendering, and the rule that decides whether a
@@ -16,8 +16,18 @@
 // counted as healthy, and a failure only when the page is one the journeys
 // depend on (the homepage and the `core` set). An HTTP 5xx, an uncaught JS
 // error and a console burst are positive evidence and stay failures anywhere.
+//
+// CHE-187, 2026-09-06 — the console class of the same regression. Run #153
+// on joblander.app: "75 console errors while loading the pages — running the
+// full check". The limit of five was written when the pass visited at most
+// six pages (CHE-51) and was a total across all of them; since CHE-132 the
+// pass visits up to thirty, and a production site that logs two or three
+// errors per page (blocked analytics, a missing asset, a CSP report) trips a
+// total limit every day. Now the count is per page — a burst is one page
+// logging five — and messages our own environment causes (a blocked tracker,
+// an aborted navigation, a third party's 4xx) are recorded but never counted.
 
-import type { Page } from "@cloudflare/playwright";
+import type { ConsoleMessage, Page } from "@cloudflare/playwright";
 
 // Time budget. The survey (CHE-132) hands the smoke pass every page it saw
 // serve, so the cap is by pages AND by wall clock: the ladder was six pages
@@ -39,8 +49,75 @@ export const RETRY_TIMEOUT_MS = 30_000;
 const SETTLE_MS = 1_500;
 // Production apps log the odd console error (blocked analytics, a 404 asset).
 // A burst is different, and an *uncaught* exception is different again — that
-// one is a single-instance signal.
-const CONSOLE_ERROR_LIMIT = 5;
+// one is a single-instance signal. The limit is per page (CHE-187): it was a
+// run-wide total when the pass visited six pages, and thirty pages at two or
+// three errors each is a chatty site, not a broken one.
+export const CONSOLE_ERROR_LIMIT = 5;
+
+/**
+ * Console errors that say nothing about the customer's product (CHE-187).
+ * Each is either caused by the checker's own environment or belongs to a
+ * third party the owner cannot fix from their page. They are recorded on the
+ * probe for diagnosis and never counted toward the burst limit. One list, so
+ * the next phrasing goes here and not into a prompt or a second filter.
+ */
+export const IGNORED_CONSOLE_ERRORS: ReadonlyArray<{
+  why: string;
+  matches: (text: string, url: string, targetOrigin: string) => boolean;
+}> = [
+  {
+    // Ours: the checker's browser blocks trackers; a real user's may not.
+    why: "request blocked by the checker's browser",
+    matches: (text, url) => /ERR_BLOCKED_BY_CLIENT/i.test(`${text} ${url}`),
+  },
+  {
+    // Ours: the pass navigates away before the previous page's requests
+    // finish, and the browser reports each one as aborted.
+    why: "request aborted by the pass navigating on",
+    matches: (text, url) => /net::ERR_ABORTED/i.test(`${text} ${url}`),
+  },
+  {
+    // Nobody's: a missing favicon is one 404 a real user never sees.
+    why: "missing favicon",
+    matches: (text, url) => /favicon\.ico/i.test(`${text} ${url}`),
+  },
+  {
+    // Nobody's: analytics, ads and error-reporting hosts fail from a
+    // datacenter IP for reasons of their own (consent, geo, bot rules) and
+    // the owner has no page to fix. Matched by host, so a product's own
+    // "Facebook login failed" still counts.
+    why: "third-party analytics, ads or error-reporting host",
+    matches: (text, url) =>
+      /(google-analytics\.com|googletagmanager\.com|doubleclick\.net|facebook\.(com|net)|hotjar\.(com|io)|posthog\.com|segment\.(io|com)|ingest(\.[a-z0-9-]+)*\.sentry\.io|intercom(cdn)?\.(com|io))/i.test(
+        `${text} ${url}`,
+      ),
+  },
+  {
+    // Nobody's: a report-only CSP violation is the owner measuring a policy
+    // they have not enforced. Nothing on the page is blocked by it.
+    why: "Content Security Policy report-only violation",
+    matches: (text) => /\[Report Only\]/i.test(text),
+  },
+  {
+    // Nobody's: a 4xx from another origin (a CDN refusing a datacenter IP, a
+    // geo-fenced font) depends on where the request comes from. The same
+    // message for the product's own origin is a missing asset and counts.
+    why: "HTTP 4xx from another origin",
+    matches: (text, url, targetOrigin) => {
+      if (!/Failed to load resource: the server responded with a status of 4\d\d/i.test(text)) return false;
+      try {
+        return new URL(url).origin !== targetOrigin;
+      } catch {
+        return false;
+      }
+    },
+  },
+];
+
+/** True when a console error is one of IGNORED_CONSOLE_ERRORS — recorded, never counted. */
+export function isIgnoredConsoleError(text: string, url: string, targetOrigin: string): boolean {
+  return IGNORED_CONSOLE_ERRORS.some((rule) => rule.matches(text, url, targetOrigin));
+}
 
 export interface PageProbe {
   url: string;
@@ -49,6 +126,12 @@ export interface PageProbe {
   error?: string;
   /** How many navigations it took: 1, or 2 when the first did not answer. */
   attempts: number;
+  /** Console errors this page logged that count toward the burst limit (CHE-187). */
+  consoleErrors: number;
+  /** Console errors this page logged that match IGNORED_CONSOLE_ERRORS — kept for diagnosis. */
+  ignoredConsoleErrors: number;
+  /** The first counted console message, so a burst can be read without re-running. */
+  consoleSample?: string;
 }
 
 /** Which pages the smoke pass re-visits, and which of them a journey depends on. */
@@ -69,6 +152,7 @@ export interface ProbeOutcome {
   /** Known pages left unvisited because the probe budget ran out (CHE-132). */
   skipped: number;
   failures: string[];
+  /** Counted console errors across every page visited — a fact, not a rule (CHE-187). */
   consoleErrors: number;
   pageErrors: number;
   screenshotUrl: string | null;
@@ -110,20 +194,41 @@ export async function probeTargets(
   const failures: string[] = [];
   const unreached: string[] = [];
   const uncaught: string[] = [];
-  let consoleErrors = 0;
   let screenshotUrl: string | null = null;
+  const targetOrigin = originOf(targetUrl);
 
-  page.on("console", (msg) => {
-    if (msg.type() === "error") consoleErrors++;
+  // One listener for the whole pass; the tally it feeds is reset before each
+  // navigation and copied onto that page's probe afterwards (CHE-187). What
+  // the homepage logs while its JS settles lands on the homepage.
+  const tally: ConsoleTally = { counted: 0, ignored: 0, sample: undefined };
+  page.on("console", (msg: ConsoleMessage) => {
+    if (msg.type() !== "error") return;
+    const text = msg.text();
+    const url = msg.location()?.url ?? "";
+    if (isIgnoredConsoleError(text, url, targetOrigin)) {
+      tally.ignored++;
+      return;
+    }
+    tally.counted++;
+    tally.sample ??= text.slice(0, 160);
   });
   page.on("pageerror", (err: Error) => {
     if (uncaught.length < 5) uncaught.push(err.message.slice(0, 200));
   });
 
-  const home = await probeWithRetry(page, targetUrl, HOME_TIMEOUT_MS);
-  probes.push(home);
+  const visit = async (url: string, timeout: number): Promise<PageProbe> => {
+    tally.counted = 0;
+    tally.ignored = 0;
+    tally.sample = undefined;
+    const probe = await probeWithRetry(page, url, timeout);
+    return withConsole(probe, tally);
+  };
+
+  const home = await visit(targetUrl, HOME_TIMEOUT_MS);
   if (home.status !== null) {
     await page.waitForTimeout(SETTLE_MS);
+    // Re-read after the settle: the homepage's JS logs after domcontentloaded.
+    probes.push(withConsole(home, tally));
     if (opts.saveScreenshot) {
       try {
         screenshotUrl = await opts.saveScreenshot(page);
@@ -131,6 +236,8 @@ export async function probeTargets(
         /* the live screenshot is a nicety, never a verdict */
       }
     }
+  } else {
+    probes.push(home);
   }
 
   // Core first, so the pages a journey depends on are probed before the
@@ -145,7 +252,7 @@ export async function probeTargets(
   const startedAt = now();
   for (const { url } of ordered) {
     if (now() - startedAt >= budgetMs) break;
-    probes.push(await probeWithRetry(page, url, PAGE_TIMEOUT_MS));
+    probes.push(await visit(url, PAGE_TIMEOUT_MS));
   }
 
   for (const p of probes) {
@@ -156,12 +263,15 @@ export async function probeTargets(
     } else if (p.status >= 500) {
       failures.push(`${label} returned HTTP ${p.status}`);
     }
+    // A burst is one page logging CONSOLE_ERROR_LIMIT counted errors. The
+    // run-wide total decides nothing (CHE-187) and is only spoken when it
+    // did — so the failure names the page, and the ok line says nothing.
+    if (p.consoleErrors >= CONSOLE_ERROR_LIMIT) {
+      failures.push(`${label} logged ${p.consoleErrors} console errors`);
+    }
   }
   if (uncaught.length) {
     failures.push(`uncaught JS error on load — "${uncaught[0]}"`);
-  }
-  if (consoleErrors >= CONSOLE_ERROR_LIMIT) {
-    failures.push(`${consoleErrors} console errors while loading the pages`);
   }
 
   return {
@@ -170,10 +280,33 @@ export async function probeTargets(
     unreached,
     skipped: ordered.length - (probes.length - 1),
     failures,
-    consoleErrors,
+    consoleErrors: probes.reduce((n, p) => n + p.consoleErrors, 0),
     pageErrors: uncaught.length,
     screenshotUrl,
   };
+}
+
+interface ConsoleTally {
+  counted: number;
+  ignored: number;
+  sample: string | undefined;
+}
+
+function withConsole(probe: PageProbe, tally: ConsoleTally): PageProbe {
+  return {
+    ...probe,
+    consoleErrors: tally.counted,
+    ignoredConsoleErrors: tally.ignored,
+    ...(tally.sample ? { consoleSample: tally.sample } : {}),
+  };
+}
+
+function originOf(url: string): string {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return "";
+  }
 }
 
 // A page that did not answer gets one more chance with a longer timeout. Only
@@ -191,14 +324,16 @@ async function probe(page: ProbePage, url: string, timeout: number): Promise<Pag
     const res = await page.goto(url, { waitUntil: "domcontentloaded", timeout });
     const status = res?.status() ?? null;
     return status === null
-      ? { url, status: null, error: "no response", attempts: 1 }
-      : { url, status, attempts: 1 };
+      ? { url, status: null, error: "no response", attempts: 1, consoleErrors: 0, ignoredConsoleErrors: 0 }
+      : { url, status, attempts: 1, consoleErrors: 0, ignoredConsoleErrors: 0 };
   } catch (err) {
     return {
       url,
       status: null,
       error: (err instanceof Error ? err.message : String(err)).slice(0, 160),
       attempts: 1,
+      consoleErrors: 0,
+      ignoredConsoleErrors: 0,
     };
   }
 }
