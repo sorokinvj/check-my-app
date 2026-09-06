@@ -9,10 +9,13 @@ import { distinctIdFromCookies } from "@/lib/analytics-server";
 import { appSlugFromUrl } from "@/lib/utils";
 import { createCheckSchema } from "@/lib/validation";
 import { verifyTurnstile } from "@/lib/turnstile";
+import { isSelfCheckRequest, selfCheckReadOnlyResponse } from "@/lib/self-check";
 import type { UserPlan } from "@/lib/enums";
 
 // POST /api/checks — create a run from a submission and trigger it.
 export async function POST(req: Request) {
+  // CHE-193: our own checker never creates a run. First, before anything else.
+  if (isSelfCheckRequest(req.headers)) return selfCheckReadOnlyResponse();
   const prisma = await getDbFromContext();
   const json = (await req.json().catch(() => null)) as { turnstileToken?: string } | null;
   const clientIp = req.headers.get("cf-connecting-ip");

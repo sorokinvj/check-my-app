@@ -2,10 +2,13 @@ import { NextResponse } from "next/server";
 import { getDbFromContext } from "@/lib/db";
 import { canMutateOwned } from "@/lib/auth";
 import { markFindingSchema } from "@/lib/validation";
+import { isSelfCheckRequest, selfCheckReadOnlyResponse } from "@/lib/self-check";
 
 // PATCH /api/findings/{id} — Loop C: triage a finding from the verdict page
 // (known / fixed / false_positive). Daily Check uses marks to filter noise.
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
+  // CHE-193: our own checker never marks a finding. First, before anything else.
+  if (isSelfCheckRequest(req.headers)) return selfCheckReadOnlyResponse();
   const prisma = await getDbFromContext();
   const json = await req.json().catch(() => null);
   const parsed = markFindingSchema.safeParse(json);

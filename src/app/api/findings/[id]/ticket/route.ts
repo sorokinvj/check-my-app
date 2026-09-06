@@ -6,12 +6,15 @@ import { LinearTracker } from "@/lib/tracker/linear";
 import { freshLinearToken } from "@/lib/tracker/token";
 import { decideTicketAction } from "@/lib/tracker/decision";
 import { draftForFinding, dedupKeyForFinding } from "@/lib/tracker/file";
+import { isSelfCheckRequest, selfCheckReadOnlyResponse } from "@/lib/self-check";
 
 // POST /api/findings/{id}/ticket — file this finding into the owner's tracker
 // using the parameters they set at onboarding (TicketPolicy) and their Linear
 // OAuth connection (TrackerIntegration). Owner-only; idempotent per finding via
 // IssueLink dedup (re-click comments on the open issue instead of refiling).
 export async function POST(_req: Request, { params }: { params: Promise<{ id: string }> }) {
+  // CHE-193: our own checker never files a ticket. First, before anything else.
+  if (isSelfCheckRequest(_req.headers)) return selfCheckReadOnlyResponse();
   const prisma = await getDbFromContext();
   const user = await getOptionalUser(prisma);
   if (!user) {
