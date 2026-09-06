@@ -238,6 +238,8 @@ model Finding {
   // Structured detail: where, browser, reproduced, whatWeTried[], whatHappened, whyItMatters.
   detail    String? // JSON (FindingDetail)
   mark      String          @default("none") // FindingMark
+  markedById String? // who set this mark (null = automated/agent)
+  markedAt   DateTime? // when the mark was set (null if never marked)
 
   evidence  Evidence[]
 
