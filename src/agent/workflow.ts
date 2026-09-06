@@ -41,6 +41,7 @@ import { loadAppKnowledge, type AppKnowledge } from "./knowledge";
 import { walkOneJourney, type WalkRun } from "./execution";
 import { orderByFocus } from "./limits";
 import { parseActions, replayJourney, type ReplayResult } from "./journey-replay";
+import { gateFindings } from "./findings-gate";
 import { synthesizeVerdict, type SynthesizedFinding } from "./synthesis";
 import { autoFileFindings } from "./autofile";
 import { fileCapabilityGaps } from "./capability-gaps";
@@ -638,11 +639,32 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
           rethrowBudgetNonRetryable,
         );
         await recordUsage(env, runId, "synthesis", llm.synthModel, synth.usage);
-        await persistFindings(env, runId, synth.findings);
-        if (synth.findings.length) {
+        // CHE-188: a finding whose only evidence is a skipped step is dropped
+        // before it becomes a row (run #153 wrote one off a step our own fill
+        // could not drive). Same journey/step order synthesis numbered its
+        // stepRefs by. Logged, not recorded as a run event: the gate is our
+        // machinery, and rule 1 keeps that out of what the customer reads.
+        const gated = gateFindings(
+          synth.findings,
+          await env.db.journey.findMany({
+            where: { runId },
+            select: {
+              steps: {
+                orderBy: { order: "asc" },
+                select: { status: true, unverifiedReason: true, label: true, observed: true },
+              },
+            },
+            orderBy: { order: "asc" },
+          }),
+        );
+        for (const d of gated.dropped) {
+          console.log(`[findings] dropped: ${d.finding.title} — ${d.reason}`);
+        }
+        await persistFindings(env, runId, gated.kept);
+        if (gated.kept.length) {
           await appendEvent(env, runId, "writing", {
             icon: "ok",
-            text: `Recorded ${synth.findings.length} findings`,
+            text: `Recorded ${gated.kept.length} findings`,
           });
         }
 
