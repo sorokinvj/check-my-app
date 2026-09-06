@@ -6,6 +6,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { setIntegrationEndpoints, updateAppSettings } from "../actions";
 import { DeleteAppSection } from "@/components/delete-app";
+import { fullRechecksRemaining } from "@/lib/plans";
+import type { UserPlan } from "@/lib/enums";
 
 // Per-app settings (CHE-64, redesigned CHE-81). Three meaning-first sections —
 // the page will keep growing, so hierarchy comes from sections, not from a pile
@@ -43,6 +45,15 @@ export default async function AppSettingsPage({
     }
   })();
   const frequency = app.watch?.frequency ?? "daily";
+
+  // CHE-137: full re-checks are an allowance per owner and UTC month (the
+  // regular re-check after a deploy is not limited). Shown where the owner
+  // decides when their app is checked.
+  const fullRechecks = await fullRechecksRemaining(db, { id: user.id, plan: user.plan as UserPlan });
+  const fullRechecksLine =
+    fullRechecks.limit === null
+      ? "Full re-checks this month: unlimited"
+      : `Full re-checks this month: ${fullRechecks.used}/${fullRechecks.limit}, resets ${fullRechecks.resetsOn}`;
 
   // Tracker token health (CHE-68/72): a pre-refresh-flow connection has no
   // refresh token, so its 24h access token dies and only a reconnect heals it.
@@ -189,6 +200,9 @@ export default async function AppSettingsPage({
                 defaultValue={app.watch?.notifyEmail ?? ""}
               />
             </label>
+            <p className="text-xs text-fg-faint sm:col-span-2">
+              {fullRechecksLine} · a regular re-check after a deploy is not limited.
+            </p>
           </div>
         </section>
       </form>

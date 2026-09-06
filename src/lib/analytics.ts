@@ -66,6 +66,19 @@ export type AnalyticsEvents = {
   sign_in_clicked: { from: string };
   /** Daily watch was enabled for an app. */
   watch_enabled: { appSlug: string };
+  /**
+   * A re-check button on a verdict was pressed (CHE-137). `regular` is the
+   * re-check after a deploy (re-walks what changed, not limited on paid
+   * plans); `full` walks every journey from scratch and is metered per plan.
+   */
+  recheck_clicked: { kind: "regular" | "full"; appSlug: string };
+  /**
+   * The verdict page rendered the refusal of a full re-check: the month's
+   * allowance is used up, or the plan carries none. `remaining` is what the
+   * plan still allows this month, so it is 0 here — kept as a property so
+   * the event has the same shape as the API's 403 body.
+   */
+  full_recheck_denied: { appSlug: string; remaining: number };
 };
 
 export type AnalyticsEvent = keyof AnalyticsEvents;
@@ -83,6 +96,8 @@ export const ANALYTICS_EVENTS = [
   "today_checks_viewed",
   "sign_in_clicked",
   "watch_enabled",
+  "recheck_clicked",
+  "full_recheck_denied",
 ] as const satisfies readonly AnalyticsEvent[];
 
 /** Names PostHog treats specially. Everything else is sent verbatim. */
