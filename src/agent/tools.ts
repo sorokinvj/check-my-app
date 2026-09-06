@@ -21,6 +21,7 @@ import {
   UNVERIFIABLE_FALLBACK,
 } from "@/lib/verdict-language";
 import { isSelfCheckRedirect, isSelfUrl, selfCheckRefusalIn } from "./self-hosts";
+import type { GapClass } from "./gap-classes";
 
 export interface ToolEnv {
   page: Page;
@@ -191,6 +192,10 @@ export interface ReportedStep {
   networkExcerpt?: string;
   // CHE-83: only meaningful when status === "skipped".
   unverifiedReason?: "our_capability" | "missing_access" | "not_applicable";
+  // CHE-198: which of our capabilities the step ran into, decided from the
+  // model's own words and the machine trail before productizeStep cuts the
+  // words (execution.ts onReportStep). Only set with our_capability.
+  gapClass?: GapClass;
 }
 
 export const BROWSER_TOOLS: Anthropic.Tool[] = [

@@ -209,6 +209,11 @@ model Step {
   // CHE-83: why a skipped step went unverified — our_capability (our defect,
   // auto-filed against us) | missing_access | not_applicable.
   unverifiedReason String?
+  // CHE-198: which of our capabilities an our_capability step ran into
+  // (src/agent/gap-classes.ts), decided at report time from the model's own
+  // words and the machine trail — the filer reads it instead of guessing from
+  // the customer's copy. NULL for other reasons and for rows written before.
+  gapClass   String?
   consoleLog String?
   networkLog String? // HAR excerpt
   // CHE-129: the machine actions (navigate/click/fill) the walk executed for
