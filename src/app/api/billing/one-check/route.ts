@@ -6,6 +6,7 @@ import { BILLING_UNCONFIGURED, getStripe, getStripeEnv, oneCheckPriceId } from "
 import { PENDING_CHECK_TTL_MS, paidCheckState } from "@/lib/one-check";
 import { createCheckSchema } from "@/lib/validation";
 import { distinctIdFromCookies } from "@/lib/analytics-server";
+import { isSelfCheckRequest, selfCheckReadOnlyResponse } from "@/lib/self-check";
 
 // Prod build inlines https://checkmyapp.dev (.env.production); local dev lands
 // back on localhost. Stripe requires absolute URLs here.
@@ -18,6 +19,8 @@ const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://checkmyapp.dev";
 // Checkout URL; nothing runs until Stripe says the session is paid (see
 // src/lib/one-check.ts). Anonymous — no account, no Stripe customer.
 export async function POST(req: Request) {
+  // CHE-193: our own checker never parks a paid check. First, before anything else.
+  if (isSelfCheckRequest(req.headers)) return selfCheckReadOnlyResponse();
   const { env } = getCloudflareContext();
   const stripeEnv = getStripeEnv(env as Record<string, unknown>);
   const stripe = getStripe(stripeEnv);

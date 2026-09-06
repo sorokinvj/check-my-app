@@ -11,19 +11,32 @@ import { getOptionalUser } from "@/lib/auth";
 import { hashClientKey } from "@/lib/crypto";
 import { createRecheckRun } from "@/lib/recheck";
 import { enableWatchForRun } from "@/lib/watch-enable";
+import { isSelfCheckRequest, selfCheckRedirectPath } from "@/lib/self-check";
+
+// CHE-193: our own checker pressing these buttons started real runs of a
+// stranger's site (#147, #148). A request carrying the checker header goes
+// straight back to the verdict — before the database, before auth.
+async function refuseSelfCheck(publicId: string): Promise<void> {
+  if (isSelfCheckRequest(await headers())) {
+    redirect(selfCheckRedirectPath(`/verdict/${publicId}`));
+  }
+}
 
 export async function recheckRunAction(publicId: string): Promise<void> {
+  await refuseSelfCheck(publicId);
   return doRecheck(publicId, false);
 }
 
 // CHE-74: walk everything from scratch — partial/smoke skip themselves.
 export async function fullRecheckRunAction(publicId: string): Promise<void> {
+  await refuseSelfCheck(publicId);
   return doRecheck(publicId, true);
 }
 
 // CHE-75: Enable Daily Watch, hydration-proof. Same defaults the API route's
 // schema applies (daily, notify on change only).
 export async function enableWatchAction(publicId: string): Promise<void> {
+  await refuseSelfCheck(publicId);
   const prisma = await getDbFromContext();
   const user = await getOptionalUser(prisma);
   const result = await enableWatchForRun(prisma, user, {

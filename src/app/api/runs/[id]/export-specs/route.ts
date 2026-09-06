@@ -3,6 +3,7 @@ import { getDbFromContext } from "@/lib/db";
 import { getOptionalUser } from "@/lib/auth";
 import { decryptSecret } from "@/lib/crypto";
 import { GitHubError, openSpecsPr, specFileSlug } from "@/lib/github";
+import { isSelfCheckRequest, selfCheckReadOnlyResponse } from "@/lib/self-check";
 
 // POST /api/runs/{id}/export-specs — put this run's generated Playwright specs
 // into the owner's repo as a PR (never a direct push to the default branch).
@@ -11,6 +12,8 @@ import { GitHubError, openSpecsPr, specFileSlug } from "@/lib/github";
 // e2e/ is the collision-free choice for a repo that already has unit tests; the
 // checkmyapp/ subfolder keeps generated specs apart from hand-written ones.
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  // CHE-193: our own checker never opens a PR on a customer's repo. First, before anything else.
+  if (isSelfCheckRequest(req.headers)) return selfCheckReadOnlyResponse();
   const db = await getDbFromContext();
   const user = await getOptionalUser(db);
   if (!user) {

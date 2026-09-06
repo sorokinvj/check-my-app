@@ -10,6 +10,7 @@ import {
   type BillablePlan,
   BILLABLE_PLANS,
 } from "@/lib/stripe";
+import { isSelfCheckRequest, selfCheckReadOnlyResponse } from "@/lib/self-check";
 
 // Prod build inlines https://checkmyapp.dev (.env.production); local dev lands
 // back on localhost. Stripe requires absolute URLs here.
@@ -20,6 +21,8 @@ const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://checkmyapp.dev";
 // `billing_unconfigured` until STRIPE_SECRET_KEY + price ids exist, so the
 // route ships before the Stripe account does.
 export async function POST(req: Request) {
+  // CHE-193: our own checker never opens a checkout. First, before anything else.
+  if (isSelfCheckRequest(req.headers)) return selfCheckReadOnlyResponse();
   const { env } = getCloudflareContext();
   const stripeEnv = getStripeEnv(env as Record<string, unknown>);
   const stripe = getStripe(stripeEnv);

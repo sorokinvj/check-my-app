@@ -4,6 +4,7 @@ import { getOptionalUser } from "@/lib/auth";
 import { canUseFrequency } from "@/lib/plans";
 import type { UserPlan } from "@/lib/enums";
 import { updateWatchSchema } from "@/lib/validation";
+import { isSelfCheckRequest, selfCheckReadOnlyResponse } from "@/lib/self-check";
 
 // Resolve the caller's own Watch for an app slug (CHE-33 tenant-scoped). Returns
 // null if not signed in or the app/watch isn't theirs.
@@ -20,6 +21,9 @@ async function ownWatch(slug: string) {
 
 // PATCH /api/watch/{slug} — Screen 4 settings: frequency, notify rule, pause/resume.
 export async function PATCH(req: Request, { params }: { params: Promise<{ slug: string }> }) {
+  // CHE-193: our own checker never changes a watch (CHE-98 was exactly this:
+  // the agent pressed resume while exploring). First, before anything else.
+  if (isSelfCheckRequest(req.headers)) return selfCheckReadOnlyResponse();
   const json = await req.json().catch(() => null);
   const parsed = updateWatchSchema.safeParse(json);
   if (!parsed.success) {
@@ -65,6 +69,8 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ slug: 
 // DELETE /api/watch/{slug} — cancel the watch. Runs keep their history; retained
 // credentials are dropped with the watch (privacy §5).
 export async function DELETE(_req: Request, { params }: { params: Promise<{ slug: string }> }) {
+  // CHE-193: our own checker never cancels a watch. First, before anything else.
+  if (isSelfCheckRequest(_req.headers)) return selfCheckReadOnlyResponse();
   const { db, watch, unauthorized } = await ownWatch((await params).slug);
   if (unauthorized) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   if (!watch) return NextResponse.json({ error: "Watch not found" }, { status: 404 });
