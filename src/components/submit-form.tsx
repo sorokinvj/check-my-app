@@ -264,7 +264,7 @@ export function SubmitForm({ initialUrl = "" }: { initialUrl?: string }) {
 
       {TURNSTILE_SITE_KEY && <div ref={turnstileRef} className="flex justify-center" />}
 
-      <Button type="submit" disabled={!valid || submitting} className="w-full py-3.5 text-[15px]">
+      <Button type="submit" disabled={submitting} className="w-full py-3.5 text-[15px]">
         {submitting ? (
           <>
             <span className="inline-block h-2 w-2 animate-pulse-dot rounded-full bg-ink-950" />
