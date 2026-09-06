@@ -231,12 +231,15 @@ export const BROWSER_TOOLS: Anthropic.Tool[] = [
     name: "verify_links",
     description:
       "Verify a batch of outbound links WITHOUT navigating: each URL is fetched " +
-      "server-side and reported as OK or BROKEN with its status. YouTube links are " +
-      "checked via the oEmbed API, which returns an error for deleted/private/" +
-      "unplayable videos — the definitive answer to 'do all these video links work'. " +
-      "mailto: links are checked too — the address is validated, which is the only " +
-      "thing about one that can be wrong from outside. Use for link-heavy pages and " +
-      "for owner concerns about links; up to 60 URLs per call.",
+      "server-side and reported as OK or BROKEN with its status, or UNREACHABLE when " +
+      "it could not be reached from here (a timeout, a connection error, a host that " +
+      "refuses automated traffic) — UNREACHABLE says nothing about the link: report " +
+      "that step skipped with unverifiedReason our_capability, never broken or risky. " +
+      "YouTube links are checked via the oEmbed API, which returns an error for " +
+      "deleted/private/unplayable videos — the definitive answer to 'do all these " +
+      "video links work'. mailto: links are checked too — the address is validated, " +
+      "which is the only thing about one that can be wrong from outside. Use for " +
+      "link-heavy pages and for owner concerns about links; up to 60 URLs per call.",
     input_schema: {
       type: "object",
       properties: {
@@ -372,7 +375,7 @@ export async function executeTool(
       case "get_network_log":
         return scrubSecrets(env, drainLogs(env));
       case "verify_links":
-        return await verifyLinks(input);
+        return await verifyLinks(input, env.targetOrigin);
       case "record_created": {
         if (!env.onResourceCreated) return "No ledger available — do not create records in this run.";
         const marker = String(input.marker ?? "");
@@ -412,6 +415,9 @@ export async function executeTool(
         // with a reason alone.
         coerceUnpublished404(step, env);
         classifyUnverified(step);
+        // CHE-190 after both: a risky step is never judged (CHE-169) and never
+        // classified above, so a link we could not reach had no gate at all.
+        coerceUnreachable(step, env);
         // CHE-180: the step leaves here with the model's words intact — the
         // judge (CHE-169) rules on them. productizeStep runs in the walk's
         // onReportStep, after the judge and before the row is written.
@@ -1106,6 +1112,99 @@ export function coerceUnpublished404(
   step.observed = `${observed}${observed && !/[.!?]$/.test(observed) ? "." : ""} This address is not part of the product's navigation.`.trim();
 }
 
+// CHE-190. Run #147 (theins.ru): verify_links fetched vk.com/share.php and
+// connect.ok.ru/offer from the worker, both stalled past the 10 s limit, the
+// tool called that "BROKEN fetch-error", and the model wrote a risky step and
+// the finding "VK and Odnoklassniki share links did not resolve". The verdict
+// went to needs_attention; run #148 twenty minutes later found nothing and
+// went mostly_ok. From a residential connection both links answer 302 into the
+// share widgets — those hosts refuse or stall datacenter egress, which is a
+// fact about where we fetch from, not about the link. CLAUDE.md rule 3:
+// silence is not evidence; rule 8: our incapacity is never their defect.
+//
+// Two mechanisms. verifyLinks (below) now answers UNREACHABLE for a fetch
+// error, a timeout, or a 403/429/503 from a host other than the target, with
+// the instruction to report such a step skipped. And here, because a tool
+// result is still only a sentence to the model: a risky/confusing/broken step
+// whose words rest on a host we could not reach is written skipped /
+// our_capability. `risky` is included deliberately — the judge (CHE-169) does
+// not see it and classifyUnverified (CHE-82) does not touch it, which is
+// exactly how #147's step reached the verdict untested.
+//
+// The step is left alone when it also cites a real 4xx/5xx about the product
+// itself — its own host, a bare path, or a status with no host named — or a
+// console exception: that is evidence a user would hit, and a timeout beside
+// it is not the story. A status in a sentence naming only a foreign host
+// ("HTTP 403 from vk.com") is that host gating us and does not count.
+const EGRESS_PHRASE =
+  /\bUNREACHABLE\b|\btimed?[\s-]?out\b|\bcould not be reached\b|\bunreachable\b|\bconnection (?:reset|refused|failed|error|closed)\b|\bE(?:CONNRESET|CONNREFUSED|TIMEDOUT|HOSTUNREACH)\b/i;
+const CITED_HOST = /\b((?:[a-z0-9-]+\.)+[a-z]{2,})\b/gi;
+// "share.php" and "index.html" match the host shape; they are file names.
+const NOT_A_HOST = /\.(?:php|html?|x?html|js|mjs|ts|tsx|css|json|xml|png|jpe?g|gif|svg|webp|ico|txt|pdf|aspx?|jsp|map|woff2?)$/i;
+const BARE_PATH = /(?:^|[\s"'`(])\/[a-z0-9][a-z0-9_\-./]*/i;
+const CONSOLE_EVIDENCE = /console error|exception|uncaught|stack trace|\bcrash/i;
+const HTTP_ERROR_STATUS = /\b[45]\d{2}\b/;
+
+function citedHosts(text: string): string[] {
+  const out: string[] = [];
+  for (const m of text.matchAll(CITED_HOST)) {
+    const host = m[1].toLowerCase();
+    if (!NOT_A_HOST.test(host) && !out.includes(host)) out.push(host);
+  }
+  return out;
+}
+
+function bareHost(hostname: string): string {
+  return hostname.toLowerCase().replace(/^www\./, "");
+}
+
+// The target and anything under it (api.target.test is theirs); www. is not a
+// different site.
+export function isTargetHost(hostname: string, targetOrigin: string): boolean {
+  let target: string;
+  try {
+    target = bareHost(new URL(targetOrigin).hostname);
+  } catch {
+    return false;
+  }
+  const host = bareHost(hostname);
+  return host === target || host.endsWith(`.${target}`);
+}
+
+function evidenceAgainstProduct(text: string, targetOrigin: string): boolean {
+  for (const sentence of splitSentences(text)) {
+    if (CONSOLE_EVIDENCE.test(sentence)) return true;
+    if (!HTTP_ERROR_STATUS.test(sentence) || /\bUNREACHABLE\b/.test(sentence)) continue;
+    const hosts = citedHosts(sentence);
+    const foreign = hosts.filter((h) => !isTargetHost(h, targetOrigin));
+    if (foreign.length === 0) return true;
+    if (foreign.length < hosts.length || BARE_PATH.test(sentence)) return true;
+  }
+  return false;
+}
+
+function listHosts(hosts: string[]): string {
+  if (hosts.length <= 1) return hosts[0] ?? "this link";
+  return `${hosts.slice(0, -1).join(", ")} and ${hosts[hosts.length - 1]}`;
+}
+
+export function coerceUnreachable(step: ReportedStep, env: Pick<ToolEnv, "targetOrigin">): void {
+  if (step.status !== "risky" && step.status !== "confusing" && step.status !== "broken") return;
+  const text = `${step.observed ?? ""} ${step.attempted ?? ""}`;
+  if (!EGRESS_PHRASE.test(text)) return;
+  const foreign = citedHosts(text).filter((h) => !isTargetHost(h, env.targetOrigin));
+  // A timeout with no foreign host named is about the product itself unless
+  // the tool's own word is there — verify_links names UNREACHABLE and nothing
+  // else does.
+  if (foreign.length === 0 && !/\bUNREACHABLE\b/.test(text)) return;
+  if (evidenceAgainstProduct(text, env.targetOrigin)) return;
+  console.warn(`[report_step] "${step.label}": ${step.status} on an unreachable host (${listHosts(foreign)}) → skipped`);
+  step.status = "skipped";
+  step.unverifiedReason = "our_capability";
+  const observed = (step.observed ?? "").trim();
+  step.observed = `${observed}${observed && !/[.!?]$/.test(observed) ? "." : ""} Could not confirm ${listHosts(foreign)} this run.`.trim();
+}
+
 // Bulk outbound-link verification (CHE-81 follow-up). Run #92 inventoried 200+
 // YouTube links on meetbashar.com but could not "open" any (target=_blank in a
 // headless page) and had to punt to "spot-check in a real browser". Links are a
@@ -1133,7 +1232,28 @@ function checkMailto(url: string): string {
   return bad.length ? `BROKEN malformed-address (${bad.join(", ")}) ${url}` : `OK mailto ${url}`;
 }
 
-async function verifyLinks(input: Record<string, unknown>): Promise<string> {
+// CHE-190: what the model is told when a link could not be reached. The line
+// is tool output, not customer text — it may say "from here".
+export const UNREACHABLE_INSTRUCTION =
+  "could not be reached from here — that says nothing about the link; report those steps " +
+  "skipped (unverifiedReason our_capability), never broken or risky.";
+
+// CHE-190: the statuses a host uses to turn away traffic it does not like —
+// a datacenter address, a missing browser fingerprint, too many of us. From
+// the target itself a 403 or 503 is the product's own answer and stays
+// BROKEN; from any other host it says where we fetched from, not whether the
+// link works. A 429 is our own request volume wherever it comes from
+// (CLAUDE.md rule 3) and is never BROKEN.
+const GATING_STATUSES = new Set([403, 429, 503]);
+
+function unreachableReason(err: unknown): string {
+  const name = err instanceof Error ? err.name : "";
+  const message = err instanceof Error ? err.message : String(err);
+  if (name === "TimeoutError" || name === "AbortError" || /timed? ?out|abort/i.test(message)) return "timed out";
+  return `connection failed: ${message.slice(0, 60)}`;
+}
+
+async function verifyLinks(input: Record<string, unknown>, targetOrigin: string): Promise<string> {
   const raw = Array.isArray(input.urls) ? input.urls.map(String) : [];
   const mailtos = [...new Set(raw)].filter((u) => /^mailto:/i.test(u)).slice(0, 60);
   const urls = [...new Set(raw)].filter((u) => /^https?:\/\//i.test(u)).slice(0, 60);
@@ -1156,9 +1276,21 @@ async function verifyLinks(input: Record<string, unknown>): Promise<string> {
       });
       const ok = res.status >= 200 && res.status < 400;
       const via = isYt ? " (via YouTube oEmbed)" : "";
-      return `${ok ? "OK" : "BROKEN"} ${res.status}${via} ${url}`;
+      if (ok) return `OK ${res.status}${via} ${url}`;
+      // The host that answered is the one after redirects, when known.
+      let answeredBy = "";
+      try {
+        answeredBy = new URL(res.url || target).hostname;
+      } catch {
+        answeredBy = "";
+      }
+      const gated =
+        GATING_STATUSES.has(res.status) &&
+        (res.status === 429 || !answeredBy || !isTargetHost(answeredBy, targetOrigin));
+      if (gated) return `UNREACHABLE (HTTP ${res.status} from ${answeredBy || "the host"}) ${url}`;
+      return `BROKEN ${res.status}${via} ${url}`;
     } catch (err) {
-      return `BROKEN fetch-error (${err instanceof Error ? err.message.slice(0, 60) : "?"}) ${url}`;
+      return `UNREACHABLE (${unreachableReason(err)}) ${url}`;
     }
   };
 
@@ -1169,7 +1301,10 @@ async function verifyLinks(input: Record<string, unknown>): Promise<string> {
   }
   results.push(...mailtos.map(checkMailto));
   const broken = results.filter((r) => r.startsWith("BROKEN")).length;
-  return `Checked ${results.length} links — ${broken} broken.\n${results.join("\n")}`;
+  const unreachable = results.filter((r) => r.startsWith("UNREACHABLE")).length;
+  const summary = `Checked ${results.length} links — ${broken} broken, ${unreachable} unreachable.`;
+  const note = unreachable ? `\n${unreachable} ${UNREACHABLE_INSTRUCTION}` : "";
+  return `${summary}${note}\n${results.join("\n")}`;
 }
 
 function resolveLocator(page: Page, input: Record<string, unknown>) {

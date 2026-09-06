@@ -48,6 +48,7 @@
     "verify:analytics": "tsx --tsconfig tsconfig.json scripts/verify-analytics.ts",
     "verify:step-language": "tsx --tsconfig tsconfig.json scripts/verify-step-language.ts",
     "verify:findings-gate": "tsx --tsconfig tsconfig.json scripts/verify-findings-gate.ts",
+    "verify:egress-links": "tsx --tsconfig tsconfig.json scripts/verify-egress-links.ts",
     "verify:public-copy": "tsx --tsconfig tsconfig.json scripts/verify-public-copy.ts",
     "verify:self-check-guard": "tsx --tsconfig tsconfig.json scripts/verify-self-check-guard.ts",
     "posthog:setup": "tsx --tsconfig tsconfig.json scripts/posthog-setup.ts",
