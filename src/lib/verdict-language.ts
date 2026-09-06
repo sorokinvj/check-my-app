@@ -118,7 +118,7 @@ export const HOMEWORK_PATTERNS: RegExp[] = [
 // double-check their order before paying") describes the product's UI, and a
 // sentence that quotes or reports the page ("the page says please confirm your
 // email") is evidence. Both must survive the gate. Preceded-by is judged inside
-// the clause: "Readers can share; worth confirming the dialog opens" is still
+// the clause: "Readers can share, worth confirming the dialog opens" is still
 // homework — the audience is in the other clause.
 const AUDIENCE = /\b(?:users?|customers?|visitors?|readers?|subscribers?|members?|shoppers?|applicants?|the\s+user|a\s+user)\b/i;
 // The one ask we may make (CLAUDE.md rule 2): inputs we need. Run #62 wrote
@@ -134,13 +134,33 @@ const ACCESS_REQUEST = new RegExp(
   "i",
 );
 const REPORTING_VERB = /\b(?:says?|said|reads?|tells?|told|asks?|asked|prompts?|prompted|states?|stated|instructs?|instructed|warns?|warned|labell?ed|titled|reading)\b(?:\s+[\w'’-]+){0,4}\s*[:,]?\s*$/i;
-const CLAUSE_BREAK_BEFORE = /.*[;—–]\s*/s;
+
+// One notion of a clause for the whole file: a dash, semicolon, colon or
+// comma, with or without a connector. cutHomework cuts the ask at exactly
+// this boundary, and the exemptions below are judged inside exactly this
+// boundary — PR #57 review: with the comma missing here, "Readers can share,
+// worth confirming the dialog opens" was exempted by the audience word in the
+// clause before, and an access request anywhere in the sentence ("…, and
+// please share a working test account") exempted an unrelated ask in front.
+const CLAUSE_SEP_SOURCE = "(?:\\s+[—–-]+\\s+|;\\s+|:\\s+|,\\s+)(?:(?:so|and|but|then|hence|thus|therefore|which\\s+is\\s+why)\\s+)?";
+const CLAUSE_SEP = new RegExp(CLAUSE_SEP_SOURCE, "i");
+const TAIL_BREAK = new RegExp(`${CLAUSE_SEP_SOURCE}$`, "i");
+
+const lastClause = (text: string) => text.split(CLAUSE_SEP).pop() ?? "";
+const firstClause = (text: string) => text.split(CLAUSE_SEP)[0] ?? "";
 
 function isReportedSpeech(sentence: string, matchIndex: number): boolean {
   const before = sentence.slice(0, matchIndex);
   if (insideQuotes(before)) return true;
-  const clause = before.replace(CLAUSE_BREAK_BEFORE, "");
-  return AUDIENCE.test(clause) || REPORTING_VERB.test(clause) || ACCESS_REQUEST.test(sentence);
+  // The clause the match sits in: what precedes it up to the last break, and
+  // what follows it up to the next.
+  const lead = lastClause(before);
+  const local = lead + firstClause(sentence.slice(matchIndex));
+  // A reporting verb introduces the quote across the break itself ("the page
+  // says, please confirm your email"), so when the match opens a clause the
+  // introduction is the clause before.
+  const intro = lead.trim() ? lead : lastClause(before.replace(TAIL_BREAK, ""));
+  return AUDIENCE.test(lead) || REPORTING_VERB.test(intro) || ACCESS_REQUEST.test(local);
 }
 
 // Inside an open quotation? Double quotes count by parity; single quotes are
@@ -190,9 +210,8 @@ export const HOMEWORK_FALLBACK = "We could not confirm this in this run.";
 // homework opens a clause after a dash, semicolon, colon or comma (with or
 // without a connector), the clause goes and the sentence before it stays,
 // closed with a full stop; when the homework IS the sentence, the sentence
-// goes. Never a fragment: a prefix under 20 characters is not kept.
-const TAIL_BREAK = /(?:\s+[—–-]+\s+|;\s+|:\s+|,\s+)(?:(?:so|and|but|then|hence|thus|therefore|which\s+is\s+why)\s+)?$/i;
-
+// goes. Never a fragment: a prefix under 20 characters is not kept. The
+// boundary is CLAUSE_SEP / TAIL_BREAK above, shared with isReportedSpeech.
 function cutHomework(sentences: string[]): { sentences: string[]; changed: boolean } {
   let changed = false;
   const out: string[] = [];

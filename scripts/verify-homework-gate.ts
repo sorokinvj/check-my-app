@@ -69,6 +69,11 @@ const HOMEWORK = [
   "Remember to verify the redirect after deploying.",
   "Don't forget to test the share dialog on mobile.",
   "Spot-check the VK share yourself.",
+  // PR #57 review: the audience word in the clause BEFORE the comma does not
+  // exempt the ask, and an access request in a LATER clause does not exempt
+  // an unrelated ask in front of it.
+  "Readers can share, worth confirming the dialog opens.",
+  "You should verify the redirect target, and please share a working test account.",
 ];
 
 // ─── What must pass ───────────────────────────────────────────────────────────
@@ -93,6 +98,9 @@ const NOT_HOMEWORK = [
   "The user is asked to verify their phone number on the second step.",
   "Visitors can share an article without confirming anything.",
   "The page prompts visitors to verify they are human.",
+  "On mobile, customers should double-check their order before paying.",
+  // the reporting verb introduces the quote across the comma
+  "The page says, please confirm your email address.",
   // the product's own words, quoted or reported
   "The form showed 'Something went wrong. Please try again.'",
   "The banner reads \"Please confirm your email address\".",
