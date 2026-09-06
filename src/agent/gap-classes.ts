@@ -123,9 +123,12 @@ const TEXT_RULES: { match: RegExp; cls: GapClass }[] = [
 // A host turning us away: a challenge page, or the statuses a host uses for
 // traffic it does not like (CHE-190). With a host other than the target named
 // it is the third party's door; on the target itself it is the CAPTCHA class.
+// 429 is deliberately not here: it is our own request volume (CLAUDE.md rule
+// 3), not that host's policy — a foreign-host 429 is "we could not reach it
+// from here" (egress_unreachable), and the ticket must say so.
 const CHALLENGE =
   /captcha|turnstile|recaptcha|hcaptcha|bot (?:check|protection|challenge|detection)|cloudflare|security (?:verification|challenge|check)|challenge page|blocking automated|automated (?:access|traffic)|access denied|just a moment|verify you are human|refuses automated/i;
-const GATE_STATUS = /\b(?:403|429|503)\b/;
+const GATE_STATUS = /\b(?:403|503)\b/;
 // A host we could not reach at all: verify_links' own word, a timeout, a reset,
 // and the sentence coerceUnreachable appends — the one that survives the
 // customer-copy scrub.

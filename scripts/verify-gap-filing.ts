@@ -333,6 +333,21 @@ async function main() {
       "verify_links' UNREACHABLE (HTTP 403 from vk.com) → third_party_block",
       classifyGap({ text: "UNREACHABLE (HTTP 403 from vk.com) https://vk.com/share.php", targetOrigin: "https://theins.ru" }) === "third_party_block",
     );
+    // PR #60 review: a 429 is our own request volume (CLAUDE.md rule 3), not
+    // the host's door — it must not be filed as a third-party block.
+    check(
+      "verify_links' UNREACHABLE (HTTP 429 from vk.com) → egress_unreachable, not third_party_block",
+      classifyGap({ text: "UNREACHABLE (HTTP 429 from vk.com) https://vk.com/share.php", targetOrigin: "https://theins.ru" }) === "egress_unreachable",
+      classifyGap({ text: "UNREACHABLE (HTTP 429 from vk.com) https://vk.com/share.php", targetOrigin: "https://theins.ru" }),
+    );
+    check(
+      "a bare 403 from a foreign host (no UNREACHABLE word) → third_party_block",
+      classifyGap({ text: "The share dialog never opened; hugedomains.com answered HTTP 403.", targetOrigin: "https://your-app.com" }) === "third_party_block",
+    );
+    check(
+      "a 503 from a foreign host → third_party_block",
+      classifyGap({ text: "UNREACHABLE (HTTP 503 from t.me) https://t.me/share", targetOrigin: "https://theins.ru" }) === "third_party_block",
+    );
     check(
       "coerceUnreachable's surviving sentence → egress_unreachable",
       classifyGap({ text: "The share button did nothing visible. Could not confirm vk.com this run.", targetOrigin: "https://theins.ru" }) === "egress_unreachable",
