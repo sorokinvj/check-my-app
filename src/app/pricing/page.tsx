@@ -12,6 +12,14 @@ export const metadata = pageMetadata({
 // Pricing · /pricing (CHE-40 phases 2a + 3). Starter/Growth CTAs go through
 // <UpgradeCta>: signed-out → /sign-in, signed-in → Stripe Checkout (or a quiet
 // "launches soon" note until billing is configured). Business stays a mailto.
+//
+// CHE-137 (owner, 2026-09-06): what a paid plan sells is "confidence every
+// morning that my app did not break overnight" plus "the answer right now,
+// after a deploy". The re-check after a deploy is unlimited on every paid
+// plan; only the FULL re-check (every journey from scratch) is metered, and
+// the numbers here are PLAN_LIMITS[plan].fullRechecksPerMonth in
+// src/lib/plans.ts — change them together. No per-month run count is promised
+// anywhere else on the site, by the same decision.
 
 type Plan = {
   name: string;
@@ -46,6 +54,7 @@ const PLANS: Plan[] = [
     blurb: "Your app, watched every day.",
     features: [
       "Daily Watch — a full journey check every 24h",
+      "Re-check after a deploy, any time — up to 5 full re-checks a month",
       "Regression alerts by email",
       "Every verdict kept, with its evidence — nothing expires",
       "Export Playwright specs to GitHub as a PR",
@@ -62,6 +71,7 @@ const PLANS: Plan[] = [
     features: [
       "Up to 5 apps",
       "Checks every 6h — uptime and page health each cycle, one deep journey walk a day per app",
+      "Re-check after a deploy, any time — up to 20 full re-checks a month",
       "Findings auto-filed to your tracker — Linear now, GitHub next — with dedup & escalation",
       "Fixes verified from the outside: close a ticket and the next run confirms it",
     ],
@@ -76,6 +86,7 @@ const PLANS: Plan[] = [
     features: [
       "API access — run checks from CI, MCP or your own tooling",
       "Checks every 6h, on the paths you nominate",
+      "Re-check after a deploy, any time — 100 full re-checks a month",
       "SSO",
       "SLA",
       "Priority support from the person who builds it",
