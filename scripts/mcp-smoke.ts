@@ -19,6 +19,10 @@
 // Usage:
 //   npm run mcp:smoke                       # deploy_sha = origin/main short sha
 //   npm run mcp:smoke -- --sha <build-id>   # bind the run to another build
+//   npm run mcp:smoke -- --run <run-id>     # attach to a run already started
+//                                           # (no start_check; nothing new is
+//                                           # created) — e.g. after the shell
+//                                           # that started the smoke was cut
 //   CHECKMYAPP_URL=http://localhost:3000 npm run mcp:smoke   # a local stack
 
 import "dotenv/config";
@@ -67,19 +71,22 @@ async function main() {
   console.log(`tools: ${tools.join(", ")}`);
 
   const t0 = Date.now();
-  const started = textOf(
-    await client.callTool({
-      name: "start_check",
-      arguments: {
-        url: TARGET,
-        notes: "CHE-200 MCP smoke: read-only walk, do not create anything",
-        scope_hints: "Do not sign up, do not submit forms, do not press buttons that create records.",
-        deploy_sha: sha,
-        deploy_env: "production",
-      },
-    }),
-  );
-  console.log(`start_check → ${JSON.stringify(started)}`);
+  const attach = arg("--run");
+  const started = attach
+    ? { run_id: attach, __isError: false }
+    : textOf(
+        await client.callTool({
+          name: "start_check",
+          arguments: {
+            url: TARGET,
+            notes: "CHE-200 MCP smoke: read-only walk, do not create anything",
+            scope_hints: "Do not sign up, do not submit forms, do not press buttons that create records.",
+            deploy_sha: sha,
+            deploy_env: "production",
+          },
+        }),
+      );
+  console.log(attach ? `attached to run ${attach}` : `start_check → ${JSON.stringify(started)}`);
   if (started.__isError || typeof started.run_id !== "string") {
     console.error("mcp-smoke: start_check was refused; not retrying.");
     await client.close();
