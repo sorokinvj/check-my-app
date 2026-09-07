@@ -11,8 +11,6 @@ import {
   branchFor,
   isDoerBranch,
   isMergeCandidate,
-  QUEUE_LABEL,
-  HOLD_LABEL,
 } from "./doer/eligibility.mjs";
 import {
   decideShadow,
@@ -34,56 +32,56 @@ const check = (name, ok, detail = "") => {
   console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? `  →  ${detail}` : ""}`);
 };
 
-const issue = (number, labels, createdAt, title = "t") => ({ number, labels, createdAt, title });
+// A queue item as board-queue.ts hands it over: a ticket of ours that a run
+// filed and queue.mjs admitted. No labels — the label queue is gone (CHE-118).
+const item = (ticket, createdAt, label = "t") => ({ ticket, createdAt, label, kind: "gap" });
 
 // ── which ticket, and whether to act at all ──────────────────────────────────
 {
-  const d = decideTick({ issues: [], openDoerPrs: [], stopped: true });
+  const d = decideTick({ queue: [], openDoerPrs: [], stopped: true });
   check("stop flag halts the tick", d.act === false && d.reason.includes("stopped"), d.reason);
 }
 {
   const d = decideTick({
-    issues: [issue(1, [QUEUE_LABEL], "2026-09-01")],
+    queue: [item("CHE-96", "2026-09-01")],
     openDoerPrs: [{ number: 9, headRef: "doer/9-x" }],
     stopped: false,
   });
   check("one open PR blocks a second", d.act === false && d.reason.includes("#9"), d.reason);
 }
 {
-  const d = decideTick({ issues: [issue(1, ["bug"], "2026-09-01")], openDoerPrs: [], stopped: false });
-  check("unlabelled issues are not the queue", d.act === false, d.reason);
+  const d = decideTick({ queue: [], openDoerPrs: [], stopped: false });
+  check(
+    "an empty queue is named, not silent",
+    d.act === false && d.reason.includes("no open ticket"),
+    d.reason,
+  );
 }
 {
   const d = decideTick({
-    issues: [issue(1, [QUEUE_LABEL, HOLD_LABEL], "2026-09-01")],
+    queue: [item("CHE-146", "2026-09-02"), item("CHE-96", "2026-08-20")],
     openDoerPrs: [],
     stopped: false,
   });
-  check("a held issue is skipped", d.act === false, d.reason);
+  check(
+    "oldest first, so nothing starves",
+    d.act === true && d.item.ticket === "CHE-96",
+    `picked ${d.item?.ticket}`,
+  );
 }
 {
+  // The reader sorts too; this rail must hold even if it hands over an
+  // out-of-order list, because the order is a decision and decisions live here.
   const d = decideTick({
-    issues: [issue(5, [QUEUE_LABEL], "2026-09-02"), issue(3, [QUEUE_LABEL], "2026-08-20")],
+    queue: [item("CHE-146", "2026-09-02"), item("CHE-96", "2026-08-20")].reverse(),
     openDoerPrs: [],
     stopped: false,
   });
-  check("oldest first, so nothing starves", d.act === true && d.issue.number === 3, `picked #${d.issue?.number}`);
+  check("order does not depend on the reader", d.act === true && d.item.ticket === "CHE-96", d.item?.ticket);
 }
 {
-  const d = decideTick({
-    issues: [issue(3, [QUEUE_LABEL], "2026-08-20")],
-    openDoerPrs: [],
-    stopped: false,
-  });
+  const d = decideTick({ queue: [item("CHE-96", "2026-08-20")], openDoerPrs: [], stopped: false });
   check("merging is the default, not an opt-in", d.act === true && d.mayMerge === true, `mayMerge=${d.mayMerge}`);
-}
-{
-  const d = decideTick({
-    issues: [issue(3, [QUEUE_LABEL, HOLD_LABEL], "2026-08-20")],
-    openDoerPrs: [],
-    stopped: false,
-  });
-  check("a held ticket is not claimed at all", d.act === false, d.reason);
 }
 
 // ── the merge gate ───────────────────────────────────────────────────────────
@@ -493,6 +491,22 @@ const approved = [{ state: "APPROVED", headSha: "aaa" }];
     "an unclassified defect is refused — nothing is named to fix",
     v.ok === false && v.reason.includes("classifying it is the filer's job"),
     v.reason,
+  );
+}
+{
+  // The shape the reader hands over: capability already recognised, no title.
+  // Both shapes must reach the same ruling — a rule that depends on who asks is
+  // two rules. This case exists because the first version had exactly that bug,
+  // and the dry run against the real board caught it: eight tickets refused as
+  // "not filed by a run" when all eight were filed by runs.
+  const resolved = admit({ label: "Checker leaves test records behind in the customer's product", kind: "gap" });
+  const byTitle = admit({
+    title: "[Checker gap] Checker leaves test records behind in the customer's product",
+  });
+  check(
+    "the reader's shape and a raw title reach the same ruling",
+    resolved.ok === true && byTitle.ok === true && resolved.reason === byTitle.reason,
+    `${resolved.ok}/${byTitle.ok}`,
   );
 }
 {

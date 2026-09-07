@@ -111,6 +111,12 @@ export const REFUSED_DEFECTS = new Map([
  * @returns {{ok:true, reason:string} | {ok:false, reason:string}}
  */
 export function admit(ticket) {
+  // Two callers, two shapes. The reader (board-queue.ts) has already recognised
+  // the capability from the ticket's dedup key and hands over {label, kind};
+  // anything else arrives as a raw title and is parsed below. Both must reach
+  // the same ruling, or the rule would depend on who is asking.
+  if (ticket?.label && ticket?.kind) return ruling(ticket.label, ticket.kind);
+
   const title = String(ticket?.title ?? "").trim();
 
   // The filer's title format is "[Checker gap] {label}" / "[Checker defect]
@@ -132,8 +138,18 @@ export function admit(ticket) {
     .replace(/^CheckMyApp\s+(?:agent\s+capability|checker\s+accuracy):\s*/i, "")
     .trim();
 
-  const admitted = gap ? ADMITTED_CAPABILITIES : ADMITTED_DEFECTS;
-  const refused = gap ? REFUSED_CAPABILITIES : REFUSED_DEFECTS;
+  return ruling(label, gap ? "gap" : "defect");
+}
+
+/**
+ * The ruling for one capability or defect class.
+ *
+ * @param {string} label the capability the filer named
+ * @param {"gap"|"defect"} kind which family it belongs to
+ */
+export function ruling(label, kind) {
+  const admitted = kind === "gap" ? ADMITTED_CAPABILITIES : ADMITTED_DEFECTS;
+  const refused = kind === "gap" ? REFUSED_CAPABILITIES : REFUSED_DEFECTS;
 
   if (admitted.has(label)) return { ok: true, reason: admitted.get(label) };
   if (refused.has(label)) return { ok: false, reason: refused.get(label) };

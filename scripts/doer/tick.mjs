@@ -19,6 +19,7 @@
 import { execFileSync } from "node:child_process";
 import { writeFileSync, mkdirSync } from "node:fs";
 import { decideTick, branchFor, isDoerBranch, STOP_LABEL } from "./eligibility.mjs";
+import { partition } from "./queue.mjs";
 import { shadowRun } from "./shadow.mjs";
 
 const DRY = process.argv.includes("--dry-run");
@@ -41,7 +42,7 @@ const say = (s) => console.log(s);
 // diagnoses for itself — it has the repository, which we deliberately never take
 // from a customer (rule §9). What it does NOT get is permission to decide the
 // work is done.
-function taskComment(issue) {
+function taskComment(item) {
   return [
     // Proven on 2026-09-02 (karass experiment): a non-review "@codex" comment
     // ON A PULL REQUEST starts a task that commits to THAT PR's branch. The
@@ -54,9 +55,10 @@ function taskComment(issue) {
     // this in openai/codex".
     `@codex implement this ticket in ${REPO}, on this branch.`,
     ``,
-    `**Ticket #${issue.number} — ${issue.title}**`,
+    `**${item.ticket} — ${item.label}**`,
     ``,
-    issue.body?.trim() ? issue.body.trim() : "(see the linked CHE ticket)",
+    `Filed by our own runs, seen ${item.occurrences} time(s). The ticket on the board`,
+    `carries every run that tripped it, in the filer's own words; read it there.`,
     ``,
     `---`,
     `**Rules for this change, in order of precedence:**`,
@@ -85,9 +87,39 @@ function taskComment(issue) {
 }
 
 // ─── State ───────────────────────────────────────────────────────────────────
+//
+// The queue is what our own runs filed and nothing else (CHE-118). It is read
+// from our database rather than from labels on GitHub issues, because the
+// tickets were never there: a run that cannot verify a step files a "[Checker
+// gap] …", a rejected claim files a "[Checker defect] …", and both leave a row
+// in IssueLink. The label queue was filled by a person once, in September, and
+// by nobody since (CHE-170).
+//
+// Shelling out to tsx rather than importing: this file is plain node and the
+// reader needs the product's own hashing to recognise a capability. The tick
+// already shells out to `gh` for everything else.
+const board = JSON.parse(
+  execFileSync("npx", ["tsx", "--tsconfig", "tsconfig.json", "scripts/doer/board-queue.ts", "--json"], {
+    encoding: "utf8",
+    maxBuffer: 20 * 1024 * 1024,
+  }),
+);
+const { queue, refused } = partition(board.known);
+
+// Every tick says what it saw, including what it refused and why. A queue that
+// silently drops most of what it is offered looks identical to an empty one,
+// and telling those two apart is the whole of CHE-152.
+say(`Board: ${board.known.length} open ticket(s) of ours, ${queue.length} admitted, ${refused.length} refused`);
+for (const r of refused) say(`   refused ${r.ticket} — ${r.reason}`);
+for (const u of board.unknown ?? []) {
+  say(`   ${u.ticket} matches no capability this repository knows about — the two lists have drifted apart`);
+}
+
+// The repository-wide stop stays on GitHub, where a person who wants the doer to
+// stop is already looking. It is the one brake that must not require the board.
 const issues = gh([
   "issue", "list", "--repo", REPO, "--state", "open", "--limit", "100",
-  "--json", "number,title,body,labels,createdAt",
+  "--json", "number,title,labels",
 ]).map((i) => ({ ...i, labels: i.labels.map((l) => l.name) }));
 
 const openPrs = gh([
@@ -105,23 +137,26 @@ const stopped = issues.some((i) => i.labels.includes(STOP_LABEL));
 // in minutes, not in the two hours between claims. This one only claims.
 //
 // ─── Then: may we start something new? ───────────────────────────────────────
-const decision = decideTick({ issues, openDoerPrs, stopped });
+const decision = decideTick({ queue, openDoerPrs, stopped });
 if (!decision.act) {
   say(`No new work this tick: ${decision.reason}`);
   process.exit(0);
 }
 
-const issue = decision.issue;
-const branch = branchFor(issue.number, issue.title);
+const item = decision.item;
+const branch = branchFor(item.ticket.toLowerCase(), item.label);
 if (!branch.startsWith("doer/")) throw new Error(`refusing to push a branch outside doer/: ${branch}`);
-say(`Claiming #${issue.number} — ${issue.title}`);
+say(`Claiming ${item.ticket} — ${item.label}`);
 say(`Branch: ${branch}`);
 
 if (!DRY) {
   mkdirSync(".doer", { recursive: true });
+  // What the implementer is handed: the capability, and where to read the rest.
+  // The ticket's own body — every run that tripped this, in the filer's words —
+  // stays on the board, which is the one place it cannot go stale.
   writeFileSync(
     ".doer/TICKET.md",
-    `# ${issue.title}\n\nGitHub issue: ${REPO}#${issue.number}\n\n${issue.body ?? ""}\n`,
+    `# ${item.label}\n\nTicket: ${item.ticket} (${item.kind}, seen ${item.occurrences} time(s))\n`,
   );
 }
 run("git", ["config", "user.name", "checkmyapp-doer"]);
@@ -146,7 +181,7 @@ if (!DRY) {
 
 run("git", ["checkout", "-b", branch]);
 run("git", ["add", "-f", ".doer/TICKET.md"]);
-run("git", ["commit", "-m", `doer: claim #${issue.number} — ${issue.title}`]);
+run("git", ["commit", "-m", `doer: claim ${item.ticket} — ${item.label}`]);
 run("git", ["push", "-u", "origin", branch]);
 
 // If the PR cannot be opened, take the branch back down. A pushed branch with no
@@ -156,8 +191,11 @@ run("git", ["push", "-u", "origin", branch]);
 try {
   run("gh", [
     "pr", "create", "--repo", REPO, "--base", BASE, "--head", branch,
-    "--title", `[doer] ${issue.title}`,
-    "--body", `Claimed from #${issue.number}. The implementer works on this branch; the merge gate and a later CheckMyApp run decide the rest.\n\nCloses #${issue.number}`,
+    "--title", `[doer] ${item.label}`,
+    // No "Closes": the ticket lives on the board, and whether the problem is
+    // actually gone is decided by a later CheckMyApp run walking the deployed
+    // product from outside (src/agent/reconcile.ts), never by a merge here.
+    "--body", `Claimed from ${item.ticket}. The implementer works on this branch; the merge gate and a later CheckMyApp run decide the rest.`,
   ]);
 } catch (err) {
   if (!DRY) {
@@ -169,7 +207,7 @@ try {
 const prNumber = DRY ? "(dry-run)" : gh(["pr", "view", branch, "--repo", REPO, "--json", "number"]).number;
 say(`PR opened: #${prNumber}`);
 
-run("gh", ["pr", "comment", String(prNumber), "--repo", REPO, "--body", taskComment(issue)]);
+run("gh", ["pr", "comment", String(prNumber), "--repo", REPO, "--body", taskComment(item)]);
 say("Handed to the implementer. This tick is done — nothing here decides whether it worked.");
 
 // ─── The same ticket, a second implementer (CHE-128) ─────────────────────────
@@ -181,4 +219,14 @@ say("Handed to the implementer. This tick is done — nothing here decides wheth
 //
 // It runs last and its result is ignored on purpose: a measurement that can
 // take production down with it is not a measurement, it is a dependency.
-shadowRun({ repo: REPO, issueNumber: issue.number, dry: DRY, say });
+// …and it does not run on a board ticket. The shadow leg hands the second
+// implementer a GitHub issue URL (shadow.mjs) and there is no GitHub issue any
+// more. Said out loud instead of skipped quietly: the double run is how the two
+// implementers were compared (CHE-128), and it is off until something gives the
+// runner a ticket it can read. Its epic is closed and its report is written, so
+// this costs a comparison nobody is currently making — not a measurement in
+// flight.
+say(
+  `Shadow run skipped for ${item.ticket}: the second implementer reads a GitHub issue URL, ` +
+    `and this ticket lives on the board (CHE-118).`,
+);

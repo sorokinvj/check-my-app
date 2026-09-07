@@ -9,9 +9,23 @@
 // (issues, open PRs, flags) and this file supplies the verdict. `verify:doer`
 // runs it against the cases that motivated each rail.
 
-/** Issues carrying this label are the doer's queue. Nothing else is. */
-export const QUEUE_LABEL = "doer";
-/** Set by a person on an issue to keep the doer away from it. */
+// Two labels used to live here: `doer` marked an issue as the queue, and
+// `doer:hold` kept the doer away from one. Both are gone as of CHE-118, and
+// neither was replaced by an equivalent, so here is where each went.
+//
+// The queue is no longer a label on a GitHub issue: it is the open tickets our
+// own runs filed, read from our database and admitted per capability
+// (scripts/doer/board-queue.ts, scripts/doer/queue.mjs). Marking an issue by
+// hand cannot summon the doer any more, which is the point — a queue a person
+// fills by hand is what CHE-170 found and what this replaced.
+//
+// The hold split in two. As a queue filter it is gone: a ticket that should
+// wait is moved out of `open` on the board and leaves the queue by itself. As a
+// brake on a pull request already open it stays exactly where it was — the
+// shepherd reads it off the PR to keep the merge gate shut (shepherd.mjs), and
+// that brake must stay reachable by a person who is looking at the PR and has no
+// reason to go near the board.
+/** Set by a person on a doer pull request to keep the merge gate shut. */
 export const HOLD_LABEL = "doer:hold";
 /** Only with this may the dispatcher merge; default is propose-and-stop. */
 // No automerge label any more. Merging is the default and doer:hold is the
@@ -28,14 +42,27 @@ export const STOP_LABEL = "doer:stop";
 export const MAX_OPEN_PRS = 1;
 
 /**
+ * Whether to claim anything this tick, and which ticket.
+ *
+ * The queue arrives already built and already filtered: it is the open tickets
+ * our own runs filed, admitted per capability by scripts/doer/queue.mjs and read
+ * from our database by scripts/doer/board-queue.ts (CHE-118). What used to be
+ * done here by a GitHub label is now done at the source, so this function is
+ * left with the two rails that were always the point.
+ *
+ * The per-ticket hold that `doer:hold` used to provide has a better home now:
+ * a ticket that should wait is moved out of `open` on the board, and it stops
+ * being in the queue at all. Said out loud rather than dropped quietly, because
+ * removing a brake in silence is how a brake turns out to be missing later.
+ *
  * @param {object} state
- * @param {{number:number,title:string,labels:string[],createdAt:string}[]} state.issues open issues
+ * @param {{ticket:string,label:string,createdAt:string}[]} state.queue admitted tickets, oldest first
  * @param {{number:number,headRef:string}[]} state.openDoerPrs PRs the doer already has out
  * @param {boolean} state.stopped repository-wide stop flag
- * @returns {{act:false,reason:string} | {act:true,issue:object,mayMerge:boolean}}
+ * @returns {{act:false,reason:string} | {act:true,item:object,mayMerge:boolean}}
  */
 export function decideTick(state) {
-  const { issues = [], openDoerPrs = [], stopped = false } = state;
+  const { queue = [], openDoerPrs = [], stopped = false } = state;
 
   // A stop the owner set outranks everything, including a queue on fire.
   if (stopped) return { act: false, reason: "stopped — a doer:stop label is set" };
@@ -47,17 +74,18 @@ export function decideTick(state) {
     return { act: false, reason: `waiting on a verdict for ${list} — one open PR at a time` };
   }
 
-  const queue = issues
-    .filter((i) => i.labels.includes(QUEUE_LABEL))
-    .filter((i) => !i.labels.includes(HOLD_LABEL))
-    // Oldest first: a ticket that keeps losing to newer ones never gets built,
-    // and the queue silently becomes a stack.
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  // Oldest first: a ticket that keeps losing to newer ones never gets built, and
+  // the queue silently becomes a stack. The reader sorts, and this re-sorts
+  // rather than trusting it — the rail is here, where it is tested.
+  const ordered = [...queue].sort((a, b) =>
+    String(a.createdAt ?? "").localeCompare(String(b.createdAt ?? "")),
+  );
 
-  if (queue.length === 0) return { act: false, reason: "queue empty — nothing labelled for the doer" };
+  if (ordered.length === 0) {
+    return { act: false, reason: "queue empty — no open ticket of ours is admitted work" };
+  }
 
-  const issue = queue[0];
-  return { act: true, issue, mayMerge: !issue.labels.includes(HOLD_LABEL) };
+  return { act: true, item: ordered[0], mayMerge: true };
 }
 
 // A branch name that says where the work came from, and that the merge gate can
