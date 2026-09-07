@@ -1,6 +1,6 @@
 // The gate that decides whether code merges (CHE-122). This line lived as a
 // comment on the CI step until CHE-183 folded the steps into verify:all.
-import { decidePr, MAX_ROUNDS } from "./doer/machine.mjs";
+import { decidePr, MAX_ROUNDS, CLAIM_EXPIRY_HOURS } from "./doer/machine.mjs";
 const base = { headSha: "aaaaaaa1", checks: [], reviewReportedForHead: false, unresolvedFindings: 0, roundsUsed: 0, mayMerge: false, hasImplementerWork: true };
 const green = [{ name: "check", conclusion: "success", headSha: "aaaaaaa1" }, { name: "deploy", conclusion: "skipped", headSha: "aaaaaaa1" }];
 const cases = [
@@ -20,6 +20,15 @@ const cases = [
   ["заявка без работы не мержится", { ...base, hasImplementerWork: false, checks: green, reviewReportedForHead: true, mayMerge: true }, "waitingForImplementer"],
   ["заявка без работы не идёт даже на ревью", { ...base, hasImplementerWork: false }, "waitingForImplementer"],
   ["cancelled блокирует", { ...base, checks: [{ name: "check", conclusion: "cancelled", headSha: "aaaaaaa1" }], roundsUsed: 3 }, "blocked"],
+  // Заявка, на которую никто не ответил (CHE-209). PR #36 держал очередь двое
+  // суток: один коммит — заявка, исполнителя нет. Часы действуют только на
+  // ПУСТУЮ заявку и никогда на работу, какой бы старой она ни была: судить
+  // работу — дело гейта и ревьюера.
+  ["пустая заявка старше порога отзывается", { ...base, hasImplementerWork: false, ageHours: CLAIM_EXPIRY_HOURS + 1 }, "withdrawn"],
+  ["свежей заявке дают время", { ...base, hasImplementerWork: false, ageHours: CLAIM_EXPIRY_HOURS - 1 }, "waitingForImplementer"],
+  ["ровно на пороге — уже отзыв", { ...base, hasImplementerWork: false, ageHours: CLAIM_EXPIRY_HOURS }, "withdrawn"],
+  ["часы не трогают работу, как бы стара она ни была", { ...base, hasImplementerWork: true, ageHours: CLAIM_EXPIRY_HOURS * 100 }, "waitingForChecks"],
+  ["неизвестный возраст не значит «просрочено»", { ...base, hasImplementerWork: false }, "waitingForImplementer"],
 ];
 let bad = 0;
 for (const [name, facts, want] of cases) {

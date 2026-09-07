@@ -22,6 +22,22 @@ import { createMachine, createActor } from "xstate";
 /** Three rounds. After that the loop is not converging and a person should look. */
 export const MAX_ROUNDS = 3;
 
+/**
+ * How long a claim may sit with nothing in it but the claim before the doer
+ * takes it back (CHE-209).
+ *
+ * Six hours, which is three ticks of the dispatcher and long enough that an
+ * implementer working normally has already committed something: the one time
+ * the handoff worked end to end, the work landed sixteen minutes after the
+ * mention. It is not longer because the cost of waiting is the whole queue —
+ * one doer PR may be open at a time — and not shorter because a hiccup in the
+ * implementer's queue should not cost a claim.
+ *
+ * The number lives here, alone, so that changing the patience of the loop is
+ * one edit in one place rather than a search.
+ */
+export const CLAIM_EXPIRY_HOURS = 6;
+
 // A check that ran and correctly did nothing is not a failure. Our deploy job
 // reports "skipped" on every PR because it deploys from main only — found by a
 // live tick, after invented test cases missed it. Everything else unknown still
@@ -60,6 +76,13 @@ export const prMachine = createMachine({
         // the ticket, because the PR body says "Closes #N". Codex reacted twice
         // on 2026-09-03 and published nothing both times, which is exactly the
         // shape that would have hit this.
+        // …and if the implementer never came at all, the claim is withdrawn
+        // rather than waited on forever (CHE-209). PR #36 sat for two days with
+        // nothing in it but the claim, and because only one doer PR may be open
+        // at a time, the queue behind it could not move — a loop that stops
+        // permanently the first time an implementer does not show up is not a
+        // loop. Order matters: this is checked before the wait it replaces.
+        { target: "withdrawn", guard: "claimAbandoned" },
         { target: "waitingForImplementer", guard: "noWorkYet" },
         { target: "waitingForChecks", guard: "checksIncomplete" },
         { target: "fixing", guard: "checksFailedAndRoundsLeft" },
@@ -77,6 +100,8 @@ export const prMachine = createMachine({
     waitingForReview: { type: "final" },
     /** The PR is still only the claim; the implementer has published nothing. */
     waitingForImplementer: { type: "final" },
+    /** The claim was never answered and is taken back, so the queue can move. */
+    withdrawn: { type: "final" },
     /** Hand back to the doer for another round. */
     fixing: { type: "final" },
     /** Three rounds spent, or a failure no round can fix. A person looks. */
@@ -92,6 +117,13 @@ export const prMachine = createMachine({
     // the same signal gates the reviewer (claude-review.yml paths-ignore), so
     // the two halves cannot disagree about whether this PR contains work.
     noWorkYet: ({ context: c }) => c.hasImplementerWork !== true,
+    // Nothing but the claim, and long enough that "not yet" has become "not at
+    // all". Only the two facts, and neither is a judgement about the work:
+    // there is none. A PR with an implementer's commit in it is never withdrawn
+    // here no matter how old — judging work is the gate's job and the
+    // reviewer's, never the clock's.
+    claimAbandoned: ({ context: c }) =>
+      c.hasImplementerWork !== true && Number(c.ageHours ?? 0) >= CLAIM_EXPIRY_HOURS,
     checksIncomplete: ({ context: c }) => {
       const forHead = c.checks.filter((x) => x.headSha === c.headSha);
       // No checks at all is not success — absence of a verdict is not a verdict.
@@ -132,6 +164,9 @@ export function decidePr(facts) {
       ? `waiting on ${running.join(", ")} for head ${facts.headSha.slice(0, 7)}`
       : `no checks have reported for head ${facts.headSha.slice(0, 7)} yet`,
     waitingForImplementer: "the PR is still only the claim — the implementer has published nothing",
+    withdrawn:
+      `nothing but the claim after ${Math.round(Number(facts.ageHours ?? 0))}h — the implementer never came, ` +
+      `so the claim is taken back and the queue moves on`,
     waitingForReview: `waiting for a review of head ${facts.headSha.slice(0, 7)}`,
     fixing: failed.length
       ? `round ${facts.roundsUsed + 1} of ${MAX_ROUNDS}: failing ${failed.join(", ")}`

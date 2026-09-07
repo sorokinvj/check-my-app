@@ -191,7 +191,8 @@ unparkOurRuns({
 
 const prs = gh([
   "pr", "list", "--repo", REPO, "--state", "open", "--limit", "50",
-  "--json", "number,headRefName,headRefOid,isDraft",
+  // createdAt so an unanswered claim can be told from a fresh one (CHE-209).
+  "--json", "number,headRefName,headRefOid,isDraft,createdAt",
 ]).filter(isMergeCandidate);
 
 if (prs.length === 0) {
@@ -233,6 +234,7 @@ for (const pr of prs) {
     unresolvedFindings: unresolvedFindings(pr.number),
     roundsUsed,
     mayMerge,
+    ageHours: (Date.now() - new Date(pr.createdAt).getTime()) / 3_600_000,
   };
   const { state, reason } = decidePr(facts);
   console.log(`PR #${pr.number} (${pr.headRefName}) → ${state}: ${reason}`);
@@ -261,6 +263,19 @@ for (const pr of prs) {
     if (issueNumber) {
       act("gh", ["issue", "edit", String(issueNumber), "--repo", REPO, "--add-label", "doer:hold"]);
     }
+  }
+
+  if (state === "withdrawn") {
+    // Taken back, not judged. Nothing was built, so there is nothing to reject:
+    // the ticket stays exactly as open as it was, and the next tick is free to
+    // claim it again or claim something else. The branch goes too, or it would
+    // be the orphan that blocked every later tick on the same ticket (CHE-139).
+    act("gh", ["pr", "comment", String(pr.number), "--repo", REPO, "--body",
+      `**Claim withdrawn.** ${reason}\n\n` +
+      `Nothing was built and nothing is judged here — the ticket is untouched and may be ` +
+      `claimed again. This exists so that one implementer that never answered cannot hold ` +
+      `the whole queue, which is what happened for two days before CHE-209.`]);
+    act("gh", ["pr", "close", String(pr.number), "--repo", REPO, "--delete-branch"]);
   }
 
   if (state === "merging") {
