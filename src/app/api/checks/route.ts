@@ -34,7 +34,12 @@ export async function POST(req: Request) {
   if (auth?.via !== "api_key") {
     const ok = await verifyTurnstile(json?.turnstileToken, clientIp ?? undefined);
     if (!ok) {
-      return NextResponse.json({ error: "Verification failed — please retry." }, { status: 403 });
+      // `code` is for machine callers (the MCP server, CI): without a key they
+      // land here every time, and the code names the fix — an API key.
+      return NextResponse.json(
+        { error: "Verification failed — please retry.", code: "turnstile_failed" },
+        { status: 403 },
+      );
     }
   }
 
