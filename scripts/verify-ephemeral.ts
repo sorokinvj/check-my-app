@@ -20,7 +20,21 @@
 //   7. the janitor: its test-account sweep (rule §6) never touches an
 //      ephemeral run — there is no App row for the app-based sweep to find,
 //      and an ordinary owner's run is outside the ownership-based one; and
-//      the tick's ephemeral sweep hands the R2 binding through.
+//      the tick's ephemeral sweep hands the R2 binding through;
+//   8. dangling provenance: Run.baselineRunId, Journey.carriedFromRunId and
+//      IssueLink.firstSeenRunId carry no foreign key, and after a sweep may
+//      name a run that is gone (the previous ephemeral run of the same
+//      hostname, usually). The readers that look those runs up return
+//      "nothing to build on" rather than throwing — exercised through the
+//      real smokeReplay / planPartialRun against a stub where the run is
+//      missing;
+//   9. completeness against the schema: every model that hangs off Run,
+//      Journey, Step or Finding in prisma/schema.prisma — by @relation or by a
+//      bare runId/journeyId — is either deleted or detached by the sweep, and
+//      every other pointer into that tree is one of the four provenance
+//      references whose readers were audited. A future child table fails
+//      this check instead of leaving orphans; a future reference column
+//      fails it until its readers are audited.
 //
 // Usage: npx tsx --tsconfig tsconfig.json scripts/verify-ephemeral.ts
 
@@ -41,6 +55,21 @@ import { createRecheckRun } from "@/lib/recheck";
 import { evidenceUrl } from "@/lib/storage";
 import { sweepExpiredEphemeral, sweepTestAccounts } from "@/agent/janitor";
 import type { AgentEnv } from "@/agent/env";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import Module from "node:module";
+
+// src/agent/replay.ts and partial.ts reach src/agent/browser.ts, whose
+// @cloudflare/playwright requires the `cloudflare:workers` builtin at load
+// time. Nothing in §8 touches a browser, so that one module is answered with
+// an empty object and the two readers are imported after the hook is in
+// place (a static import would be hoisted above it).
+const moduleLoader = Module as unknown as { _load: (request: string, ...rest: unknown[]) => unknown };
+const realLoad = moduleLoader._load;
+moduleLoader._load = function (request: string, ...rest: unknown[]) {
+  if (request === "cloudflare:workers") return {};
+  return realLoad.call(this, request, ...rest);
+};
 
 let failures = 0;
 function check(name: string, ok: boolean, detail = "") {
@@ -121,6 +150,8 @@ interface World {
   llmUsage: Row[];
   createdResource: Row[];
   appSnapshot: Row[];
+  generatedTest: Row[];
+  pendingCheck: Row[];
   watch: Row[];
   user: Row[];
 }
@@ -135,6 +166,8 @@ function world(): World {
     llmUsage: [],
     createdResource: [],
     appSnapshot: [],
+    generatedTest: [],
+    pendingCheck: [],
     watch: [],
     user: [],
   };
@@ -152,6 +185,8 @@ function stubDb(w: World) {
     llmUsage: table(w.llmUsage, "llmUsage", log),
     createdResource: table(w.createdResource, "createdResource", log),
     appSnapshot: table(w.appSnapshot, "appSnapshot", log),
+    generatedTest: table(w.generatedTest, "generatedTest", log),
+    pendingCheck: table(w.pendingCheck, "pendingCheck", log),
     watch: table(w.watch, "watch", log),
     user: table(w.user, "user", log),
     counter: { upsert: async () => ({ name: "runNumber", value: ++counter }) },
@@ -392,7 +427,7 @@ async function main() {
     const janitorDb = {
       journey: base.journey, step: base.step, finding: base.finding, evidence: base.evidence,
       llmUsage: base.llmUsage, createdResource: base.createdResource, appSnapshot: base.appSnapshot,
-      watch: base.watch, user: base.user, counter: base.counter,
+      generatedTest: base.generatedTest, pendingCheck: base.pendingCheck, watch: base.watch, user: base.user, counter: base.counter,
       app: {
         findMany: async ({ where }: { where: Where }) => withOwner(apps, where),
         deleteMany: async ({ where }: { where: Where }) => ({ count: apps.filter((a) => matches(a, where)).length }),
@@ -433,6 +468,125 @@ async function main() {
     check("janitor: once expired, the run goes and the R2 binding the tick holds receives the delete",
       later.runs === 1 && later.evidence === 1 && deleted.join() === "transcripts/eph.json" && !w.run.some((r) => r.id === "run_eph"),
       JSON.stringify({ later, deleted }));
+  }
+
+  // 8 — dangling provenance after a sweep. The stub holds a run whose
+  // baselineRunId names a run that no longer exists, and a baseline whose
+  // carried journey names a walker that no longer exists. Neither reader
+  // throws; both say there is nothing to build on. (Both are watch-gated in
+  // production and an ephemeral run has no watch — the watchId here is what
+  // gets the read reached at all.)
+  {
+    const w = world();
+    const dayAgo = new Date(NOW.getTime() - 24 * 60 * 60 * 1000);
+    w.run.push(
+      // This run's baseline was swept.
+      { id: "run_now", appSlug: "pr-9.preview.test", targetUrl: "https://pr-9.preview.test/", watchId: "w1", baselineRunId: "run_gone", status: "queued", testEmail: null, testPasswordEnc: null },
+      // The last walked run; one of its journeys was carried from a run that was swept.
+      { id: "run_base", watchId: "w1", status: "completed", completedAt: dayAgo, runNumber: 41, appLens: null, anatomy: null, testEmail: null, testPasswordEnc: null },
+    );
+    w.journey.push(
+      { id: "jb1", runId: "run_base", order: 0, title: "Sign in", status: "ok", carriedFromRunId: "run_gone", steps: [{ label: "open /login" }] },
+      { id: "jb2", runId: "run_base", order: 1, title: "Checkout", status: "broken", carriedFromRunId: null, steps: [{ label: "pay" }] },
+    );
+    const { db } = stubDb(w);
+    const env = { db } as unknown as AgentEnv;
+    const { smokeReplay } = await import("@/agent/replay");
+    const { planPartialRun } = await import("@/agent/partial");
+
+    let smoke: unknown = "threw";
+    try {
+      smoke = await smokeReplay(env, { id: "run_now", appSlug: "pr-9.preview.test", targetUrl: "https://pr-9.preview.test/", watchId: "w1", baselineRunId: "run_gone" });
+    } catch (err) {
+      smoke = `threw: ${err instanceof Error ? err.message : err}`;
+    }
+    const s = smoke as { taken?: boolean; reason?: string };
+    check("dangling: a baselineRunId whose run was swept makes the smoke replay step aside, not throw",
+      typeof smoke === "object" && s.taken === false && typeof s.reason === "string", JSON.stringify(smoke));
+
+    let partial: unknown = "threw";
+    try {
+      partial = await planPartialRun(env, { id: "run_now", watchId: "w1" }, null, NOW);
+    } catch (err) {
+      partial = `threw: ${err instanceof Error ? err.message : err}`;
+    }
+    const p = partial as { taken?: boolean; reason?: string };
+    check("dangling: a carriedFromRunId whose run was swept makes the partial plan step aside, not throw",
+      typeof partial === "object" && p.taken === false && /date the evidence/.test(p.reason ?? ""), JSON.stringify(partial));
+  }
+
+  // 9 — completeness against the schema. Derived from prisma/schema.prisma,
+  // not from memory: a table that gains a `runId` tomorrow must show up here
+  // as a FAIL until the sweep handles it.
+  {
+    const schema = readFileSync(path.resolve(__dirname, "../prisma/schema.prisma"), "utf8");
+    const models = new Map<string, string[]>();
+    for (const m of schema.matchAll(/^model\s+(\w+)\s*\{([\s\S]*?)^\}/gm)) {
+      models.set(m[1], m[2].split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("//") && !l.startsWith("@@")));
+    }
+    const fieldNames = (lines: string[]) => lines.map((l) => l.split(/\s+/)[0]);
+    // A row is the run's own when it points at Run, Journey, Step or Finding
+    // through a @relation, or through a bare `runId` / `journeyId` column
+    // (AppSnapshot, GeneratedTest, PendingCheck — no relation, by design).
+    // A bare `stepId` / `findingId` without a relation, or any other
+    // `…RunId`, is a reference: provenance that outlives what it names.
+    const TREE = new Set(["Run", "Journey", "Step", "Finding"]);
+    const owned = new Set<string>();
+    const references = new Set<string>();
+    for (const [name, lines] of models) {
+      if (TREE.has(name) && name !== "Run") owned.add(name);
+      const related = new Set<string>();
+      for (const l of lines) {
+        const m = l.match(/^\w+\s+(\w+)\??\s+@relation\(fields:\s*\[(\w+)\]/);
+        if (m && TREE.has(m[1])) { owned.add(name); related.add(m[2]); }
+      }
+      for (const f of fieldNames(lines)) {
+        if (related.has(f)) continue;
+        if ((f === "runId" || f === "journeyId") && name !== "Run") owned.add(name);
+        else if (/RunId$/.test(f) || ((f === "stepId" || f === "findingId") && !TREE.has(name))) references.add(`${name}.${f}`);
+      }
+    }
+
+    // What src/lib/ephemeral.ts does, table by table.
+    const DELETED = ["Journey", "Step", "Finding", "Evidence", "GeneratedTest", "LlmUsage", "CreatedResource", "AppSnapshot"];
+    const DETACHED = ["PendingCheck"];
+    const REFERENCES = ["Run.baselineRunId", "Journey.carriedFromRunId", "IssueLink.firstSeenRunId", "IssueLink.findingId"];
+    const handled = new Set([...DELETED, ...DETACHED]);
+    const expected = owned;
+    const missing = [...expected].filter((t) => !handled.has(t));
+    const extra = [...handled].filter((t) => !expected.has(t));
+    check("schema: every table under Run in prisma/schema.prisma is deleted or detached by the sweep",
+      missing.length === 0 && extra.length === 0,
+      `schema says ${[...expected].sort().join(", ")}; sweep handles ${[...handled].sort().join(", ")}${missing.length ? `; NOT handled: ${missing.join(", ")}` : ""}${extra.length ? `; handled but not in schema: ${extra.join(", ")}` : ""}`);
+    // IssueLink.findingId is in the list: reconcile's originalFinding treats a
+    // missing finding as null and falls back to re-hashing (CHE-103).
+    check("schema: the only other references into the tree are the four provenance columns whose readers were audited",
+      [...references].sort().join() === [...REFERENCES].sort().join(),
+      `schema: ${[...references].sort().join(", ")}`);
+
+    // And the sweep really touches each one: a row in every table, then a sweep.
+    const w = world();
+    const gone = new Date("2026-09-01T00:00:00.000Z");
+    w.run.push({ id: "run_x", ephemeral: true, expiresAt: gone, transcriptUrl: null, liveScreenshotUrl: null });
+    w.journey.push({ id: "j1", runId: "run_x", videoUrl: null });
+    w.step.push({ id: "s1", journeyId: "j1", screenshotUrl: null });
+    w.finding.push({ id: "f1", runId: "run_x" });
+    w.evidence.push({ id: "e1", stepId: "s1", findingId: null, storageUrl: evidenceUrl("screenshots/x.png") });
+    w.llmUsage.push({ id: "u1", runId: "run_x" });
+    w.createdResource.push({ id: "c1", runId: "run_x" });
+    w.appSnapshot.push({ id: "snap", runId: "run_x", appId: null });
+    w.generatedTest.push({ id: "gt1", journeyId: "j1", appSlug: "pr.preview.test" });
+    w.pendingCheck.push({ id: "pc1", runId: "run_x", checkoutSessionId: "cs_1" });
+    const { db, log } = stubDb(w);
+    const { bucket } = stubBucket();
+    await sweepExpiredEphemeralRuns(db, NOW, bucket);
+    const stillThere = DELETED.filter((t) => (w[(t[0].toLowerCase() + t.slice(1)) as keyof World] as Row[]).length > 0);
+    check("schema: after a sweep every deleted table is empty", stillThere.length === 0, stillThere.join(", "));
+    check("schema: the parked paid-check row is detached, not deleted",
+      w.pendingCheck.length === 1 && w.pendingCheck[0].runId === null, JSON.stringify(w.pendingCheck));
+    const touched = [...DELETED, ...DETACHED].map((t) => t[0].toLowerCase() + t.slice(1));
+    const untouched = touched.filter((t) => !log.some((l) => l.startsWith(`${t}.deleteMany`) || l.startsWith(`${t}.updateMany`)));
+    check("schema: the sweep issued a delete or detach for each table", untouched.length === 0, `no write for: ${untouched.join(", ")}`);
   }
 
   console.log(failures === 0 ? "\nall pass" : `\n${failures} FAILED`);

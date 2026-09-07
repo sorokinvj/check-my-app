@@ -178,13 +178,35 @@ export async function sweepExpiredEphemeralRuns(
   const evidenceIds = [...new Set(evidence.map((e) => e.id))];
   await eachChunk(evidenceIds, (ids) => db.evidence.deleteMany({ where: { id: { in: ids } } }));
   await eachChunk(stepIds, (ids) => db.step.deleteMany({ where: { id: { in: ids } } }));
+  // Specs the agent formalised from these journeys (CHE-8): keyed by hostname
+  // and by a plain journeyId. A spec of a preview hostname is nothing to keep.
+  await eachChunk(journeyIds, (ids) => db.generatedTest.deleteMany({ where: { journeyId: { in: ids } } }));
   await eachChunk(journeyIds, (ids) => db.journey.deleteMany({ where: { id: { in: ids } } }));
   await eachChunk(findingIds, (ids) => db.finding.deleteMany({ where: { id: { in: ids } } }));
   await eachChunk(runIds, (ids) => db.llmUsage.deleteMany({ where: { runId: { in: ids } } }));
   await eachChunk(runIds, (ids) => db.createdResource.deleteMany({ where: { runId: { in: ids } } }));
   // The page snapshot the run took (CHE-132): a plain runId, no cascade.
   await eachChunk(runIds, (ids) => db.appSnapshot.deleteMany({ where: { runId: { in: ids } } }));
+  // A paid check's parked row (src/lib/one-check.ts) points at its run by a
+  // plain unique id. An ephemeral run is owned and never paid for, so this
+  // finds nothing today; it is here so every `runId` column in the schema is
+  // accounted for by mechanism (scripts/verify-ephemeral.ts derives the list
+  // from prisma/schema.prisma). The row itself is the payment's record and
+  // stays; only the pointer goes.
+  await eachChunk(runIds, (ids) =>
+    db.pendingCheck.updateMany({ where: { runId: { in: ids } }, data: { runId: null } }),
+  );
   await eachChunk(runIds, (ids) => db.run.deleteMany({ where: { id: { in: ids } } }));
+
+  // Not touched on purpose: Run.baselineRunId, Journey.carriedFromRunId,
+  // IssueLink.firstSeenRunId and IssueLink.findingId in OTHER rows may now
+  // point at a run or finding that is gone.
+  // They are provenance ("diffed against", "walked by", "first claimed in"),
+  // and nulling them would turn a true statement into a false one ("walked
+  // this run", "first run of this watch"). Every reader looks the run up by id
+  // and treats a missing row as absent (src/agent/replay.ts, partial.ts,
+  // workflow.ts, reconcile.ts, capability-gaps.ts, the verdict page) — asserted
+  // in scripts/verify-ephemeral.ts.
 
   // Objects: only those no surviving row still references.
   const candidates = [...urls].filter((u) => evidenceKey(u) !== null);
