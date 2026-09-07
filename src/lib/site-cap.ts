@@ -9,8 +9,17 @@
 
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { siteCapFromEnv } from "@/lib/plans";
+import { ephemeralTtlDaysFromEnv } from "@/lib/ephemeral";
 
 export function effectiveSiteCap(): number {
   const { env } = getCloudflareContext();
   return siteCapFromEnv(env as Record<string, unknown>);
+}
+
+// CHE-202: how long an ephemeral run lives, the same way — `wrangler secret
+// put EPHEMERAL_RUN_TTL_DAYS` on checkmyapp-web; the default and the parsing
+// rule are in src/lib/ephemeral.ts.
+export function effectiveEphemeralTtlDays(): number {
+  const { env } = getCloudflareContext();
+  return ephemeralTtlDaysFromEnv(env as Record<string, unknown>);
 }

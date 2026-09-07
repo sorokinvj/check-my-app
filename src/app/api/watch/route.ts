@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getDbFromContext } from "@/lib/db";
 import { getOptionalUser } from "@/lib/auth";
-import { enableWatchForRun } from "@/lib/watch-enable";
+import { EPHEMERAL_WATCH_REFUSAL, enableWatchForRun } from "@/lib/watch-enable";
 import { createWatchSchema } from "@/lib/validation";
 import { isSelfCheckRequest, selfCheckReadOnlyResponse } from "@/lib/self-check";
 
@@ -33,6 +33,8 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Run not found" }, { status: 404 });
     case "forbidden":
       return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+    case "ephemeral":
+      return NextResponse.json({ error: EPHEMERAL_WATCH_REFUSAL, code: "ephemeral_run" }, { status: 409 });
     case "gated":
       return NextResponse.json({ error: result.reason }, { status: 403 });
     case "ok":

@@ -117,8 +117,12 @@ export default async function VerdictPage({
   // so "Export to GitHub" renders in its connected state. Anonymous viewers get
   // the connect path (the export API redirects them to sign-in).
   const viewer = await getOptionalUser(prisma);
-  const viewerApp = viewer
-    ? await prisma.app.findUnique({
+  // CHE-202: an ephemeral run has no App and gets none — the lookup is skipped
+  // rather than tolerated, so a preview hostname that happens to match an
+  // onboarded app's slug never borrows that app's repo connection.
+  const viewerApp =
+    viewer && !run.ephemeral
+      ? await prisma.app.findUnique({
         where: { ownerId_appSlug: { ownerId: viewer.id, appSlug: run.appSlug } },
         include: { repo: { select: { repoFullName: true } } },
       })
@@ -129,7 +133,7 @@ export default async function VerdictPage({
   // server would honour it, computed with the same helpers the routes use
   // (rules in src/lib/viewer-capabilities.ts).
   const caps = viewerCapabilities({
-    run: { ownerId: run.ownerId, hasWatch },
+    run: { ownerId: run.ownerId, hasWatch, ephemeral: run.ephemeral },
     viewer,
     viewerApp,
     canMutate: await canMutateOwned(prisma, run.ownerId),
@@ -219,6 +223,12 @@ export default async function VerdictPage({
             Sign in
           </TrackedLink>{" "}
           before your next check to keep it unlisted.
+        </p>
+      )}
+      {run.ephemeral && run.expiresAt && (
+        <p className="mb-4 rounded-lg border border-ink-600 bg-ink-800/60 px-4 py-2.5 text-sm text-fg-muted">
+          This is a check of a temporary preview. It is not listed anywhere and is removed on{" "}
+          {run.expiresAt.toLocaleDateString([], { year: "numeric", month: "long", day: "numeric" })}.
         </p>
       )}
       {newerRun && (
@@ -426,6 +436,14 @@ export default async function VerdictPage({
               an owned one loads for anyone holding the link. Say which. */}
           run #{run.runNumber} · permalink · privacy:{" "}
           {run.ownerId ? "unlisted link" : "public"}
+          {/* CHE-202: a preview run is deleted on this date, evidence included —
+              say so where the permalink is described, since the link dies too. */}
+          {run.ephemeral && run.expiresAt && (
+            <>
+              {" "}· ephemeral · expires{" "}
+              {run.expiresAt.toLocaleDateString([], { month: "short", day: "numeric" })}
+            </>
+          )}
         </p>
       </div>
     </main>

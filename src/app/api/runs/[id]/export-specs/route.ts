@@ -22,11 +22,19 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
   const run = await db.run.findUnique({
     where: { publicId: (await params).id },
-    select: { id: true, publicId: true, runNumber: true, appSlug: true, ownerId: true },
+    select: { id: true, publicId: true, runNumber: true, appSlug: true, ownerId: true, ephemeral: true },
   });
   if (!run) return NextResponse.json({ error: "Run not found" }, { status: 404 });
   if (run.ownerId && run.ownerId !== user.id) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+  }
+  // CHE-202: a preview hostname has no App, and answering "not connected"
+  // would open the connect form — whose POST creates one. Refused outright.
+  if (run.ephemeral) {
+    return NextResponse.json(
+      { error: "Specs are exported from a check of the app's real address, not a preview.", code: "ephemeral_run" },
+      { status: 409 },
+    );
   }
 
   const app = await db.app.findUnique({

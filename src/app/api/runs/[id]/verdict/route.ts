@@ -33,6 +33,9 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     // CI gate can tell "not a deploy check" from "a deploy check that passed".
     deploy: run.deploySha ? { sha: run.deploySha, env: run.deployEnv } : null,
     bottom_line: run.bottomLine,
+    // CHE-202: a preview run says when it will be gone; null on every other run.
+    ephemeral: run.ephemeral,
+    expires_at: run.expiresAt,
     journeys: run.journeys,
     findings: run.findings,
     cost_usd: run.costUsd,

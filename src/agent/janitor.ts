@@ -15,6 +15,7 @@
 // and never anything belonging to a real owner.
 
 import type { AgentEnv } from "./env";
+import { sweepExpiredEphemeralRuns, type EphemeralSweepResult } from "@/lib/ephemeral";
 
 // Long enough that the owner can sign in after a nightly self-check and see
 // what happened; short enough that nothing accumulates.
@@ -79,6 +80,20 @@ export async function sweepExpiredPendingChecks(env: AgentEnv, now: Date = new D
   });
   if (count > 0) console.log(`[janitor] removed ${count} expired unpaid pending check(s)`);
   return count;
+}
+
+// CHE-202: ephemeral runs (a PR preview is a run, not an app) past their
+// expiresAt, deleted outright with their evidence — the one kind of run we
+// delete, because the target it describes is gone too. The rule and the sweep
+// live in src/lib/ephemeral.ts; this is the tick's call, with the bucket the
+// objects live in. Same shape as the sweeps above: narrow, every tick, never
+// fails the tick (the caller wraps it).
+export async function sweepExpiredEphemeral(env: AgentEnv, now: Date = new Date()): Promise<EphemeralSweepResult> {
+  const result = await sweepExpiredEphemeralRuns(env.db, now, env.bindings.EVIDENCE);
+  if (result.runs > 0) {
+    console.log(`[janitor] removed ${result.runs} expired ephemeral run(s), ${result.evidence} object(s)`);
+  }
+  return result;
 }
 
 async function sweepOwnerlessSnapshots(env: AgentEnv, cutoff: Date): Promise<void> {

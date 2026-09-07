@@ -42,7 +42,13 @@ export type ViewerCapabilities = {
 };
 
 export function viewerCapabilities(input: {
-  run: { ownerId: string | null; hasWatch: boolean };
+  // `ephemeral` (CHE-202): a PR-preview run has no App row and must never get
+  // one, so every control that would create or need one — Enable Daily Watch,
+  // Create Ticket, Export to GitHub — is withheld; the server refuses each of
+  // them too (src/lib/watch-enable.ts, src/app/api/integrations/github,
+  // src/app/api/runs/[id]/export-specs). Re-check and marks stay: they are
+  // about the run.
+  run: { ownerId: string | null; hasWatch: boolean; ephemeral?: boolean };
   viewer: { id: string } | null;
   // The signed-in viewer's App row for run.appSlug, or null. Exists only after
   // onboarding or Enable Daily Watch — which is why it gates Create Ticket and
@@ -55,14 +61,15 @@ export function viewerCapabilities(input: {
   const owned = run.ownerId !== null;
   const isOwner = owned && viewer !== null && viewer.id === run.ownerId;
   const anonymousOrOwner = !owned || isOwner;
+  const appless = run.ephemeral === true;
 
   return {
     recheck: canMutate,
     fullRecheck: owned && canMutate,
-    enableWatch: !run.hasWatch && anonymousOrOwner,
-    watchSettings: run.hasWatch && isOwner,
+    enableWatch: !appless && !run.hasWatch && anonymousOrOwner,
+    watchSettings: !appless && run.hasWatch && isOwner,
     markFindings: canMutate,
-    createTicket: viewerApp !== null && anonymousOrOwner,
-    exportSpecs: anonymousOrOwner,
+    createTicket: !appless && viewerApp !== null && anonymousOrOwner,
+    exportSpecs: !appless && anonymousOrOwner,
   };
 }

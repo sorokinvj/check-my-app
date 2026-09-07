@@ -9,7 +9,7 @@
 import { nextRunNumber } from "@/lib/db";
 import type { UserPlan, WatchFrequency } from "@/lib/enums";
 import { PLAN_LIMITS } from "@/lib/plans";
-import { sweepExpiredPendingChecks, sweepTestAccounts } from "./janitor";
+import { sweepExpiredEphemeral, sweepExpiredPendingChecks, sweepTestAccounts } from "./janitor";
 import { sendWatchTrialPaused } from "@/lib/email";
 import { shouldSkipWatch } from "@/lib/plans";
 import { makeAgentEnv, type AgentEnv, type AgentBindings } from "./env";
@@ -58,6 +58,12 @@ export async function runDueWatches(
     await sweepExpiredPendingChecks(env, now);
   } catch (err) {
     console.warn(`[janitor] pending-check sweep failed: ${err instanceof Error ? err.message : err}`);
+  }
+  // CHE-202: ephemeral runs (PR previews) past their expiry, evidence included.
+  try {
+    await sweepExpiredEphemeral(env, now);
+  } catch (err) {
+    console.warn(`[janitor] ephemeral sweep failed: ${err instanceof Error ? err.message : err}`);
   }
 
   const due = await env.db.watch.findMany({

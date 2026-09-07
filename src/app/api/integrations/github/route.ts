@@ -28,11 +28,18 @@ export async function POST(req: Request) {
 
   const run = await db.run.findUnique({
     where: { publicId: parsed.data.runId },
-    select: { id: true, ownerId: true, appSlug: true, targetUrl: true },
+    select: { id: true, ownerId: true, appSlug: true, targetUrl: true, ephemeral: true },
   });
   if (!run) return NextResponse.json({ error: "Run not found" }, { status: 404 });
   if (run.ownerId && run.ownerId !== user.id) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+  }
+  // CHE-202: the upsert below would register the preview hostname as an App.
+  if (run.ephemeral) {
+    return NextResponse.json(
+      { error: "Connect GitHub from a check of the app's real address, not a preview.", code: "ephemeral_run" },
+      { status: 409 },
+    );
   }
 
   // Prove the token works on this repo before persisting anything.

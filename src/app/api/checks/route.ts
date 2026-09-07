@@ -3,7 +3,8 @@ import { getDbFromContext } from "@/lib/db";
 import { getOwnerFromRequest } from "@/lib/auth";
 import { hashClientKey } from "@/lib/crypto";
 import { assertCanStartRun } from "@/lib/plans";
-import { effectiveSiteCap } from "@/lib/site-cap";
+import { effectiveEphemeralTtlDays, effectiveSiteCap } from "@/lib/site-cap";
+import { ephemeralExpiry, ephemeralGate } from "@/lib/ephemeral";
 import { startCheck } from "@/lib/start-check";
 import { distinctIdFromCookies } from "@/lib/analytics-server";
 import { appSlugFromUrl } from "@/lib/utils";
@@ -47,6 +48,17 @@ export async function POST(req: Request) {
 
   const input = parsed.data;
 
+  // CHE-202: an ephemeral run (a PR preview) is an owner's run — private, no
+  // App row, deleted after its TTL. An anonymous request for one is refused
+  // with a code, never downgraded into a public check of a preview URL.
+  const ephemeral = ephemeralGate(input.ephemeral, owner);
+  if (!ephemeral.ok) {
+    return NextResponse.json({ error: ephemeral.reason, code: ephemeral.code }, { status: 400 });
+  }
+  const expiresAt = ephemeral.ephemeral
+    ? ephemeralExpiry(new Date(), effectiveEphemeralTtlDays())
+    : null;
+
   // Anonymous same-domain reuse (CHE-80). Six anonymous example.com runs in 30
   // minutes (2026-08-26, distributed IPs) each burned real LLM spend on a
   // target we had just verified. Anonymous runs are public anyway (owner call,
@@ -87,9 +99,14 @@ export async function POST(req: Request) {
     input,
     ownerId: owner?.id ?? null,
     anonKeyHash,
+    ephemeral: expiresAt ? { expiresAt } : undefined,
     distinctId: distinctIdFromCookies(req.headers.get("cookie")),
   });
 
-  // The /run/{id} URL uses the unguessable public id.
-  return NextResponse.json({ id: run.publicId }, { status: 201 });
+  // The /run/{id} URL uses the unguessable public id. An ephemeral run also
+  // says when it will be gone, so a CI log can carry the date.
+  return NextResponse.json(
+    expiresAt ? { id: run.publicId, ephemeral: true, expiresAt } : { id: run.publicId },
+    { status: 201 },
+  );
 }

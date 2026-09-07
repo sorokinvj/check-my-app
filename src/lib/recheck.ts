@@ -7,7 +7,8 @@ import type { UserPlan } from "@/lib/enums";
 import { nextRunNumber } from "@/lib/db";
 import { canMutateOwned } from "@/lib/auth";
 import { assertCanStartRun, fullRecheckGate, fullRechecksUsed } from "@/lib/plans";
-import { effectiveSiteCap } from "@/lib/site-cap";
+import { effectiveEphemeralTtlDays, effectiveSiteCap } from "@/lib/site-cap";
+import { ephemeralExpiry } from "@/lib/ephemeral";
 import { triggerRun } from "@/lib/trigger";
 
 export type RecheckResult =
@@ -29,6 +30,9 @@ export interface RecheckDeps {
   trigger: (runId: string) => Promise<void>;
   siteCap: () => number;
   now: () => Date;
+  // CHE-202: a re-check of an ephemeral run is ephemeral too, with its own
+  // fresh expiry — the preview is still up, the verdict is still about it.
+  ephemeralTtlDays: () => number;
 }
 
 // How long an anonymous visitor gets the existing verdict instead of a new run
@@ -47,6 +51,7 @@ export async function createRecheckRun(
     trigger: triggerRun,
     siteCap: effectiveSiteCap,
     now: () => new Date(),
+    ephemeralTtlDays: effectiveEphemeralTtlDays,
   },
 ): Promise<RecheckResult> {
   const prev = await prisma.run.findUnique({
@@ -64,6 +69,7 @@ export async function createRecheckRun(
       watchId: true,
       appId: true,
       ownerId: true,
+      ephemeral: true,
       // CHE-137: the owner's CURRENT plan decides the full re-check allowance,
       // so an upgrade takes effect on the next click with nothing to sync.
       owner: { select: { plan: true } },
@@ -141,6 +147,11 @@ export async function createRecheckRun(
       // Anonymous re-checks count against the same daily allowance as
       // anonymous submissions (CHE-97).
       anonKeyHash: prev.ownerId ? null : (opts.anonKeyHash ?? null),
+      // CHE-202: ephemeral begets ephemeral. An ephemeral run is always owned
+      // (the API refuses anonymous ones), so it never reaches the anonymous
+      // path above; and it has no appId/watchId to copy — they are null.
+      ephemeral: prev.ephemeral,
+      expiresAt: prev.ephemeral ? ephemeralExpiry(deps.now(), deps.ephemeralTtlDays()) : null,
       status: "queued",
     },
     select: { id: true, publicId: true },

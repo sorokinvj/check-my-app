@@ -11,8 +11,14 @@ export type EnableWatchResult =
   | { kind: "unauthenticated" }
   | { kind: "not_found" }
   | { kind: "forbidden" }
+  // CHE-202: an ephemeral run (a PR preview) never becomes an App.
+  | { kind: "ephemeral" }
   | { kind: "gated"; reason: string }
   | { kind: "ok"; slug: string };
+
+export const EPHEMERAL_WATCH_REFUSAL =
+  "This check was of a temporary preview, so there is nothing to keep watching. " +
+  "Enable Daily Watch on a check of the app's real address.";
 
 function nextRunFrom(frequency: WatchFrequency): Date | null {
   if (frequency === "manual") return null;
@@ -39,6 +45,7 @@ export async function enableWatchForRun(
       scopeHints: true,
       userNotes: true,
       notifyEmail: true,
+      ephemeral: true,
     },
   });
   if (!run) return { kind: "not_found" };
@@ -46,6 +53,11 @@ export async function enableWatchForRun(
   // Don't let one owner adopt another owner's run (CHE-33). Adoption is only
   // valid for an anonymous run or one already theirs.
   if (run.ownerId && run.ownerId !== user.id) return { kind: "forbidden" };
+
+  // CHE-202: the upsert below would register a preview hostname as an App and
+  // schedule a daily walk of a deploy that is about to disappear. Refused
+  // before any row is written.
+  if (run.ephemeral) return { kind: "ephemeral" };
 
   // Find-or-create the owner's App for this target. upsert is race-safe under
   // D1 (no transactions) vs a check-then-create double-submit window.
