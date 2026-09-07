@@ -26,6 +26,7 @@ import {
   SHADOW_BRANCH_PREFIX,
 } from "./doer/shadow.mjs";
 import { mayUnpark, unparkOurRuns, DOER_PR_AUTHOR, PARKED_STATUS } from "./doer/unpark.mjs";
+import { admit, partition } from "./doer/queue.mjs";
 
 let bad = 0;
 const check = (name, ok, detail = "") => {
@@ -432,6 +433,89 @@ const approved = [{ state: "APPROVED", headSha: "aaa" }];
       r.failed.length === 1 && said.some((s) => s.includes("FAILED")),
       said.join(" | "));
   }
+}
+
+// ── what the doer may take off our own board (CHE-118) ───────────────────────
+//
+// The rail here is not "does it admit the right things" — that is a judgement
+// written down in queue.mjs. It is that every verdict carries a reason, that an
+// unknown capability is refused rather than guessed at, and that nothing is
+// silently dropped between the board and the queue.
+{
+  const v = admit({ title: "Fix the pricing page copy" });
+  check(
+    "a hand-written ticket is not the doer's queue",
+    v.ok === false && v.reason.includes("not filed by a run"),
+    v.reason,
+  );
+}
+{
+  const v = admit({ title: "[Checker gap] Checker cannot follow links that open in a new tab" });
+  check("an admitted capability is taken, with its reason", v.ok === true && v.reason.length > 0, v.reason);
+}
+{
+  // The real tickets on the board carry the policy's prefix; the ruling is
+  // about the capability, so the prefix must not change the verdict.
+  const v = admit({
+    title: "[Checker gap] CheckMyApp agent capability: Checker cannot drive file upload/download flows",
+  });
+  check("the ticket policy's prefix does not hide the capability", v.ok === true, v.reason);
+}
+{
+  const v = admit({
+    title: "[Checker gap] CheckMyApp agent capability: Checker is blocked by CAPTCHA/bot protection on the target",
+  });
+  check(
+    "bypassing bot protection is refused outright",
+    v.ok === false && v.reason.includes("forbidden"),
+    v.reason,
+  );
+}
+{
+  const v = admit({ title: "[Checker gap] Checker cannot read the customer's mind" });
+  check(
+    "a capability nobody has ruled on is refused, and says how to rule",
+    v.ok === false && v.reason.includes("queue.mjs"),
+    v.reason,
+  );
+}
+{
+  const v = admit({
+    title: "[Checker defect] CheckMyApp checker accuracy: Checker reported a product defect caused by our own configuration",
+  });
+  check("a named defect class is work the doer may take", v.ok === true, v.reason);
+}
+{
+  const v = admit({
+    title: "[Checker defect] CheckMyApp checker accuracy: Checker filed a claim the owner rejected, cause unclassified",
+  });
+  check(
+    "an unclassified defect is refused — nothing is named to fix",
+    v.ok === false && v.reason.includes("classifying it is the filer's job"),
+    v.reason,
+  );
+}
+{
+  const tickets = [
+    { title: "[Checker gap] Checker cannot follow links that open in a new tab", createdAt: "2026-09-05" },
+    { title: "[Checker gap] Checker is blocked by CAPTCHA/bot protection on the target", createdAt: "2026-09-01" },
+    { title: "[Checker gap] Checker leaves test records behind in the customer's product", createdAt: "2026-08-27" },
+  ];
+  const { queue, refused } = partition(tickets);
+  check(
+    "nothing is dropped between the board and the queue",
+    queue.length + refused.length === tickets.length,
+    `${queue.length} queued + ${refused.length} refused of ${tickets.length}`,
+  );
+  check(
+    "oldest first, so the queue never becomes a stack",
+    queue[0]?.createdAt === "2026-08-27",
+    String(queue[0]?.createdAt),
+  );
+  check(
+    "every refusal carries its reason",
+    refused.every((r) => typeof r.reason === "string" && r.reason.length > 0),
+  );
 }
 
 console.log(bad === 0 ? "\nall pass" : `\n${bad} FAILED`);
