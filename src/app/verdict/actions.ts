@@ -10,7 +10,7 @@ import { getDbFromContext } from "@/lib/db";
 import { getOptionalUser } from "@/lib/auth";
 import { hashClientKey } from "@/lib/crypto";
 import { createRecheckRun } from "@/lib/recheck";
-import { enableWatchForRun } from "@/lib/watch-enable";
+import { EPHEMERAL_WATCH_REFUSAL, enableWatchForRun } from "@/lib/watch-enable";
 import { isSelfCheckRequest, selfCheckRedirectPath } from "@/lib/self-check";
 
 // CHE-193: our own checker pressing these buttons started real runs of a
@@ -53,6 +53,9 @@ export async function enableWatchAction(publicId: string): Promise<void> {
       break;
     case "forbidden":
       redirect(`/verdict/${publicId}?watch_error=${encodeURIComponent("This run belongs to another owner.")}`);
+      break;
+    case "ephemeral":
+      redirect(`/verdict/${publicId}?watch_error=${encodeURIComponent(EPHEMERAL_WATCH_REFUSAL)}`);
       break;
     case "gated":
       redirect(`/verdict/${publicId}?watch_error=${encodeURIComponent(result.reason)}`);

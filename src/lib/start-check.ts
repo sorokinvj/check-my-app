@@ -22,6 +22,12 @@ export interface StartCheckOptions {
   // column is unique, so a second start on the same payment fails at the
   // insert instead of producing a second run.
   paid?: { checkoutSessionId: string };
+  // CHE-202: an ephemeral run (a PR preview) and when it is deleted. Set only
+  // by the API route, and only for an owner — the gate that decides that is
+  // ephemeralGate in src/lib/ephemeral.ts, with the caller. No App row is
+  // created for any run here, ephemeral or not: Apps come from onboarding,
+  // Enable Daily Watch and Connect GitHub, and all three refuse ephemeral runs.
+  ephemeral?: { expiresAt: Date };
   // The browser's PostHog distinct id when the caller has it (from the
   // request cookie, or parked with a paid check), so `run_created` joins the
   // visitor's own events. Null when the visitor sent none.
@@ -65,6 +71,8 @@ export async function startCheck(
       ownerId: opts.ownerId,
       anonKeyHash: opts.anonKeyHash,
       paidCheckoutSessionId: opts.paid?.checkoutSessionId ?? null,
+      ephemeral: Boolean(opts.ephemeral),
+      expiresAt: opts.ephemeral?.expiresAt ?? null,
       status: "queued",
     },
     select: { id: true, publicId: true },
@@ -78,6 +86,7 @@ export async function startCheck(
     await deps.capture("run_created", who.distinctId, {
       appSlug,
       paid: Boolean(opts.paid),
+      ephemeral: Boolean(opts.ephemeral),
       hasCredentials: Boolean(input.testEmail && input.testPassword),
       ...who.extra,
     });

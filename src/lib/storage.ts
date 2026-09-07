@@ -13,6 +13,14 @@ export function evidenceUrl(key: string): string {
   return EVIDENCE_PATH_PREFIX + key.replace(/^\/+/, "");
 }
 
+// The inverse: the R2 key behind a stored evidence URL, or null when the URL
+// is not ours (an external link, an absolute URL from an older deployment).
+export function evidenceKey(url: string | null | undefined): string | null {
+  if (!url || !url.startsWith(EVIDENCE_PATH_PREFIX)) return null;
+  const key = url.slice(EVIDENCE_PATH_PREFIX.length);
+  return key.length > 0 ? key : null;
+}
+
 const CONTENT_TYPES: Record<string, string> = {
   png: "image/png",
   jpg: "image/jpeg",
@@ -43,4 +51,16 @@ export async function putObject(
 
 export async function getObject(bucket: R2Bucket, key: string): Promise<R2ObjectBody | null> {
   return bucket.get(key);
+}
+
+// R2 accepts up to 1000 keys per delete call.
+const DELETE_BATCH = 1000;
+
+// Remove objects. The caller decides that nothing references the keys any more
+// (screenshots are content-addressed and may be shared between runs — see
+// src/lib/ephemeral.ts); this only does the deleting, in batches.
+export async function deleteObjects(bucket: R2Bucket, keys: string[]): Promise<void> {
+  for (let i = 0; i < keys.length; i += DELETE_BATCH) {
+    await bucket.delete(keys.slice(i, i + DELETE_BATCH));
+  }
 }

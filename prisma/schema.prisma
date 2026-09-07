@@ -120,6 +120,13 @@ model Run {
   // start the same paid check can only produce one run — D1 has no
   // transactions, so the constraint is the lock. Null on every other run.
   paidCheckoutSessionId String? @unique
+  // CHE-202: a PR-preview hostname is a run, not an app. An ephemeral run is
+  // owned (private, never listed), has no App row and never gets one — no
+  // watch, no tracker, no repo — and is deleted outright, evidence included,
+  // once expiresAt passes (src/lib/ephemeral.ts, swept by the janitor). The
+  // only run we ever delete: the target it describes no longer exists either.
+  ephemeral Boolean   @default(false)
+  expiresAt DateTime?
 
   journeys Journey[]
   findings Finding[]
@@ -138,6 +145,7 @@ model Run {
   @@index([appId])
   @@index([ownerId])
   @@index([anonKeyHash])
+  @@index([ephemeral, expiresAt])
 }
 
 // Ledger of records the agent created inside a customer's product (CHE-90).

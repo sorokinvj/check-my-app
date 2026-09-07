@@ -49,6 +49,10 @@ export const createCheckSchema = z.object({
       env: z.string().trim().max(40).optional().or(z.literal("")),
     })
     .optional(),
+  // CHE-202: the target is a PR preview, not an app — the run is private,
+  // gets no App row and is deleted after EPHEMERAL_RUN_TTL_DAYS. Owners only;
+  // the route refuses it for anonymous callers (src/lib/ephemeral.ts).
+  ephemeral: z.boolean().optional(),
 });
 
 export type CreateCheckInput = z.infer<typeof createCheckSchema>;

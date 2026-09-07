@@ -127,5 +127,30 @@ check(
   JSON.stringify(anonOnAnon),
 );
 
+// CHE-202: an ephemeral run (a PR preview) has no App and must never get one.
+// The owner keeps what is about the run — re-check, full re-check, marks —
+// and is not offered anything that would create or need an App: Enable Daily
+// Watch (src/lib/watch-enable.ts refuses with kind "ephemeral"), Create Ticket
+// and Export to GitHub (both routes answer 409 ephemeral_run).
+const ownerEphemeral = viewerCapabilities({
+  run: { ownerId: OWNER, hasWatch: false, ephemeral: true },
+  viewer: { id: OWNER },
+  // Even with an App row for the same slug (a preview host colliding with an
+  // onboarded app's name), the ephemeral run does not use it.
+  viewerApp: { id: "app_same_slug" },
+  canMutate: true,
+});
+check(
+  "the owner of an ephemeral run keeps re-check, full re-check and marks, and is offered no watch, ticket or export",
+  ownerEphemeral.recheck &&
+    ownerEphemeral.fullRecheck &&
+    ownerEphemeral.markFindings &&
+    !ownerEphemeral.enableWatch &&
+    !ownerEphemeral.watchSettings &&
+    !ownerEphemeral.createTicket &&
+    !ownerEphemeral.exportSpecs,
+  JSON.stringify(ownerEphemeral),
+);
+
 console.log(failures === 0 ? "\nall pass" : `\n${failures} FAILED`);
 process.exit(failures === 0 ? 0 : 1);

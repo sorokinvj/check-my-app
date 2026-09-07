@@ -59,7 +59,8 @@
     "cost:trend": "node scripts/cost-trend.mjs",
     "supply": "tsx --tsconfig tsconfig.json scripts/measure/gate-ready-supply.ts",
     "verify:homework-gate": "tsx --tsconfig tsconfig.json scripts/verify-homework-gate.ts",
-    "verify:review": "tsx --tsconfig tsconfig.json scripts/verify-review.ts"
+    "verify:review": "tsx --tsconfig tsconfig.json scripts/verify-review.ts",
+    "verify:ephemeral": "tsx --tsconfig tsconfig.json scripts/verify-ephemeral.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.104.1",

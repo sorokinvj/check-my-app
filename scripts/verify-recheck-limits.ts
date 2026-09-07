@@ -218,6 +218,7 @@ async function main() {
       trigger: async (id) => void triggered.push(id),
       siteCap: () => 20,
       now: () => NOW,
+      ephemeralTtlDays: () => 7,
     };
   }
 
