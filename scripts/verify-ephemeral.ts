@@ -16,7 +16,11 @@
 //   6. the sweep deletes exactly the expired ephemeral runs with their
 //      journeys, steps, findings, evidence rows, ledgers and snapshot, and the
 //      R2 objects nothing else references — a screenshot shared with a live
-//      run stays; a live ephemeral run and a plain owned run are untouched.
+//      run stays; a live ephemeral run and a plain owned run are untouched;
+//   7. the janitor: its test-account sweep (rule §6) never touches an
+//      ephemeral run — there is no App row for the app-based sweep to find,
+//      and an ordinary owner's run is outside the ownership-based one; and
+//      the tick's ephemeral sweep hands the R2 binding through.
 //
 // Usage: npx tsx --tsconfig tsconfig.json scripts/verify-ephemeral.ts
 
@@ -35,6 +39,8 @@ import { startCheck } from "@/lib/start-check";
 import { enableWatchForRun } from "@/lib/watch-enable";
 import { createRecheckRun } from "@/lib/recheck";
 import { evidenceUrl } from "@/lib/storage";
+import { sweepExpiredEphemeral, sweepTestAccounts } from "@/agent/janitor";
+import type { AgentEnv } from "@/agent/env";
 
 let failures = 0;
 function check(name: string, ok: boolean, detail = "") {
@@ -92,6 +98,12 @@ function table(rows: Row[], name: string, log: string[]) {
       if (row) Object.assign(row, data);
       log.push(`${name}.update`);
       return row;
+    },
+    updateMany: async ({ where, data }: { where: Where; data: Row }) => {
+      const hit = rows.filter((r) => matches(r, where));
+      for (const r of hit) Object.assign(r, data);
+      log.push(`${name}.updateMany ${hit.length}`);
+      return { count: hit.length };
     },
     upsert: async () => {
       throw new Error(`${name}.upsert must not be called`);
@@ -349,6 +361,78 @@ async function main() {
     const noBucket = await sweepExpiredEphemeralRuns(db2, NOW);
     check("sweep: without a bucket the rows are deleted and evidence is reported as 0",
       noBucket.runs === 1 && noBucket.evidence === 0 && w2.run.length === 0, JSON.stringify(noBucket));
+  }
+
+  // 7 — the janitor's test-account sweeps skip an ephemeral run; the tick's
+  // ephemeral sweep passes the bucket through.
+  {
+    const w = world();
+    // The self-check account with a stale App (swept) and, separately, an
+    // ordinary owner's live ephemeral run (no App, no snapshot) — old enough
+    // that every grace period has passed.
+    const old = new Date("2026-08-01T00:00:00.000Z");
+    w.user.push({ id: "user_test", isTestAccount: true }, { id: OWNER.id, isTestAccount: false });
+    const apps: Row[] = [{ id: "app_test", ownerId: "user_test", appSlug: "self.test", createdAt: old }];
+    w.run.push(
+      { id: "run_self", ownerId: "user_test", appId: "app_test", watchId: "w1", snapshotId: null, ephemeral: false, expiresAt: null, createdAt: old },
+      { id: "run_eph", ownerId: OWNER.id, appId: null, watchId: null, snapshotId: "snap_eph", ephemeral: true, expiresAt: new Date("2026-12-01T00:00:00.000Z"), createdAt: old },
+    );
+    w.appSnapshot.push({ id: "snap_eph", runId: "run_eph", appId: null });
+    const { db, log } = stubDb(w);
+    // The janitor's queries reach through the owner relation and the App
+    // table, which the sweep stub has no business with; here they exist.
+    const users = w.user;
+    const withOwner = (rows: Row[], where: Where) => {
+      const { owner, ...rest } = where as Where & { owner?: { isTestAccount: boolean } };
+      return rows.filter((r) => matches(r, rest) && (!owner || users.find((u) => u.id === r.ownerId)?.isTestAccount === owner.isTestAccount));
+    };
+    // Picked table by table: spreading the stub would trip its App trap.
+    const base = db as unknown as Record<string, unknown>;
+    const runTable = base.run as Record<string, unknown>;
+    const janitorDb = {
+      journey: base.journey, step: base.step, finding: base.finding, evidence: base.evidence,
+      llmUsage: base.llmUsage, createdResource: base.createdResource, appSnapshot: base.appSnapshot,
+      watch: base.watch, user: base.user, counter: base.counter,
+      app: {
+        findMany: async ({ where }: { where: Where }) => withOwner(apps, where),
+        deleteMany: async ({ where }: { where: Where }) => ({ count: apps.filter((a) => matches(a, where)).length }),
+      },
+      run: {
+        ...runTable,
+        findMany: async ({ where = {} }: { where?: Where }) => withOwner(w.run, where),
+        updateMany: async ({ where, data }: { where: Where; data: Row }) => {
+          const hit = w.run.filter((r) => matches(r, where));
+          for (const r of hit) Object.assign(r, data);
+          log.push(`run.updateMany ${hit.length}`);
+          return { count: hit.length };
+        },
+      },
+      issueLink: { deleteMany: async () => ({ count: 0 }) },
+      ticketPolicy: { deleteMany: async () => ({ count: 0 }) },
+      trackerIntegration: { deleteMany: async () => ({ count: 0 }) },
+      repoIntegration: { deleteMany: async () => ({ count: 0 }) },
+    };
+    const { bucket, deleted } = stubBucket();
+    const env = { db: janitorDb, bindings: { EVIDENCE: bucket } } as unknown as AgentEnv;
+
+    const before = JSON.stringify(w.run.find((r) => r.id === "run_eph"));
+    const swept = await sweepTestAccounts(env, NOW);
+    const after = JSON.stringify(w.run.find((r) => r.id === "run_eph"));
+    check("janitor: the test-account sweep removes the self-check app and detaches its run",
+      swept.appsRemoved === 1 && w.run.find((r) => r.id === "run_self")?.appId === null, JSON.stringify(swept));
+    check("janitor: an ordinary owner's ephemeral run is untouched by the test-account sweeps — no App to find, not theirs to detach",
+      before === after && w.appSnapshot.some((s) => s.id === "snap_eph") && w.run.some((r) => r.id === "run_eph"),
+      `${before} → ${after}`);
+
+    // The tick's own ephemeral sweep: nothing expired yet, so nothing goes;
+    // then the run expires and the bucket it was given receives the delete.
+    const none = await sweepExpiredEphemeral(env, NOW);
+    check("janitor: the ephemeral sweep leaves a live ephemeral run alone", none.runs === 0 && w.run.some((r) => r.id === "run_eph"));
+    w.run.find((r) => r.id === "run_eph")!.transcriptUrl = evidenceUrl("transcripts/eph.json");
+    const later = await sweepExpiredEphemeral(env, new Date("2026-12-02T00:00:00.000Z"));
+    check("janitor: once expired, the run goes and the R2 binding the tick holds receives the delete",
+      later.runs === 1 && later.evidence === 1 && deleted.join() === "transcripts/eph.json" && !w.run.some((r) => r.id === "run_eph"),
+      JSON.stringify({ later, deleted }));
   }
 
   console.log(failures === 0 ? "\nall pass" : `\n${failures} FAILED`);
