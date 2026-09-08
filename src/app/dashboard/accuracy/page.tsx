@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { requireUser } from "@/lib/auth";
+import { DEFAULT_SELF_HOSTS, isSelfHost } from "@/agent/self-hosts";
 
 // How often we were right (CHE-99).
 //
@@ -43,27 +44,29 @@ const CLASS_COPY: Record<string, { label: string; why: string }> = {
   },
 };
 
-// Our own product, checked by our own agent. It is an ordinary app row, so the
-// only thing that marks it is the host we are served from.
-function ourOwnSlug(): string {
-  const env = getCloudflareContext().env as Record<string, string | undefined>;
+// Our own product, checked by our own agent. It is an ordinary app row owned by
+// an ordinary account, so the only thing that marks it is the host — the same
+// answer the agent's silence gate and the supply count read (CHE-156), rather
+// than a third private idea of which slug is ours.
+function selfCheckHosts(): string | undefined {
   try {
-    return new URL(env.APP_URL ?? "https://checkmyapp.dev").host;
+    const env = getCloudflareContext().env as Record<string, string | undefined>;
+    return env.SELF_CHECK_HOSTS;
   } catch {
-    return "checkmyapp.dev";
+    return undefined;
   }
 }
 
 export default async function AccuracyPage() {
   const { user, db } = await requireUser();
-  const selfSlug = ourOwnSlug();
+  const extraHosts = selfCheckHosts();
 
   const apps = await db.app.findMany({
     where: { ownerId: user.id },
     select: { id: true, appSlug: true },
     orderBy: { appSlug: "asc" },
   });
-  const selfAppIds = new Set(apps.filter((a) => a.appSlug === selfSlug).map((a) => a.id));
+  const selfAppIds = new Set(apps.filter((a) => isSelfHost(a.appSlug, extraHosts)).map((a) => a.id));
   const appById = new Map(apps.map((a) => [a.id, a.appSlug]));
 
   const allLinks = apps.length
@@ -96,13 +99,26 @@ export default async function AccuracyPage() {
   // actually did for them. Split the same way: our own product never props up
   // the number we would quote about someone else's.
   const forOwner = { ownerId: user.id };
+  // isSelfHost is a predicate, not a value, so the split cannot be pushed into
+  // the WHERE clause: read the slugs this owner's runs actually used and let the
+  // predicate name the ours-shaped ones. A run of a preview host listed in
+  // SELF_CHECK_HOSTS lands on the self side here for the same reason it gets no
+  // mail (CHE-156).
+  const ranSlugs = await db.run.findMany({
+    where: forOwner,
+    select: { appSlug: true },
+    distinct: ["appSlug"],
+  });
+  const selfSlugs = ranSlugs.map((r) => r.appSlug).filter((s) => isSelfHost(s, extraHosts));
   const [findings, falsePositives, selfFindings, selfFalsePositives] = await Promise.all([
-    db.finding.count({ where: { run: { ...forOwner, appSlug: { not: selfSlug } } } }),
+    db.finding.count({ where: { run: { ...forOwner, appSlug: { notIn: selfSlugs } } } }),
     db.finding.count({
-      where: { mark: "false_positive", run: { ...forOwner, appSlug: { not: selfSlug } } },
+      where: { mark: "false_positive", run: { ...forOwner, appSlug: { notIn: selfSlugs } } },
     }),
-    db.finding.count({ where: { run: { ...forOwner, appSlug: selfSlug } } }),
-    db.finding.count({ where: { mark: "false_positive", run: { ...forOwner, appSlug: selfSlug } } }),
+    db.finding.count({ where: { run: { ...forOwner, appSlug: { in: selfSlugs } } } }),
+    db.finding.count({
+      where: { mark: "false_positive", run: { ...forOwner, appSlug: { in: selfSlugs } } },
+    }),
   ]);
 
   const byClass = new Map<string, number>();
@@ -306,7 +322,8 @@ export default async function AccuracyPage() {
             <div className="card border-dashed p-6 opacity-80">
               <p className="section-label">self-checks · not counted above</p>
               <p className="mt-2 text-sm text-fg-muted">
-                {selfSlug} checking itself: {self.rejected} of {self.filed} tickets ruled
+                {selfSlugs.join(", ") || DEFAULT_SELF_HOSTS[0]} checking itself: {self.rejected} of{" "}
+                {self.filed} tickets ruled
                 not-a-bug, {self.closed} loops closed, {selfFalsePositives} of {selfFindings}{" "}
                 findings marked a false positive.
               </p>

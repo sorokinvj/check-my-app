@@ -67,13 +67,29 @@ matters" must carry an action the owner could take.
 ## 6. Self-checks are silent, and they clean up after themselves.
 
 CheckMyApp checks CheckMyApp by signing in as a real account and using the
-product. That account is flagged `User.isTestAccount` and three things follow,
-enforced in code rather than by habit:
+product. **A self-check is identified by its target, not by whose account owns
+the row** — checkmyapp.dev belongs to the owner's ordinary account, and keying
+the rule on `User.isTestAccount` meant the rule could not fire on the one app it
+was written for (CHE-156: 30 runs, 66 findings, 29 of them mailed out; run #156
+mailed the owner a `broken` verdict about a page our own checker had broken).
+Three things follow, enforced in code rather than by habit:
 
-- **Silent.** A run owned by a test account never emails anyone
-  (`ownedByTestAccount` in `src/agent/workflow.ts`). Its results live in that
-  account's own dashboard — sign in as it to look. The person running the
-  business must be able to forget the self-check exists.
+- **Silent.** What goes silent is **our** run of our app: the target is one of
+  our hosts *and* the run is ours — it has an owner, or a watch scheduled it.
+  A run owned by a test account is silent too (`silenceReason` in
+  `src/agent/notify-verdict.ts`, over `isSelfUrl` from `src/agent/self-hosts.ts`
+  — the same list the browser context and the read-only guard consult, extended
+  by the `SELF_CHECK_HOSTS` binding). Its results live on its verdict page,
+  which is there to be looked at deliberately. The person running the business
+  must be able to forget the self-check exists.
+  An anonymous visitor's free public check of checkmyapp.dev is **not** a
+  self-check and gets its mail like any other: pointing the checker at the
+  checker is one of the most common first runs anyone does, and silence there
+  reads as a broken form (owner rule, 2026-09-08). The host answers "is this app
+  ours"; the account answers "whose run is this". They are different questions.
+  The host predicate also keeps our own product out of every customer number
+  (`scripts/measure/gate-ready-supply.ts`, the accuracy page) so no count
+  depends on someone remembering a slug.
 - **Disposable.** `src/agent/janitor.ts` runs on every scheduler tick and
   removes apps the test account accumulated (12-hour grace, so a fresh run is
   still inspectable). Verdicts are detached, never deleted — they cost money to
