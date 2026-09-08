@@ -149,6 +149,10 @@ The canonical post-merge loop: CI deploys → your agent calls
 findings (or blocks the release). The same API is curl-able without MCP:
 `POST /api/checks`, `GET /api/runs/{id}`, `GET /api/runs/{id}/verdict`.
 
+App review on a PR preview — the agent-facing loop (`get_review` /
+`wait_for_review`, `ephemeral: true`) — ships as a Claude Code skill in
+[.claude/skills/app-review/SKILL.md](.claude/skills/app-review/SKILL.md).
+
 ## Webhooks — plug into any monitoring stack
 
 Per-app outbound integrations (CHE-53), configured on the dashboard app card:
