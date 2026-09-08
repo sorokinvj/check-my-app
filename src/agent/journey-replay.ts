@@ -21,7 +21,7 @@
 // forget one in. What the walk created it also deleted; redoing the creation
 // without the model that knew how to delete it would leave junk behind.
 
-import type { Browser } from "@cloudflare/playwright";
+import type { Browser, BrowserContext } from "@cloudflare/playwright";
 import { decryptSecret } from "@/lib/crypto";
 import type { AgentEnv } from "./env";
 import { credentialsAlreadyRejected, recordCredentialRejection } from "./credentials";
@@ -182,20 +182,22 @@ function withinBudget(work: Promise<string>, ms: number): Promise<string> {
 
 // ─── The replay ──────────────────────────────────────────────────────────────
 
-// contextOptions is passed in rather than imported from ./browser because that
+// openContext is passed in rather than imported from ./browser because that
 // module pulls @cloudflare/playwright's runtime (cloudflare:workers) at import,
 // and this file must load on plain Node for the verify script. The workflow
-// passes selfCheckContextOptions(browser, run.targetUrl, bindings) (CHE-193:
-// the self-check header on our hosts only); nothing else is meant to call this.
+// passes newAgentContext(browser, run.targetUrl, bindings) — CHE-193: the
+// self-check announcement on our hosts only, CHE-212: on the guarded requests
+// only, which is routing and so cannot be expressed as context options.
+// Nothing else is meant to call this.
 export async function replayJourney(
   env: AgentEnv,
   browser: Browser,
   run: ReplayRun,
   journey: ReplayJourney,
-  contextOptions: Parameters<Browser["newContext"]>[0],
+  openContext: (browser: Browser) => Promise<BrowserContext>,
 ): Promise<ReplayResult> {
   const deadline = Date.now() + REPLAY_BUDGET_MS;
-  const context = await browser.newContext(contextOptions);
+  const context = await openContext(browser);
   try {
     const page = await context.newPage();
     const toolEnv: ToolEnv = {
