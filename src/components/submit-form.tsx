@@ -338,10 +338,14 @@ export function SubmitForm({ initialUrl = "" }: { initialUrl?: string }) {
           </div>
           <div className="space-y-2">
             <p className="text-sm font-medium text-fg">Anything we should know?</p>
+            {/* ph-no-capture, like its neighbours: this is free text about the
+                customer's own product, and the placeholder invites operational
+                detail. None of it belongs in our analytics. */}
             <Input
               placeholder="Don't delete the account, no admin access. OK to create test sessions."
               value={userNotes}
               onChange={(e) => setUserNotes(e.target.value)}
+              className="ph-no-capture"
             />
           </div>
           <div className="space-y-2">
