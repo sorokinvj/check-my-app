@@ -25,7 +25,11 @@ import type { Browser, BrowserContext } from "@cloudflare/playwright";
 import { decryptSecret } from "@/lib/crypto";
 import type { AgentEnv } from "./env";
 import { credentialsAlreadyRejected, recordCredentialRejection } from "./credentials";
-import { executeTool, prepareAgentPage, type RecordedAction, type ToolEnv } from "./tools";
+import { executeTool, prepareAgentPage, UNDRIVEN_INSTRUCTION, type RecordedAction, type ToolEnv } from "./tools";
+
+// The stable head of UNDRIVEN_INSTRUCTION — the tool text for a control our own
+// hands could not drive (CHE-214).
+const UNDRIVEN_MARKER = UNDRIVEN_INSTRUCTION.slice(0, UNDRIVEN_INSTRUCTION.indexOf(" — "));
 
 export type ActionOutcome = "ok" | "refused" | "diverged" | "errored";
 export type StepOutcome = ActionOutcome | "no_actions";
@@ -77,6 +81,10 @@ const OUTCOME_RANK: Record<ActionOutcome, number> = { ok: 0, refused: 1, diverge
 export function classifyResult(kind: RecordedAction["kind"], result: string): ActionOutcome {
   if (result.startsWith("Error:")) return "errored";
   if (result.startsWith("Refused:")) return "refused";
+  // CHE-214: a control our hands could not drive no longer comes back as a bare
+  // "Error:" — the tool now says what the failure means. It is still an action
+  // that did not execute, and a replay must count it as one.
+  if (result.includes(UNDRIVEN_MARKER)) return "errored";
   if (result.includes("did not react AT ALL")) return "diverged";
   // The walk signed in with this credential; the app turning it away now is
   // the replay landing somewhere the walk did not, not a reproduction.

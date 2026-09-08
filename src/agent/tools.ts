@@ -67,6 +67,11 @@ export interface ToolEnv {
   // never happened, so a replay must not redo it. The step handler drains this
   // into Step.actions.
   actionTrail?: RecordedAction[];
+  // CHE-214: controls a fill or a click could not drive since the last
+  // report_step. Drained there, where a step that blamed the product for one
+  // becomes skipped / our_capability. Optional so a bare ToolEnv still builds;
+  // absent = the coercion has nothing to read.
+  undrivenControls?: UndrivenControl[];
   // CHE-171: every URL this run has actually SEEN published — the target, every
   // href on every page read, every URL a click or navigate landed on, the
   // survey's pages (CHE-132) and the known map's (CHE-133). Filled by the tools
@@ -166,6 +171,58 @@ export type RecordedAction =
 
 function recordAction(env: ToolEnv, action: RecordedAction): void {
   env.actionTrail?.push(action);
+}
+
+// ─── CHE-214: a control our own hands could not drive ────────────────────────
+//
+// Run #159 typed into the "Add login & notes" notes field on our own /check
+// page; Playwright's fill timed out after 8 s. The tool returned the bare
+// string "Error: locator.fill: Timeout 8000ms exceeded", the model never
+// reported a step for the attempt, and synthesis turned the absence into
+// "Credential/notes field didn't accept input" — published, with a bottom line
+// built on it. Checked by hand in a real Chrome minutes later: the accordion
+// opens, the field takes a programmatic value, and typed characters land at
+// the caret. The field was fine; our hands were not.
+//
+// A naked "Error:" is an invitation to interpret. Every other tool that cannot
+// do its job says what the failure means and what to report — verify_links has
+// UNREACHABLE_INSTRUCTION, the credential gates spell out "skipped /
+// missing_access". This is the same for the hands, plus the machine half:
+// the failure is recorded, and a step reported as a defect after one becomes
+// skipped / our_capability at report time, whatever the model wrote.
+export interface UndrivenControl {
+  hand: "fill" | "click";
+  /** The control as the model named it — a label, a name, or a selector. */
+  target: string;
+  /** Playwright's own word, trimmed. Machinery: never customer-facing. */
+  reason: string;
+}
+
+// What the model is told. Tool output, not customer text, so it may name the
+// machinery (CHE-190's UNREACHABLE_INSTRUCTION is the precedent).
+export const UNDRIVEN_INSTRUCTION =
+  "could not be driven from here — that says NOTHING about the control: a field or button we " +
+  "cannot reach is our limitation, not a defect of the product. Do not report it broken, risky " +
+  'or confusing, and never write that it "did not accept input" or "did nothing". Report the ' +
+  'step "skipped" with unverifiedReason "our_capability", or continue with another path.';
+
+// Playwright's vocabulary for "the element would not let me act on it". A
+// failure that is NOT one of these (a closed page, a crashed browser) is a
+// different animal and keeps the old bare error.
+const UNDRIVABLE =
+  /timeout .*exceeded|element is not (?:visible|enabled|editable|stable|attached)|not an? (?:<input>|editable)|intercepts pointer events|waiting for (?:locator|element)|strict mode violation/i;
+
+function isUndrivable(err: unknown): boolean {
+  const name = err instanceof Error ? err.name : "";
+  const message = err instanceof Error ? err.message : String(err);
+  return name === "TimeoutError" || UNDRIVABLE.test(message);
+}
+
+function recordUndriven(env: ToolEnv, hand: "fill" | "click", target: string, err: unknown): string {
+  const reason = (err instanceof Error ? err.message : String(err)).split("\n")[0].slice(0, 200);
+  env.undrivenControls?.push({ hand, target, reason });
+  console.warn(`[${hand}] could not drive ${JSON.stringify(target)}: ${reason}`);
+  return `The ${target} ${UNDRIVEN_INSTRUCTION}`;
 }
 
 // Strip any occurrence of the real test credentials from text leaving the tool
@@ -443,6 +500,11 @@ export async function executeTool(
         coerceUnpublished404(step, env);
         // CHE-193: on our own hosts a refused create/mark is not a defect.
         coerceSelfCheck403(step, env);
+        // CHE-214: a defect reported after a control our own hands could not
+        // drive is our gap. Before classifyUnverified, which leaves an
+        // already-reasoned skipped step alone.
+        coerceUndrivenControl(step, env);
+        if (env.undrivenControls) env.undrivenControls.length = 0;
         classifyUnverified(step);
         // CHE-190 after both: a risky step is never judged (CHE-169) and never
         // classified above, so a link we could not reach had no gate at all.
@@ -789,7 +851,15 @@ async function click(env: ToolEnv, input: Record<string, unknown>): Promise<stri
   await waitForHydration(env.page, 1_500);
   const before = await snapshotReaction(env);
 
-  await target.click({ timeout: 8_000 });
+  // CHE-214: a click that could not be PERFORMED is our limitation and says
+  // nothing about the control. A click that was performed and produced nothing
+  // is a different animal and keeps its fallbacks below.
+  try {
+    await target.click({ timeout: 8_000 });
+  } catch (err) {
+    if (!isUndrivable(err)) throw err;
+    return recordUndriven(env, "click", label ?? String(input.selector ?? "control"), err);
+  }
   let reaction = await settleAndMeasure(env, before);
   let strategy = "trusted click";
   const tried = [strategy];
@@ -1028,13 +1098,39 @@ async function fill(env: ToolEnv, input: Record<string, unknown>): Promise<strin
   // Same hydration gate as click: values typed before listeners attach are
   // silently dropped by controlled inputs.
   await waitForHydration(page, 1_000);
-  await field.fill(value, { timeout: 8_000 });
+  const named = label ?? (input.selector ? String(input.selector) : "field");
+  try {
+    await field.fill(value, { timeout: 8_000 });
+  } catch (err) {
+    if (!isUndrivable(err)) throw err;
+    // CHE-214, the "retried by another means" half. fill() sets the value in
+    // one shot and waits for the element to be editable; typing does what a
+    // person does, and by hand on run #159's field that is exactly what worked.
+    // Two seconds of focus, five of typing: cheaper than the fill that just
+    // failed, and it either lands or we say so.
+    console.warn(`[fill] fill() could not drive ${JSON.stringify(named)} — typing instead`);
+    try {
+      await field.focus({ timeout: 2_000 });
+      await field.pressSequentially(value, { timeout: 5_000, delay: 15 });
+    } catch (typingErr) {
+      return recordUndriven(env, "fill", named, typingErr);
+    }
+    const typed = await field.inputValue().catch(() => null);
+    if (typed !== null && !typed.includes(value)) {
+      return recordUndriven(env, "fill", named, new Error(`typed value did not stick in ${named}`));
+    }
+  }
   // React controlled inputs silently drop values typed before hydration —
   // verify the value stuck and retry once if not.
   const stuck = await field.inputValue().catch(() => null);
   if (stuck !== null && stuck !== value) {
     await env.page.waitForTimeout(600);
-    await field.fill(value, { timeout: 8_000 });
+    try {
+      await field.fill(value, { timeout: 8_000 });
+    } catch (err) {
+      if (!isUndrivable(err)) throw err;
+      return recordUndriven(env, "fill", named, err);
+    }
   }
   recordAction(env, {
     kind: "fill",
@@ -1260,6 +1356,38 @@ function evidenceAgainstProduct(text: string, targetOrigin: string): boolean {
 function listHosts(hosts: string[]): string {
   if (hosts.length <= 1) return hosts[0] ?? "this link";
   return `${hosts.slice(0, -1).join(", ")} and ${hosts[hosts.length - 1]}`;
+}
+
+// CHE-214, the machine half. The instruction above is a request; this is what
+// happens whatever the model does with it. A step reported as a defect after a
+// control we could not drive, with no hard evidence of the product's own doing,
+// becomes skipped / our_capability — which files a ticket on OUR board every
+// run it happens (CLAUDE.md rule 2), so the capability gets built instead of
+// being re-discovered as somebody else's bug.
+//
+// Hard evidence wins: an HTTP error, a console exception or a crash beside the
+// failed interaction is the product's own answer, and a step carrying one is
+// left exactly as the model wrote it.
+const INTERACTION_HARD_EVIDENCE = /\b(4\d{2}|5\d{2})\b|console error|exception|stack trace|crashed?\b/i;
+
+export function coerceUndrivenControl(
+  step: ReportedStep,
+  env: Pick<ToolEnv, "undrivenControls">,
+): void {
+  const undriven = env.undrivenControls ?? [];
+  if (undriven.length === 0) return;
+  if (step.status !== "broken" && step.status !== "risky" && step.status !== "confusing") return;
+  if (INTERACTION_HARD_EVIDENCE.test(step.observed ?? "")) return;
+  const first = undriven[0];
+  console.warn(
+    `[report_step] "${step.label}": ${step.status} after a ${first.hand} we could not drive ` +
+      `(${first.target}) → skipped/our_capability`,
+  );
+  step.status = "skipped";
+  step.unverifiedReason = "our_capability";
+  step.gapClass = "undriven_control";
+  const observed = (step.observed ?? "").trim();
+  step.observed = `${observed}${observed && !/[.!?]$/.test(observed) ? "." : ""} This control could not be exercised this run.`.trim();
 }
 
 export function coerceUnreachable(step: ReportedStep, env: Pick<ToolEnv, "targetOrigin">): void {

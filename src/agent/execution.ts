@@ -13,6 +13,7 @@ import {
   productizeStep,
   scrubSecrets,
   type RecordedAction,
+  type UndrivenControl,
   type ToolEnv,
 } from "./tools";
 import { newAgentContext } from "./browser";
@@ -126,6 +127,9 @@ export async function walkOneJourney(args: {
     // CHE-129: navigate/click/fill accumulate here between report_step calls;
     // each report drains what ran since the last one into that step's row.
     const actionTrail: RecordedAction[] = [];
+    // CHE-214: controls a fill or a click could not drive, drained by the same
+    // report_step that drains the trail above.
+    const undrivenControls: UndrivenControl[] = [];
 
     const toolEnv: ToolEnv = {
       page,
@@ -171,6 +175,7 @@ export async function walkOneJourney(args: {
       credentials: { rejected: await credentialsAlreadyRejected(env, run.id) },
       onCredentialRejected: (signature) => recordCredentialRejection(env, run.id, signature),
       actionTrail,
+      undrivenControls,
       // CHE-171: a 404 on an address outside this set is not a defect.
       knownUrls: knownUrlsFrom(run.targetUrl, publishedUrls),
       onScreenshot: async (buffer) => {
@@ -180,6 +185,10 @@ export async function walkOneJourney(args: {
         return stored.storageUrl;
       },
       onReportStep: async (reported) => {
+        // CHE-214: a class already decided from the machine trail at report
+        // time (a control our hands could not drive) is evidence, not a guess.
+        // Captured before adjudication, which may hand back a different object.
+        const machineClass = reported.gapClass;
         // CHE-169: a negative step gets its second opinion BEFORE anything is
         // written — the status that lands in the row is the adjudicated one.
         // With the judge off this returns the step untouched.
@@ -198,11 +207,13 @@ export async function walkOneJourney(args: {
         // our side. The filer (capability-gaps.ts) used to re-read the stored
         // text and could not find the words it keyed on.
         if (step.unverifiedReason === "our_capability") {
-          step.gapClass = classifyGap({
-            text: gapEvidenceText(reported.label, reported.attempted, reported.observed, step.observed),
-            actions: actionTrail,
-            targetOrigin: toolEnv.targetOrigin,
-          });
+          step.gapClass =
+            machineClass ??
+            classifyGap({
+              text: gapEvidenceText(reported.label, reported.attempted, reported.observed, step.observed),
+              actions: actionTrail,
+              targetOrigin: toolEnv.targetOrigin,
+            });
         } else {
           step.gapClass = undefined;
         }

@@ -35,6 +35,7 @@ export type GapClass =
   | "range_input"
   | "third_party_block"
   | "egress_unreachable"
+  | "undriven_control"
   | "unclassified";
 
 export const GAP_CLASSES: Record<GapClass, { label: string; why: string }> = {
@@ -82,6 +83,10 @@ export const GAP_CLASSES: Record<GapClass, { label: string; why: string }> = {
     label: "Checker cannot reach a host from where it runs",
     why: "A fetch that times out or is reset from our network says nothing about the link (CHE-190). Until the check can go out through a path the host answers, every outbound link to it is coverage we do not have.",
   },
+  undriven_control: {
+    label: "Checker cannot drive a control that a person can operate by hand",
+    why: "Run #159: typing into the notes field on the /check page timed out, and the run published \"the field didn't accept input\" about a field that takes a programmatic value and typed characters in an ordinary browser. Every control our hands cannot reach is either a coverage hole or, worse, a defect we invent for someone else — the walk needs a way to drive what a person can (CHE-214).",
+  },
   unclassified: {
     label: "Checker could not verify a step for an unclassified reason",
     why: "Unclassified coverage gaps are the ones we learn least from — the step text below should become its own capability entry.",
@@ -117,6 +122,15 @@ const TEXT_RULES: { match: RegExp; cls: GapClass }[] = [
   {
     match: /\bsliders?\b|range (input|control|slider)|input\[type=["']?range|type="range"|\bdrag(ged|ging)?\b(?![ -]and[ -]drop)/i,
     cls: "range_input",
+  },
+  // CHE-214, last so every named capability above still wins: a slider we
+  // could not drag is the range-input gap, not this one. The class is normally
+  // decided at report time from the machine failure (tools.ts
+  // coerceUndrivenControl) and carried on the row; this rule is the fallback
+  // for rows written before that, and for a step whose words are all we have.
+  {
+    match: /could not be (?:driven|exercised)|\bundriven\b|could not (?:drive|reach) (?:the |this )?(?:control|field|button)/i,
+    cls: "undriven_control",
   },
 ];
 
