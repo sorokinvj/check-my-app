@@ -32,7 +32,7 @@
 
 import type { AgentEnv } from "./env";
 import { FULL_RUN_MAX_AGE_DAYS, findLastWalkedRun } from "./replay";
-import { fullRunGate, gateInputFrom, type SurveyOutcome } from "./snapshot";
+import { fullRunGate, gateInputFrom, surveySaysUnchanged, type SurveyOutcome } from "./snapshot";
 
 // The only journey statuses worth carrying: "ok" (everything worked) and
 // "partial" (everything attempted worked, some steps went unverified). Anything
@@ -156,10 +156,21 @@ export async function planPartialRun(
   const good = journeys.filter((j) => CARRIABLE_STATUSES.has(j.status));
   const bad = journeys.filter((j) => !CARRIABLE_STATUSES.has(j.status));
   if (bad.length === 0) {
-    // Nothing to re-walk. Either the smoke path already carried this run (and we
-    // never got here), or it couldn't — in which case a full check is the honest
-    // way to re-establish a picture nobody has re-verified.
-    return { taken: false, reason: "nothing was wrong last time — re-checking everything" };
+    // Nothing to re-walk: a partial run with an empty rewalk list produces no
+    // fresh evidence at all, which is a smoke pass that also pays for
+    // synthesis. So this rung steps aside either way — but what it steps aside
+    // TO is the point of CHE-213. Until now the only next rung was a full walk,
+    // and "nothing was wrong last time" was therefore a reason to spend the
+    // most on the quietest app (run #157, joblander.app: $0.24 for a walk that
+    // found nothing). It no longer is: on an app the survey saw unchanged the
+    // smoke rung above cannot refuse for want of specs or targets, so this line
+    // is reached only when the survey had no answer to give.
+    return {
+      taken: false,
+      reason: surveySaysUnchanged(survey)
+        ? "nothing changed and nothing had trouble last time — no journey needs re-walking"
+        : "nothing was wrong last time — re-checking everything",
+    };
   }
   if (good.length === 0) {
     return { taken: false, reason: "every journey had trouble last time — walking them all" };

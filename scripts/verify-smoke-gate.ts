@@ -34,6 +34,16 @@
 //   h. the trouble line names the page and its count; the ok line has no
 //      console sentence at all.
 //
+// CHE-213, 2026-09-07 — the per-page limit was still not enough for a chatty
+// app. Run #157 on joblander.app: the survey reported no change and nine of
+// thirty-one pages logged five or six counted errors apiece, so the pass went
+// red and the day cost $0.24 for a walk that returned all_good with no
+// findings. On an unchanged app the burst is recorded and not counted:
+//   i. two pages at six errors with consoleBurstIsTrouble false → ok, counts
+//      still on the probes; the same pages with it true (the default) are
+//      trouble; an HTTP 500, a silent core page and an uncaught exception are
+//      trouble either way.
+//
 // Usage: npx tsx --tsconfig tsconfig.json scripts/verify-smoke-gate.ts
 
 import {
@@ -43,6 +53,7 @@ import {
   MAX_SMOKE_PAGES,
   PAGE_TIMEOUT_MS,
   RETRY_TIMEOUT_MS,
+  consoleSetAsideLine,
   probeTargets,
   smokeOutcomeLine,
   splitSmokeTargets,
@@ -293,6 +304,118 @@ async function main() {
     stub.fire("pageerror", new Error("TypeError: x is undefined"));
     const uncaught = await pending;
     check("g: an uncaught exception is still trouble on its own", JSON.stringify(uncaught.failures) === JSON.stringify(['uncaught JS error on load — "TypeError: x is undefined"']), uncaught.failures.join("; "));
+  }
+
+  // i — CHE-213: on an app the survey saw unchanged, a console burst is
+  // recorded and does not fail the pass; the live signals still do. This is
+  // the rule that decides whether run #157's shape (nine chatty pages, two
+  // comparable snapshots that agreed) costs $0.24 or $0.01. replay.ts passes
+  // consoleBurstIsTrouble: false exactly when surveySaysUnchanged is true.
+  {
+    const chatty = (path: string) =>
+      path === "/docs" || path === "/pricing"
+        ? Array.from({ length: 6 }, (_, i) => ({ text: `ReferenceError: x${i} is not defined`, url: u("/app.js") }))
+        : [];
+    const quiet = await probeTargets(stubPage({}, chatty).page, u("/"), { core, extra }, { consoleBurstIsTrouble: false });
+    check("i: unchanged app · two pages at 6 errors → ok", quiet.failures.length === 0, quiet.failures.join("; "));
+    check("i: … the counts are still recorded, per page and in total", quiet.consoleErrors === 12 && quiet.probes.find((p) => p.url === u("/docs"))?.consoleErrors === 6, String(quiet.consoleErrors));
+    check("i: … and both pages are listed as set aside, never swallowed", JSON.stringify(quiet.consoleBurstsSetAside) === JSON.stringify([u("/pricing"), u("/docs")]), quiet.consoleBurstsSetAside.join(", "));
+    const loud = await probeTargets(stubPage({}, chatty).page, u("/"), { core, extra }, { consoleBurstIsTrouble: true });
+    check("i: … the same pages are trouble when the survey did not say the app stood still", loud.failures.length === 2 && loud.consoleBurstsSetAside.length === 0, loud.failures.join("; "));
+    check("i: … and the option defaults to trouble when nobody passes it", (await probeTargets(stubPage({}, chatty).page, u("/"), { core, extra })).failures.length === 2);
+    const dead = await probeTargets(stubPage({ "/pricing": 500 }, chatty).page, u("/"), { core, extra }, { consoleBurstIsTrouble: false });
+    check("i: an HTTP 500 is still trouble on an unchanged app", JSON.stringify(dead.failures) === JSON.stringify(["/pricing returned HTTP 500"]), dead.failures.join("; "));
+    const silent = await probeTargets(stubPage({ "/sign-in": "timeout" }, chatty).page, u("/"), { core, extra }, { consoleBurstIsTrouble: false });
+    check("i: a silent core page is still trouble on an unchanged app", silent.failures.length === 1 && /sign-in/.test(silent.failures[0]), silent.failures.join("; "));
+    const thrower = stubPage({}, chatty);
+    const pending = probeTargets(thrower.page, u("/"), { core, extra }, { consoleBurstIsTrouble: false });
+    thrower.fire("pageerror", new Error("TypeError: x is undefined"));
+    const crash = await pending;
+    check("i: an uncaught exception is still trouble on an unchanged app", crash.failures.length === 1 && /uncaught/.test(crash.failures[0]), crash.failures.join("; "));
+  }
+
+  // j — CHE-213: the class the survey could NOT have checked. It compares
+  // markup and static assets, so a backend that started answering 500 to an
+  // XHR leaves every page byte-identical and this console line is the only
+  // trace. One is trouble, on any app, at any count.
+  {
+    const target = (text: string, url = u("/api/session")) => ({ text, url });
+    const fiveHundred = "Failed to load resource: the server responded with a status of 500 ()";
+    const one = await probeTargets(
+      stubPage({}, (path) => (path === "/docs" ? [target(fiveHundred)] : [])).page,
+      u("/"), { core, extra }, { consoleBurstIsTrouble: false },
+    );
+    check("j: one 500 from their own server on an unchanged app → trouble", JSON.stringify(one.failures) === JSON.stringify(["/docs — 1 request on this page came back as a server error"]), one.failures.join("; "));
+    check("j: … counted on the probe as a server error and sampled", one.probes.find((p) => p.url === u("/docs"))?.serverErrors === 1 && one.probes.find((p) => p.url === u("/docs"))?.serverErrorSample === fiveHundred);
+    check("j: … and it is not listed as set aside", one.consoleBurstsSetAside.length === 0, one.consoleBurstsSetAside.join(", "));
+    for (const status of [502, 503, 504]) {
+      const out = await probeTargets(
+        stubPage({}, (path) => (path === "/docs" ? [target(`Failed to load resource: the server responded with a status of ${status} ()`)] : [])).page,
+        u("/"), { core, extra }, { consoleBurstIsTrouble: false },
+      );
+      check(`j: ${status} from their own server is trouble too`, out.failures.length === 1, out.failures.join("; "));
+    }
+    const transport = await probeTargets(
+      stubPage({}, (path) => (path === "/docs" ? [target("Failed to load resource: net::ERR_CONNECTION_RESET")] : [])).page,
+      u("/"), { core, extra }, { consoleBurstIsTrouble: false },
+    );
+    check("j: a transport failure on a request to their own host is trouble", transport.failures.length === 1, transport.failures.join("; "));
+    const foreign = await probeTargets(
+      stubPage({}, (path) => (path === "/docs" ? [target("Failed to load resource: net::ERR_CONNECTION_RESET", "https://cdn.other.test/x.js")] : [])).page,
+      u("/"), { core, extra }, { consoleBurstIsTrouble: false },
+    );
+    check("j: the same transport failure to another host is not their server", foreign.failures.length === 0, foreign.failures.join("; "));
+    const unplaceable = await probeTargets(
+      stubPage({}, (path) => (path === "/docs" ? [target(fiveHundred, "")] : [])).page,
+      u("/"), { core, extra }, { consoleBurstIsTrouble: false },
+    );
+    check("j: a 5xx we cannot attribute stays trouble — a blind spot is not calm", unplaceable.failures.length === 1, unplaceable.failures.join("; "));
+    // The XHR shape: an unchanged page whose backend started failing produces
+    // exactly this and nothing else. The URL lives in the text, not location.
+    const inText = await probeTargets(
+      stubPage({}, (path) => (path === "/docs" ? [target(`POST ${u("/api/save")} 503 (Service Unavailable)`, "")] : [])).page,
+      u("/"), { core, extra }, { consoleBurstIsTrouble: false },
+    );
+    check("j: an XHR 5xx to their own host is trouble, placed by the URL in the message", JSON.stringify(inText.failures) === JSON.stringify(["/docs — 1 request on this page came back as a server error"]), inText.failures.join("; "));
+    const foreignXhr = await probeTargets(
+      stubPage({}, (path) => (path === "/docs" ? [target("GET https://api.other.test/v1/thing 502 (Bad Gateway)", "")] : [])).page,
+      u("/"), { core, extra }, { consoleBurstIsTrouble: false },
+    );
+    check("j: the same XHR 5xx to another host is not their server", foreignXhr.failures.length === 0, foreignXhr.failures.join("; "));
+    // Our own environment and third parties are filtered before the class is
+    // judged, so neither can masquerade as their server failing.
+    const ours = await probeTargets(
+      stubPage({}, (path) => (path === "/docs" ? [target("Failed to load resource: net::ERR_ABORTED 200"), target("Failed to load resource: net::ERR_BLOCKED_BY_CLIENT", "https://www.googletagmanager.com/gtm.js")] : [])).page,
+      u("/"), { core, extra }, { consoleBurstIsTrouble: false },
+    );
+    check("j: our own aborted and blocked requests are never a server error", ours.failures.length === 0 && ours.probes.find((p) => p.url === u("/docs"))?.serverErrors === 0, ours.failures.join("; "));
+    const sentry = await probeTargets(
+      stubPage({}, (path) => (path === "/docs" ? [target("Failed to load resource: net::ERR_CONNECTION_REFUSED", "https://o123.ingest.us.sentry.io/api/1/envelope/")] : [])).page,
+      u("/"), { core, extra }, { consoleBurstIsTrouble: false },
+    );
+    check("j: a third-party error-reporting host failing is not their server", sentry.failures.length === 0, sentry.failures.join("; "));
+    // One page, one line: a chatty page that also has a server error says the
+    // server error, not both.
+    const both = await probeTargets(
+      stubPage({}, (path) => (path === "/docs" ? [target(fiveHundred), ...Array.from({ length: 6 }, (_, i) => target(`ReferenceError: x${i}`, u("/app.js")))] : [])).page,
+      u("/"), { core, extra }, { consoleBurstIsTrouble: true },
+    );
+    check("j: a page with both a burst and a server error produces one line, the server one", both.failures.length === 1 && /server error/.test(both.failures[0]), both.failures.join("; "));
+    check("j: the 4xx rules are untouched (a 404 on their own origin is still just a console error)", (await probeTargets(
+      stubPage({}, (path) => (path === "/docs" ? Array.from({ length: 5 }, (_, i) => target("Failed to load resource: the server responded with a status of 404 ()", u(`/assets/${i}.js`))) : [])).page,
+      u("/"), { core, extra },
+    )).failures.join() === "/docs logged 5 console errors");
+  }
+
+  // k — the set-aside line the owner reads on a green pass (CHE-213).
+  {
+    const line = consoleSetAsideLine([u("/settings"), u("/en/roles"), u("/about"), u("/terms"), u("/docs")], u("/"));
+    check("k: the line names the pages, caps the list and counts the rest", line === "Console errors on 5 pages (/settings, /en/roles, /about, /terms and 1 more) — none of them your server answering with an error, and those pages have not changed since the last check", line ?? "null");
+    check("k: no machinery leaks into it", !!line && !hasEnvironmentLeak(line));
+    check("k: it claims no walk and no homework", !!line && !/journey|walk|verif|check it|yourself|manual/i.test(line), line ?? "null");
+    const single = consoleSetAsideLine([u("/about")], u("/"));
+    check("k: one page reads as one page", single === "Console errors on 1 page (/about) — none of them your server answering with an error, and those pages have not changed since the last check", single ?? "null");
+    check("k: nothing set aside → no line at all", consoleSetAsideLine([], u("/")) === null);
   }
 
   // h — the feed line: the count appears only when it decided something.

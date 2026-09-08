@@ -50,6 +50,7 @@ import {
 } from "@/agent/survey";
 import {
   applyVolatileRule,
+  decideRunMode,
   fullRunGate,
   isComparable,
   mergeSurveyedPages,
@@ -58,8 +59,26 @@ import {
   smokeTargetsFromSnapshot,
   surveyEvent,
   type SnapshotRecord,
+  type SurveyOutcome,
 } from "@/agent/snapshot";
+import type { ProbeRunner } from "@/agent/replay";
+import type { PartialDecision } from "@/agent/partial";
+import type { AgentEnv } from "@/agent/env";
 import { detectTech } from "@/lib/tech-signals";
+import Module from "node:module";
+
+// §10 drives the real smokeReplay and planPartialRun. Both reach
+// src/agent/browser.ts, whose @cloudflare/playwright requires the
+// `cloudflare:workers` builtin at load time; §10 never opens a browser (the
+// probe is injected), so that one module is answered with an empty object and
+// the two planners are imported after the hook is in place — a static import
+// would be hoisted above it. Same shim as scripts/verify-ephemeral.ts.
+const moduleLoader = Module as unknown as { _load: (request: string, ...rest: unknown[]) => unknown };
+const realLoad = moduleLoader._load;
+moduleLoader._load = function (request: string, ...rest: unknown[]) {
+  if (request === "cloudflare:workers") return {};
+  return realLoad.call(this, request, ...rest);
+};
 
 let failures = 0;
 function check(name: string, ok: boolean, detail = "") {
@@ -570,8 +589,189 @@ async function main() {
   check("volatile on the previous side alone also applies the rule", JSON.stringify(prevVolatile.ignored) === JSON.stringify(["/"]));
   check("volatile snapshots are still comparable", isComparable(record(vPrev.pages, { volatile: true }), { ...cur(vCurr.pages), digestVersion: DIGEST_VERSION }));
 
+  // 10 — the mode decision (CHE-213). The survey's answer has to choose the
+  // mode, not merely fail to force a full one. Run #157 (joblander.app,
+  // 2026-09-07): two comparable snapshots that agreed, and five journeys
+  // walked for $0.24 that returned all_good with no findings.
+  //
+  // Every row below drives the REAL planners — smokeReplay and planPartialRun
+  // against a stub database and a stub probe — and feeds their two answers to
+  // decideRunMode, the same function workflow.ts calls. Nothing here restates
+  // the rule; if a planner changes its mind, a row fails.
+  await modeTable();
+
   console.log(failures === 0 ? "\nall pass" : `\n${failures} FAILED`);
   process.exit(failures === 0 ? 0 : 1);
+}
+
+// ─── §10 the decision table ──────────────────────────────────────────────────
+
+const MODE_NOW = new Date("2026-09-07T12:00:00.000Z");
+
+interface Case {
+  /** comparable / changed, as SurveyOutcome would carry them. */
+  survey: "unchanged" | "changed" | "not-comparable";
+  /** Verdict on the last run that actually walked. */
+  baselineVerdict: string | null;
+  /** Journey statuses on that run — "clean" means every one is carriable. */
+  journeys: string[];
+  /** Days since that walk. */
+  ageDays: number;
+  specs: boolean;
+  /** What the smoke probe comes back with, once it is allowed to run. */
+  probeFailures?: string[];
+}
+
+const P = (path: string): SurveyPage => page(path, "h");
+const SNAPSHOT_PAGES = [P("/"), P("/pricing"), P("/login"), P("/docs")];
+
+function outcomeFor(kind: Case["survey"]): SurveyOutcome {
+  const previous = record(SNAPSHOT_PAGES);
+  if (kind === "not-comparable") {
+    return { snapshot: record(SNAPSHOT_PAGES, { changed: null }), previous: null, comparable: false };
+  }
+  const changed = kind === "changed";
+  return {
+    snapshot: record(SNAPSHOT_PAGES, {
+      changed,
+      diff: changed
+        ? { changedPaths: ["/pricing"], addedPaths: [], removedPaths: [], bundlesChanged: false, buildIdChanged: false }
+        : null,
+    }),
+    previous,
+    comparable: true,
+  };
+}
+
+/** Just enough database for the two planners' reads, and nothing else. */
+function modeEnv(c: Case): AgentEnv {
+  const walkedAt = new Date(MODE_NOW.getTime() - c.ageDays * 86_400_000);
+  const runs: Record<string, Record<string, unknown>> = {
+    run_now: { id: "run_now", runNumber: 99, status: "queued", verdict: null, completedAt: null, testEmail: null, testPasswordEnc: null, appLens: null, anatomy: null },
+    run_base: { id: "run_base", runNumber: 42, status: "completed", verdict: c.baselineVerdict, completedAt: walkedAt, testEmail: null, testPasswordEnc: null, appLens: null, anatomy: JSON.stringify({ pages: ["/pricing", "/login"] }) },
+  };
+  const journeys = c.journeys.map((status, i) => ({
+    id: `j${i}`, runId: "run_base", order: i, title: `Journey ${i + 1}`, status,
+    carriedFromRunId: null, steps: [{ label: "open the homepage" }],
+  }));
+  const db = {
+    run: {
+      findUnique: async ({ where }: { where: { id: string } }) => runs[where.id] ?? null,
+      findMany: async ({ where }: { where: { id?: { in: string[] } } }) =>
+        where.id?.in ? where.id.in.map((id) => runs[id]).filter(Boolean) : [runs.run_base],
+    },
+    journey: {
+      count: async ({ where }: { where: { runId: string } }) => (where.runId === "run_base" ? journeys.length : 0),
+      findMany: async ({ where }: { where: { runId: string } }) => (where.runId === "run_base" ? journeys : []),
+    },
+    generatedTest: {
+      findMany: async () => (c.specs ? [{ content: "await page.goto('/pricing');" }] : []),
+    },
+  };
+  return { db } as unknown as AgentEnv;
+}
+
+/** The browser half, stubbed: whatever the row says the pages came back with. */
+function modeProbe(c: Case): ProbeRunner {
+  return async (_env, _targetUrl, targets) => ({
+    probes: [],
+    healthy: targets.core.length + targets.extra.length + 1,
+    unreached: [],
+    skipped: 0,
+    failures: c.probeFailures ?? [],
+    consoleErrors: 0,
+    consoleBurstsSetAside: [],
+    pageErrors: 0,
+    screenshotUrl: null,
+  });
+}
+
+async function modeOf(c: Case): Promise<{ mode: string; smoke: string; partial: string }> {
+  const { smokeReplay } = await import("@/agent/replay");
+  const { planPartialRun } = await import("@/agent/partial");
+  const env = modeEnv(c);
+  const survey = outcomeFor(c.survey);
+  const smoke = await smokeReplay(
+    env,
+    { id: "run_now", appSlug: "target.test", targetUrl: `${ORIGIN}/`, watchId: "w1", baselineRunId: "run_base" },
+    survey,
+    MODE_NOW,
+    modeProbe(c),
+  );
+  // workflow.ts's own guard, not the planner's: a smoke pass that ran has
+  // already decided the day, so the partial rung is not consulted.
+  const plan: PartialDecision = smoke.taken
+    ? { taken: false, reason: "the smoke check found trouble — re-walking every journey" }
+    : await planPartialRun(env, { id: "run_now", watchId: "w1" }, survey, MODE_NOW);
+  const decision = decideRunMode({
+    smoke: smoke.taken ? { ran: true, ok: smoke.ok } : { ran: false, reason: smoke.reason },
+    partial: plan.taken ? { planned: true } : { planned: false, reason: plan.reason },
+  });
+  return {
+    mode: decision.mode,
+    smoke: smoke.taken ? `ran, ${smoke.ok ? "green" : "red"}` : smoke.reason,
+    partial: plan.taken ? "planned" : plan.reason,
+  };
+}
+
+const CLEAN = ["ok", "ok", "partial"];
+const MIXED = ["ok", "broken", "ok"];
+
+async function expectMode(name: string, c: Case, want: string) {
+  const got = await modeOf(c);
+  check(name, got.mode === want, `${got.mode} (smoke: ${got.smoke}; partial: ${got.partial})`);
+}
+
+async function modeTable() {
+  const base: Case = { survey: "unchanged", baselineVerdict: "mostly_ok", journeys: CLEAN, ageDays: 1, specs: true };
+
+  // Unchanged + a clean baseline is the cheapest case, not the most expensive.
+  await expectMode("mode: unchanged · clean baseline · specs · 1 day → smoke", base, "smoke");
+  await expectMode("mode: unchanged · clean baseline · NO specs → smoke (the survey re-visited the pages)", { ...base, specs: false }, "smoke");
+  await expectMode("mode: unchanged · clean baseline · 30 days → smoke (a comparable pair beats the calendar)", { ...base, ageDays: 30 }, "smoke");
+  await expectMode("mode: unchanged · a console burst is recorded, not trouble → smoke", base, "smoke");
+  // The live signals still cost a full walk on an unchanged app. The classes
+  // themselves are decided in smoke.ts and asserted in verify-smoke-gate §i/§j;
+  // these two rows check that a red pass reaches the table as `full`.
+  await expectMode("mode: unchanged · a page answered HTTP 500 → full", { ...base, probeFailures: ["/pricing returned HTTP 500"] }, "full");
+  await expectMode("mode: unchanged · their server answered with an error → full", { ...base, probeFailures: ["/pricing — 1 request on this page came back as a server error"] }, "full");
+  // A journey that had trouble is still re-walked, and only that one.
+  await expectMode("mode: unchanged · baseline had one bad journey · no specs → partial", { ...base, specs: false, baselineVerdict: "needs_attention", journeys: MIXED }, "partial");
+
+  // A changed app keeps today's behaviour exactly: fullRunGate forces, and it
+  // forces both rungs, so a diff means a full walk however the baseline
+  // looked. Re-walking only the journeys a changed path touches would need a
+  // path-to-journey map nothing builds yet; CHE-213 does not add one, and this
+  // row is here so the day it is added, the change is deliberate.
+  await expectMode("mode: changed · mixed journeys → full (the gate forces both rungs)", { ...base, survey: "changed", baselineVerdict: "needs_attention", journeys: MIXED }, "full");
+  await expectMode("mode: changed · clean baseline → full", { ...base, survey: "changed" }, "full");
+  await expectMode("mode: changed · no specs · clean baseline → full", { ...base, survey: "changed", specs: false }, "full");
+
+  // Nothing comparable: today's behaviour, the fuse included.
+  await expectMode("mode: not comparable · clean baseline · specs · 1 day → smoke", { ...base, survey: "not-comparable" }, "smoke");
+  await expectMode("mode: not comparable · clean baseline · NO specs → full (no survey answer to stand on)", { ...base, survey: "not-comparable", specs: false }, "full");
+  await expectMode("mode: not comparable · 8 days → full (the seven-day fuse)", { ...base, survey: "not-comparable", ageDays: 8 }, "full");
+  await expectMode("mode: not comparable · mixed journeys · bad verdict → partial", { ...base, survey: "not-comparable", baselineVerdict: "needs_attention", journeys: MIXED }, "partial");
+  await expectMode("mode: not comparable · every journey had trouble → full", { ...base, survey: "not-comparable", baselineVerdict: "broken", journeys: ["broken", "broken"] }, "full");
+
+  // The fuse is not softened by an unchanged pair that has nothing to compare.
+  await expectMode("mode: unchanged · 8 days → smoke (the fuse fires only when nothing is comparable)", { ...base, ageDays: 8 }, "smoke");
+
+  // And the reason an owner reads when the ladder hands over is the first rung's.
+  const handover = await modeOf({ ...base, survey: "not-comparable", specs: false });
+  check(
+    "mode: the full-run reason names what the cheap rung could not do",
+    handover.smoke === "no recorded specs for this app yet",
+    handover.smoke,
+  );
+  // "Nothing was wrong last time" must never be the sentence that explains a
+  // full walk on an app the survey saw unchanged (CHE-213).
+  const quiet = await modeOf({ ...base, specs: false, probeFailures: ["/pricing returned HTTP 500"] });
+  check(
+    "mode: an unchanged clean app never reads 'nothing was wrong last time — re-checking everything'",
+    !/re-checking everything/.test(`${quiet.smoke} ${quiet.partial}`),
+    `${quiet.smoke} | ${quiet.partial}`,
+  );
 }
 
 main();

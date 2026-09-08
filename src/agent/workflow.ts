@@ -52,8 +52,16 @@ import { deliverWebhook, type RunCompletedPayload } from "@/lib/notify/webhook";
 import { deliverSlack } from "@/lib/notify/slack";
 import { decryptSecret } from "@/lib/crypto";
 import type { TranscriptEntry } from "./core";
-import { shortLabel, smokeOutcomeLine, smokeReplay, SMOKE_COST_USD, type SmokeReport } from "./replay";
 import {
+  consoleSetAsideLine,
+  shortLabel,
+  smokeOutcomeLine,
+  smokeReplay,
+  SMOKE_COST_USD,
+  type SmokeReport,
+} from "./replay";
+import {
+  decideRunMode,
   mergeSurveyedPages,
   NO_SURVEY,
   surveyEvent,
@@ -246,10 +254,24 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
         });
       }
 
+      // The mode, said once (CHE-213). Both rungs have answered; snapshot.ts
+      // turns those two answers into smoke / partial / full, and every branch
+      // below reads this instead of re-deriving it from `smoke` and `plan`.
+      // scripts/verify-survey.ts asserts the same function against the real
+      // planners, so the table cannot drift from what production does.
+      const mode = decideRunMode({
+        smoke: smoke.taken ? { ran: true, ok: smoke.ok } : { ran: false, reason: smoke.reason },
+        partial: plan.taken ? { planned: true } : { planned: false, reason: plan.reason },
+      });
+      // Our own log, not the feed: the feed already carries each rung's line
+      // in the owner's words (modeEvents), and this is the one place a cost
+      // question can be answered from the logs alone.
+      console.log(`[mode] ${mode.mode} — ${mode.reason}`);
+
       // CHE-106: the budget is spent and the smoke pass could not carry the
       // verdict forward. Finish honestly rather than spend: the app was
       // checked for outages today, and the deep walk resumes tomorrow.
-      if (run.smokeOnly && !(smoke.taken && smoke.ok)) {
+      if (run.smokeOnly && mode.mode !== "smoke") {
         await step.do("budget-complete", async () => {
           await env.db.run.update({
             where: { id: runId },
@@ -276,7 +298,9 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
         return;
       }
 
-      if (smoke.taken && smoke.ok) {
+      // `smoke.taken` is how TypeScript learns the report's fields are there;
+      // decideRunMode returning "smoke" already implies it.
+      if (mode.mode === "smoke" && smoke.taken) {
         // Deliberately NOT routed through synthesis or checkVerdictIntegrity: a
         // smoke run walks zero journeys, so the zero-coverage guard would rewrite
         // this to "unverified". The guard is right about LLM runs and wrong here —
@@ -992,6 +1016,11 @@ function modeEvents(
     // sentence the owner does: healthy pages, pages that did not answer, and
     // the verdict carried forward.
     events.push({ icon: smoke.ok ? "ok" : "warn", text: smokeOutcomeLine(smoke, targetUrl) });
+    // CHE-213: on a green pass, any console burst the survey's answer let us
+    // set aside is said out loud. A red pass already names what went wrong,
+    // and adding "these other pages were fine" to it would only blur that.
+    const aside = smoke.ok ? consoleSetAsideLine(smoke.consoleBurstsSetAside, targetUrl) : null;
+    if (aside) events.push({ icon: "info", text: aside });
   } else {
     events.push({ icon: "info", text: `No smoke check — ${smoke.reason}` });
   }
