@@ -319,11 +319,24 @@ export function drivenControls(steps: GateStep[]): {
 //   - the hand never acted        → we are describing something we never did;
 //   - it acted but named nothing  → silence (a button called "Save" carries no
 //                                    token of its own), so the claim stands;
-//   - it acted and named controls → the claim must name one of them.
+//   - it acted and named controls → the claim must name one of them, by the
+//                                   same two-token rule the rest of this file
+//                                   uses. One token is a coincidence, and on
+//                                   this app a cheap one: our own primary page
+//                                   is /check, so almost every locus carries
+//                                   "check", and run #159's trail contains a
+//                                   click on the link "Check your app →".
+//                                   Anchoring on one token would let that nav
+//                                   link vouch for "Password reset button does
+//                                   nothing" at "/check — password reset",
+//                                   which is this PR's own failure moved one
+//                                   word to the left. Where a control's name
+//                                   yields only one token, the set is small
+//                                   enough that the whole of it must appear.
 function handSupports(hand: Hand, locus: Set<string>): boolean {
   if (hand.count === 0) return false;
   if (hand.tokens.size === 0) return true;
-  return sharedCount(locus, hand.tokens) > 0;
+  return sharedCount(locus, hand.tokens) >= Math.min(SHARED_TOKENS_MIN, hand.tokens.size);
 }
 
 // ─── CHE-219: the same evidence, one sentence at a time ──────────────────────

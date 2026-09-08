@@ -13,6 +13,7 @@ import { ExportSpecs } from "@/components/export-specs";
 import { TrackOnView, TrackedLink } from "@/components/track";
 import { canMutateOwned, getOptionalUser } from "@/lib/auth";
 import { viewerCapabilities } from "@/lib/viewer-capabilities";
+import { FINDING_PUBLIC_SELECT } from "@/lib/finding-fields";
 import { fullRechecksRemaining } from "@/lib/plans";
 import type { UserPlan } from "@/lib/enums";
 import type { AppLens, RunEvent } from "@/lib/types";
@@ -86,7 +87,16 @@ export default async function VerdictPage({
     where: { publicId: (await params).id },
     include: {
       journeys: { include: { steps: { orderBy: { order: "asc" } } }, orderBy: { order: "asc" } },
-      findings: { include: { evidence: true }, orderBy: { number: "asc" } },
+      // CHE-215: an explicit projection, not `include`. This array is a prop of
+      // a client component, so every column on it ships to the browser in the
+      // RSC payload whether or not it is rendered — and `anchor` is our own
+      // record of what the finding was allowed to rest on (rule 1).
+      // src/lib/finding-fields.ts classifies every column and a verify case
+      // fails when a new one is added without a decision.
+      findings: {
+        select: { ...FINDING_PUBLIC_SELECT, evidence: true },
+        orderBy: { number: "asc" },
+      },
       watch: { select: { active: true } },
       llmUsage: true,
     },

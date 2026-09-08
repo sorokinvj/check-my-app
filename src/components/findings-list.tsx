@@ -1,13 +1,17 @@
 "use client";
 
 import { useState } from "react";
-import type { Evidence, Finding } from "@/generated/prisma/client";
+import type { Evidence } from "@/generated/prisma/client";
+import type { PublicFinding } from "@/lib/finding-fields";
 import type { FindingMark } from "@/lib/enums";
 import type { FindingDetail } from "@/lib/types";
 import { parseJson } from "@/lib/json";
 import { CATEGORY_META, CATEGORY_ORDER, SEVERITY_META } from "@/lib/status";
 
-type FindingWithEvidence = Finding & { evidence: Evidence[] };
+// CHE-215: the public projection, not the whole row. Every prop of a client
+// component is serialized into the RSC payload whether or not it is rendered,
+// so this type is what keeps our own columns out of the browser.
+type FindingWithEvidence = PublicFinding & { evidence: Evidence[] };
 
 const EVIDENCE_LABEL: Record<Evidence["type"], string> = {
   screenshot: "📷 screenshot",

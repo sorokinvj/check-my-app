@@ -1099,6 +1099,17 @@ async function fill(env: ToolEnv, input: Record<string, unknown>): Promise<strin
   // silently dropped by controlled inputs.
   await waitForHydration(page, 1_000);
   const named = label ?? (input.selector ? String(input.selector) : "field");
+  const landed = () => {
+    recordAction(env, {
+      kind: "fill",
+      ...(label ? { label } : {}),
+      ...(input.selector ? { selector: String(input.selector) } : {}),
+      value: recordedValue,
+      outcome: { urlAfter: env.page.url() },
+    });
+    return usedSecret ? "Filled (credential substituted server-side)." : "Filled.";
+  };
+
   try {
     await field.fill(value, { timeout: 8_000 });
   } catch (err) {
@@ -1119,9 +1130,18 @@ async function fill(env: ToolEnv, input: Record<string, unknown>): Promise<strin
     if (typed !== null && !typed.includes(value)) {
       return recordUndriven(env, "fill", named, new Error(`typed value did not stick in ${named}`));
     }
+    // Typing landed, and this path RETURNS. Falling through to the hydration
+    // retry below would call the very fill() that was just proven undrivable
+    // for this control, and on a field that held anything before we typed
+    // (a default, a leftover) `stuck !== value` is true — so the retry would
+    // fail, record the control as undriven, and throw away input that worked.
+    // That is the false negative CHE-214 exists to remove, reintroduced one
+    // block later.
+    return landed();
   }
   // React controlled inputs silently drop values typed before hydration —
-  // verify the value stuck and retry once if not.
+  // verify the value stuck and retry once if not. Only after a fill() that
+  // itself succeeded: this is a hydration race, not an undrivable control.
   const stuck = await field.inputValue().catch(() => null);
   if (stuck !== null && stuck !== value) {
     await env.page.waitForTimeout(600);
@@ -1132,14 +1152,7 @@ async function fill(env: ToolEnv, input: Record<string, unknown>): Promise<strin
       return recordUndriven(env, "fill", named, err);
     }
   }
-  recordAction(env, {
-    kind: "fill",
-    ...(label ? { label } : {}),
-    ...(input.selector ? { selector: String(input.selector) } : {}),
-    value: recordedValue,
-    outcome: { urlAfter: env.page.url() },
-  });
-  return usedSecret ? "Filled (credential substituted server-side)." : "Filled.";
+  return landed();
 }
 
 // Exact accessible name first (CHE-79): getByRole's `name` matches SUBSTRINGS,
@@ -1368,7 +1381,25 @@ function listHosts(hosts: string[]): string {
 // Hard evidence wins: an HTTP error, a console exception or a crash beside the
 // failed interaction is the product's own answer, and a step carrying one is
 // left exactly as the model wrote it.
-const INTERACTION_HARD_EVIDENCE = /\b(4\d{2}|5\d{2})\b|console error|exception|stack trace|crashed?\b/i;
+// A bare three-digit number is not a status code. We walk arbitrary customer
+// forms, and "typed 499.00 into the price field and nothing happened" is a
+// price — read as hard evidence it would leave the step published as the
+// product's defect, which is the rule-8 failure this whole change exists to
+// close. So the number must come with the vocabulary of a response: HTTP, a
+// status, an error/response beside it, or a method and a path.
+const INTERACTION_HARD_EVIDENCE = new RegExp(
+  [
+    // "HTTP 500", "status 403", "responded 502", "→ 500", "returned a 500 error"
+    String.raw`\b(?:http|https|status(?:\s+code)?|code|returned|returns|answered|responded|responds|replied|gave|with|→|->)\s*:?\s*(?:an?\s+)?[45]\d{2}\b`,
+    // "500 error", "403 response", "404 status", "502 from the API"
+    String.raw`\b[45]\d{2}\s+(?:error|response|status|from\b)`,
+    // "GET /api/orders 500", "POST /checkout → 422"
+    String.raw`\b(?:GET|POST|PUT|PATCH|DELETE|HEAD)\b[^.]{0,80}?\b[45]\d{2}\b`,
+    // Everything that is not a number at all.
+    String.raw`console error|exception|stack trace|crashed?\b|server error|internal error`,
+  ].join("|"),
+  "i",
+);
 
 export function coerceUndrivenControl(
   step: ReportedStep,

@@ -43,8 +43,8 @@ const TIMEOUT = () => new Error("locator.fill: Timeout 8000ms exceeded");
 
 // The notes field of run #159, in the two states worth telling apart: fill()
 // times out, and typing either lands (as it does by hand) or does not.
-function stubPage(opts: { fillThrows: boolean; typingWorks: boolean }) {
-  let value = "";
+function stubPage(opts: { fillThrows: boolean; typingWorks: boolean; residual?: string }) {
+  let value = opts.residual ?? "";
   const locator = {
     first: () => locator,
     or: () => locator,
@@ -77,7 +77,7 @@ function stubPage(opts: { fillThrows: boolean; typingWorks: boolean }) {
   };
 }
 
-function stubEnv(opts: { fillThrows: boolean; typingWorks: boolean }): ToolEnv & {
+function stubEnv(opts: { fillThrows: boolean; typingWorks: boolean; residual?: string }): ToolEnv & {
   page: ReturnType<typeof stubPage>;
 } {
   return {
@@ -147,6 +147,25 @@ async function main() {
     check("…and the record is drained, so the next step starts clean", (env.undrivenControls as UndrivenControl[]).length === 0);
   }
 
+  // 3b — the field already held something. Typing appends, so the DOM value
+  // ends up "Draft.test notes" — it CONTAINS what we typed but does not equal
+  // it. Before this was fixed, execution fell through into the pre-existing
+  // "verify stuck, retry" block, which called the very fill() just proven
+  // undrivable: it failed, recorded the control as undriven, and threw away
+  // input that had worked. The whole of CHE-214 undone one block later.
+  {
+    const env = stubEnv({ fillThrows: true, typingWorks: true, residual: "Draft." });
+    const result = await executeTool(env, "fill", NOTES);
+    check("a field with residual content still reports Filled. after typing", result === "Filled.", result);
+    check("…the typed value is there", env.page.typedValue() === `Draft.${NOTES.value}`, env.page.typedValue());
+    check("…the action is on the trail", (env.actionTrail as RecordedAction[]).length === 1);
+    check(
+      "…and the control is NOT recorded as undriven",
+      (env.undrivenControls as UndrivenControl[]).length === 0,
+      JSON.stringify(env.undrivenControls),
+    );
+  }
+
   // 4 — hard evidence outranks it. A 500 beside the failed fill is the
   // product's own answer and the step is left exactly as written.
   {
@@ -160,6 +179,37 @@ async function main() {
     };
     await executeTool(env, "report_step", step as unknown as Record<string, unknown>);
     check("a 500 beside the failed fill keeps the step as the model wrote it", step.status === "broken", step.status);
+  }
+
+  // 4b — but a NUMBER is not a status code. We walk arbitrary customer forms,
+  // and a price in the 400–599 range read as hard evidence would leave the step
+  // published as the product's defect — the rule 8 failure this change closes,
+  // reappearing as a coincidence of arithmetic.
+  {
+    for (const observed of [
+      "Typed 499.00 into the price field and nothing happened.",
+      "Set the quantity to 500 and the total never updated.",
+      "Order #412 was already in the list; the new one never appeared.",
+    ]) {
+      const env = stubEnv({ fillThrows: true, typingWorks: false });
+      await executeTool(env, "fill", NOTES);
+      const step: ReportedStep = { label: "Set a price", status: "broken", attempted: "Typed a price", observed };
+      await executeTool(env, "report_step", step as unknown as Record<string, unknown>);
+      check(`a bare number is not hard evidence: ${JSON.stringify(observed.slice(0, 40))}`, step.status === "skipped", step.status);
+    }
+    // …and the real thing still is, in the shapes a model actually writes.
+    for (const observed of [
+      "POST /api/price returned HTTP 500 and the price never saved.",
+      "The save request answered 422 and the form stayed open.",
+      "GET /api/orders 503 — the list never loaded.",
+      "A console error (TypeError) fired and the field stayed empty.",
+    ]) {
+      const env = stubEnv({ fillThrows: true, typingWorks: false });
+      await executeTool(env, "fill", NOTES);
+      const step: ReportedStep = { label: "Save the price", status: "broken", attempted: "Saved", observed };
+      await executeTool(env, "report_step", step as unknown as Record<string, unknown>);
+      check(`a real response is still hard evidence: ${JSON.stringify(observed.slice(0, 40))}`, step.status === "broken", step.status);
+    }
   }
 
   // 5 — an ok step is never touched, and neither is a step reported with no

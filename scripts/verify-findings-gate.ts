@@ -338,6 +338,57 @@ function main() {
     );
   }
 
+  // 15b — one shared token is a coincidence, not an anchor. Our own primary
+  // page is /check, so almost every locus carries "check", and run #159's trail
+  // holds a click on the link "Check your app →". Anchoring on a single token
+  // would let that nav link vouch for a claim about an unrelated control, which
+  // is this PR's own failure moved one word to the left.
+  {
+    const coincidence: SynthesizedFinding = {
+      title: "Password reset button does nothing",
+      category: "broken",
+      severity: "high",
+      detail: {
+        where: "/check — password reset",
+        whatWeTried: ["Pressed the password reset button"],
+        whatHappened: "Pressing it had no effect and no message appeared.",
+      },
+    };
+    const r = gateFindings([coincidence], RUN_159.journeys);
+    check(
+      "a single token shared with a nav link does not anchor an unrelated claim",
+      r.kept.length === 0,
+      r.dropped[0]?.reason ?? "(kept)",
+    );
+    // …and where the hand's controls carry only one token, that one token is
+    // the whole of the set and must appear, or nothing could ever anchor.
+    const oneToken: GateJourney[] = [
+      {
+        steps: [
+          {
+            label: "Type into the notes box",
+            status: "ok",
+            unverifiedReason: null,
+            observed: "Typed into it.",
+            actions: JSON.stringify([{ kind: "fill", label: "Notes", value: "x", outcome: {} }]),
+          },
+        ],
+      },
+    ];
+    const aboutNotes: SynthesizedFinding = {
+      title: "Notes box does not accept input",
+      category: "broken",
+      severity: "medium",
+      detail: { where: "/check — notes", whatHappened: "It would not accept input." },
+    };
+    check("a one-token control name still anchors its own claim", gateFindings([aboutNotes], oneToken).kept.length === 1);
+    check(
+      "…and does not anchor a claim about something else",
+      gateFindings([{ ...aboutNotes, title: "Password box does not accept input", detail: { where: "/sign-in — password" } }], oneToken)
+        .kept.length === 0,
+    );
+  }
+
   // 16 — a link check is not an interaction. verify_links resolves outbound
   // URLs server-side (CLAUDE.md rule 3) and lands in a step's observed with no
   // click behind it; such a finding must stay publishable.
