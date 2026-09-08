@@ -58,6 +58,72 @@
 // sample. The number is an observation of two apps, not an estimate of a fleet,
 // and a recount that adds a third app changes what it is measuring.
 //
+// ─── What "customer" means in this file, and what it does not ────────────────
+//
+// The word is one predicate and nothing more: NOT OUR OWN PRODUCT. bucket()
+// below asks isSelfHost of the target host, so checkmyapp.dev is ours and
+// everything else falls into the customer column. That is the right rule for
+// the question this file asks — how much raw material does observing an app
+// yield — and the wrong rule for "how many customers do we have", which is a
+// different question one word away.
+//
+// Today the entire customer column belongs to the owner. Verified 2026-09-09:
+// isSelfHost("joblander.app") and isSelfHost("meetbashar.com") are both false,
+// so both bucket as customer apps, and prod App holds three rows whose owner is
+// sorokinvj@gmail.com in every one. The answer to "how many customers does
+// CheckMyApp have" is therefore zero, and nothing printed below is evidence
+// against that.
+//
+// The same trap is set one column over, on User. isTestAccount marks a dogfood
+// account, not a stranger. Prod User has exactly four rows (verified the same
+// day): two test accounts, both dogfood+clerk_test@example.com, and two
+// ordinary rows of the owner's — hello@joblander.app on free and
+// sorokinvj@gmail.com on business — with isTestAccount = 0 on each. A count of
+// paying customers written as isTestAccount = 0 AND plan <> 'free' returns 1
+// before anyone has signed up. Whoever writes that wants a column we do not
+// have yet, and building it out of these two is how a launch number becomes
+// a fiction.
+//
+// THE DEFINITION, agreed with the marketing side 2026-09-09 so that one of it
+// stands in both places rather than two similar ones:
+//
+//   A customer is a `User` row that is not a test account and not one of the
+//   owner's rows; a customer app is one whose owner is such a row. For money
+//   questions one condition is added: the plan was set through Stripe, not by
+//   hand (both of the owner's rows were set by hand).
+//
+// ─── The control that makes this checkable today ─────────────────────────────
+//
+// More important than the definition. The right answer to "how many customers
+// do we have" is currently ZERO, so any query returning more than zero is
+// wrong — and that is testable now, without waiting for the first customer.
+// Paired with a known positive it gives what a number needs before it is an
+// instrument rather than a hope: a demonstration that it can return both
+// emptiness and non-emptiness. Until it has been run against both, it is not
+// yet a measurement.
+//
+// Run against prod 2026-09-09:
+//
+//   customers, by the definition above:                            0
+//     (isTestAccount = 0 AND plan <> 'free' AND stripeSubscriptionId IS NOT NULL)
+//   the same query without the Stripe condition — the trap:        1
+//   known positive, anonymous runs:                               42
+//   known positive, active watches:                                3
+//
+// Both owner rows carry stripeSubscriptionId = NULL, which is what "set by
+// hand" means in the definition and what makes the zero hold.
+//
+// And the counter in THIS file fails that control, which is the honest thing to
+// record about it. Run over the last 30 days on 2026-09-09, bucket() labels
+// TWELVE apps "customer": the owner's joblander.app and meetbashar.com, plus
+// theins.ru, linear.app, cal.com, posthog.com, ghost.org, tally.so,
+// seedcast.app, pelicanbay.pt, nkem.dev and play.google.com — other people's
+// products that anonymous public checks and the owner's own exploratory runs
+// were pointed at, none of them owned by a customer row. By the definition
+// above the answer is 0. The column remains correct for what this file
+// measures, which is how much observing an app yields per app-week; it is not
+// a customer count, and no report may quote it as one.
+//
 // RULE CHANGE, 2026-09-08 (CHE-156): "our own product" stopped being the string
 // "checkmyapp.dev" and became isSelfHost() — the predicate the notify gate and
 // the accuracy page read, so a subdomain or a SELF_CHECK_HOSTS preview host
