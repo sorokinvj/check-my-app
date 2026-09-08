@@ -74,6 +74,20 @@ const HOMEWORK = [
   // an unrelated ask in front of it.
   "Readers can share, worth confirming the dialog opens.",
   "You should verify the redirect target, and please share a working test account.",
+  // CHE-218: the adjective in front of the noun is an open family, and run
+  // #159 (2026-09-08) published one the gate did not know. The noun is what
+  // makes the phrase homework; the words before it are not enumerable.
+  "It's worth a close look before anyone relies on checks behind a sign-in.",
+  "It's worth a careful review before launch.",
+  "Worth a look.",
+  "Worth a quick look.",
+  "Worth a second pass over the checkout copy.",
+  "Worth a closer look at the redirect chain.",
+  "Worth a proper test of the coupon field.",
+  "Worth a thorough review of the sign-in form.",
+  "It would be worth taking a closer look at the share bar.",
+  "Worth another quick once-over of the share bar.",
+  "Worth carefully verifying the redirect target.",
 ];
 
 // ─── What must pass ───────────────────────────────────────────────────────────
@@ -89,9 +103,16 @@ const NOT_HOMEWORK = [
   "Fetched Facebook, Twitter/X, Telegram, VK and OK share endpoints",
   "VK (vk.com/share.php) and OK (connect.ok.ru/offer) both timed out and could not be confirmed.",
   "The verification email never arrived within five minutes.",
-  // product copy with "worth"
+  // product copy with "worth" — CHE-218 widened the words allowed between
+  // "worth" and the noun, so the noun is now the whole guard: a price, a
+  // purchase or a bare "worth it" is the product's own sales copy, not an ask.
   "The plan is priced at $29, worth every penny according to the copy.",
   "The hero reads 'Worth $29 a month' next to the sign-up button.",
+  "The upgrade prompt appears on every page and the annual plan is worth $29 a month.",
+  "The pricing page argues the annual plan is worth the upgrade.",
+  "Two reviewers on the home page call the plan worth every penny.",
+  "A look at the pricing page is worth it before the trial ends.",
+  "The pro plan is worth the money for teams that share one login.",
   // the product's users, reported
   "Users must confirm their email before posting.",
   "Customers should double-check their order before paying.",
@@ -261,6 +282,17 @@ function main() {
       "a prefix too short to stand alone is not kept as a fragment",
       stripHomework("Note — worth confirming the dialog opens.") === HOMEWORK_FALLBACK,
       stripHomework("Note — worth confirming the dialog opens."),
+    );
+    // CHE-218, run #159's bottom line as published (2026-09-08): the ask rode
+    // in on an adjective the table did not list, and the clause before it is
+    // the statement about the product, so it stays.
+    const run159 =
+      "The notes field is masked like the fields around it, the very field paying customers use to hand you test logins, so it's worth a close look before anyone relies on checks behind a sign-in.";
+    check(
+      "#159: 'so it's worth a close look' cut at the comma, the product clause kept",
+      stripHomework(run159, BOTTOM_LINE_FALLBACK) ===
+        "The notes field is masked like the fields around it, the very field paying customers use to hand you test logins.",
+      stripHomework(run159, BOTTOM_LINE_FALLBACK),
     );
     check(
       "productProse cuts the clause the same way",

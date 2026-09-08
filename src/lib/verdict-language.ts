@@ -74,6 +74,32 @@ const VERIFY_VERBS =
   "spot-?check(?:ing)?|mak(?:e|ing)\\s+sure|ensur(?:e|ing))";
 // The adverbs the model puts between the opener and the verb.
 const HEDGE = "(?:\\s+(?:also|quickly|briefly|just|manually|independently|separately|periodically|regularly|still))*\\s+";
+// CHE-218: the ask arrives as a noun as often as a verb, and the adjective in
+// front of it is a productive family. Run #159's bottom line, published
+// 2026-09-08: "… the very field paying customers use to hand you test logins,
+// so it's worth a close look before anyone relies on checks behind a sign-in."
+// The old pattern enumerated one adjective — `a (quick )?(check|look|test|try)`
+// — so "close", "careful", "second", "closer", "proper" and "thorough" all
+// walked through. What makes the phrase homework is the NOUN it lands on, not
+// the word "worth": "worth $29", "worth the upgrade", "worth every penny" are
+// the product's copy and must pass. So the noun is a closed list and the
+// modifiers in front of it are open.
+const VERIFY_NOUNS =
+  "(?:once-?over|look-?over|run-?through|walk-?through|sanity[- ]check|spot-?check|double[- ]check|" +
+  "re-?check|re-?test|check|look|glance|pass|review|test|try|audit|inspection|examination|" +
+  "verification|confirmation|validation)";
+// One modifier between the opener and the noun or verb: any word, because the
+// family is open ("close", "careful", "second", "proper", "thorough", "closer",
+// and "taking" in "worth taking a second look"). A preposition, a connector or
+// an article ends the noun phrase rather than continuing it, so it stops the
+// run — that is what keeps "worth the price of a login" or "worth every penny
+// according to the copy" out.
+const MOD_STOP =
+  "(?:an?|another|the|of|in|on|at|to|for|from|with|by|and|or|but|nor|as|than|that|this|these|those|" +
+  "it|its|is|are|was|were|be|been|so|because|if|when|while)";
+const MODIFIERS = `(?:(?!${MOD_STOP}\\b)[A-Za-z][A-Za-z'’-]*\\s+){0,2}`;
+const ARTICLE = "(?:an?|another|the)\\s+";
+
 // "check it yourself", "verify on your end", "try it in another browser".
 const READER_SIDE =
   "(?:yourself|yourselves|manually|by\\s+hand|in\\s+person|on\\s+your\\s+(?:side|end|own)|from\\s+your\\s+(?:side|end)|" +
@@ -81,8 +107,18 @@ const READER_SIDE =
   "on\\s+(?:your\\s+own|a\\s+real|a\\s+physical|an\\s+actual|another)\\s+(?:device|phone|machine|computer))";
 
 export const HOMEWORK_PATTERNS: RegExp[] = [
-  // "worth confirming …", "it's worth a quick check", "would be worth testing".
-  new RegExp(`\\bworth${HEDGE}(?:a\\s+(?:quick\\s+)?(?:check|look|test|try)\\b|(?:a\\s+)?(?:quick\\s+)?${VERIFY_VERBS})`, "i"),
+  // "worth confirming …", "it's worth a quick check", "would be worth testing",
+  // and (CHE-218) "worth a close look", "worth a second pass", "worth a
+  // careful review", "worth taking a closer look", "worth carefully verifying".
+  // The "it would be / it's" opener is part of the ask, so it is matched with
+  // it: cutHomework cuts from where the match starts, and run #159's clause
+  // ("…, so it's worth a close look") only comes away cleanly — leaving the
+  // statement about the product in front of it — when the cut begins at "it's".
+  new RegExp(
+    `\\b(?:it(?:\\s+(?:would|might|may|could|is)|['’]s)\\s+(?:be\\s+)?)?worth${HEDGE}${MODIFIERS}(?:${ARTICLE}${MODIFIERS})?` +
+      `(?:${VERIFY_NOUNS}\\b|${VERIFY_VERBS})`,
+    "i",
+  ),
   // "consider verifying …" (not "considering their placement").
   new RegExp(`\\bconsider${HEDGE}${VERIFY_VERBS}`, "i"),
   // "you may want to check …", "you should verify …", "you'll want to confirm …".
