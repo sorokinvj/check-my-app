@@ -14,8 +14,14 @@
 // tokens, no product:
 //   1. isSelfHost: our hosts and their subdomains, an env-listed extra host,
 //      and NEVER a customer's host or a look-alike;
-//   2. the context headers carry the announcement only when the run's target
-//      is ours — a customer's app must never receive the header;
+//   2. the announcement (CHE-212) rides on the requests the web half guards —
+//      a mutating, same-origin request to the target's own host — and on
+//      nothing else: not a customer's app, not our own subdomains (the Clerk
+//      bundle), not a CDN, not a document, script, style or font. Proven on
+//      the pure decision AND through the real routing handler, because the
+//      context-wide version of this made the browser preflight Clerk's script,
+//      met its 307, left the sign-in page empty, and run #156 published that
+//      as a high-severity finding about our own product;
 //   3. the click gate refuses the create/mark controls of our own product on
 //      a self host, and lets the same labels through on a customer's app;
 //   4. a mutating 403 from a self host after a click — or a server action
@@ -26,6 +32,8 @@
 //
 // Usage: npx tsx --tsconfig tsconfig.json scripts/verify-self-check-agent.ts
 
+import { readFileSync, readdirSync } from "node:fs";
+import path from "node:path";
 import {
   coerceSelfCheck403,
   executeTool,
@@ -34,12 +42,15 @@ import {
   type ToolEnv,
 } from "@/agent/tools";
 import {
+  announceSelfCheckOn,
   DEFAULT_SELF_HOSTS,
   isSelfCheckRedirect,
   isSelfHost,
   SELF_CHECK_HEADER,
-  selfCheckHeaders,
+  selfCheckRequestHeaders,
   selfCheckRefusalIn,
+  type SelfCheckRoutable,
+  type SelfCheckRoute,
 } from "@/agent/self-hosts";
 import { hasEnvironmentLeak } from "@/lib/verdict-language";
 
@@ -106,6 +117,61 @@ function step(status: ReportedStep["status"], observed: string, attempted = "Pre
   return { label: "Press the control", status, attempted, observed };
 }
 
+// CHE-212: a stub browser context that records what announceSelfCheckOn does to
+// a request. `send` returns the headers the request would actually go out with,
+// and `intercepted` says whether the matcher even routed it — a request the
+// matcher never sees cannot differ from a visitor's in any way at all.
+//
+// `from` is the URL of the frame that made the request; omitting it makes
+// request.frame() throw, as it does for a service worker.
+interface StubRequest {
+  url: string;
+  method?: string;
+  from?: string;
+  headers?: Record<string, string>;
+}
+
+function routedContext() {
+  let matcher: ((url: URL) => boolean) | null = null;
+  let handler: ((route: SelfCheckRoute) => Promise<void>) | null = null;
+  const context: SelfCheckRoutable = {
+    route: async (m, h) => {
+      matcher = m;
+      handler = h;
+    },
+  };
+  const intercepted = (url: string) => Boolean(matcher && matcher(new URL(url)));
+  async function send(req: StubRequest): Promise<Record<string, string>> {
+    const original: Record<string, string> = {
+      "user-agent": "Mozilla/5.0 Chrome",
+      accept: "*/*",
+      ...(req.headers ?? {}),
+    };
+    if (!handler || !intercepted(req.url)) return original;
+    let sent = original;
+    const route: SelfCheckRoute = {
+      request: () => ({
+        url: () => req.url,
+        method: () => req.method ?? "GET",
+        headers: () => original,
+        frame: () => {
+          if (req.from === undefined) throw new Error("request is not from a frame");
+          return { url: () => req.from as string };
+        },
+      }),
+      continue: async (options) => {
+        sent = options?.headers ?? original;
+      },
+    };
+    await handler(route);
+    return sent;
+  }
+  return { context, send, intercepted, installed: () => handler !== null };
+}
+
+const CLERK_BUNDLE = "https://clerk.checkmyapp.dev/npm/@clerk/clerk-js@5/dist/clerk.browser.js";
+const CDN = "https://cdn.jsdelivr.net/npm/some-lib@1/dist/lib.min.js";
+
 async function main() {
   // 1 — whose host is it.
   check("hosts: production is listed by default", DEFAULT_SELF_HOSTS.includes("checkmyapp.dev"));
@@ -129,19 +195,165 @@ async function main() {
     check(`isSelfHost("${host}"${extra ? `, extra "${extra}"` : ""}) = ${expect}`, isSelfHost(host, extra) === expect);
   }
 
-  // 2 — the announcement rides only on a context whose target is ours.
+  // 2 — the announcement rides on the guarded requests of our own host, and on
+  // nothing else. CHE-212: run #156 published "Sign-in page renders blank"
+  // because the header rode on the Clerk bundle, forced a CORS preflight, and
+  // the preflight met the bundle's 307. The rule is proven twice: on the pure
+  // decision, and on the real routing handler with a stub context.
   {
-    const own = selfCheckHeaders(`${SELF}/verdict/abc`);
-    check("headers: a self-host target carries x-checkmyapp-checker: 1",
-      own?.[SELF_CHECK_HEADER] === "1", JSON.stringify(own));
+    const mutating = { url: `${SELF}/api/checks`, method: "POST", initiatorUrl: `${SELF}/check` };
+    check("headers: a mutating request to our own host carries x-checkmyapp-checker: 1",
+      selfCheckRequestHeaders(SELF, mutating)?.[SELF_CHECK_HEADER] === "1",
+      JSON.stringify(selfCheckRequestHeaders(SELF, mutating)));
     check("headers: the header name is the contract the web half checks", SELF_CHECK_HEADER === "x-checkmyapp-checker");
-    check("headers: a customer target carries nothing", selfCheckHeaders(`${CUSTOMER}/`) === undefined);
-    check("headers: a look-alike carries nothing", selfCheckHeaders("https://evil-checkmyapp.dev/") === undefined);
-    check("headers: an unparsable target carries nothing", selfCheckHeaders("not a url") === undefined);
-    check("headers: an env-listed staging host carries the header",
-      selfCheckHeaders("https://staging.example.com/", "staging.example.com")?.[SELF_CHECK_HEADER] === "1");
-    check("headers: a customer target with the env list set still carries nothing",
-      selfCheckHeaders(`${CUSTOMER}/`, "staging.example.com") === undefined);
+
+    const cases: [string, string, StubRequest, boolean][] = [
+      // target, name, request, does it carry the announcement
+      [SELF, "POST /api/checks on our host", { url: `${SELF}/api/checks`, method: "POST", from: `${SELF}/check` }, true],
+      [SELF, "PATCH a lens on our host", { url: `${SELF}/api/runs/143/lens`, method: "PATCH", from: `${SELF}/verdict/abc` }, true],
+      [SELF, "PUT on our host", { url: `${SELF}/api/apps/9`, method: "PUT", from: `${SELF}/apps/9` }, true],
+      [SELF, "DELETE on our host", { url: `${SELF}/api/apps/9`, method: "DELETE", from: `${SELF}/apps/9` }, true],
+      [SELF, "a form POST (server action) on our host", { url: `${SELF}/apps/9`, method: "POST", from: `${SELF}/apps/9` }, true],
+      [`${SELF}/sign-in`, "a mutating request when the target URL has a path", { url: `${SELF}/api/checks`, method: "POST", from: `${SELF}/sign-in` }, true],
+      // …and never on anything a visitor would load the same way.
+      [SELF, "the Clerk bundle (a subdomain of ours)", { url: CLERK_BUNDLE, from: `${SELF}/sign-in` }, false],
+      [SELF, "a POST to Clerk's frontend API (a subdomain of ours)", { url: "https://clerk.checkmyapp.dev/v1/client/sign_ins", method: "POST", from: `${SELF}/sign-in` }, false],
+      [SELF, "a third-party CDN script", { url: CDN, from: `${SELF}/` }, false],
+      [SELF, "a font from a third party", { url: "https://fonts.gstatic.com/s/inter/v13/font.woff2", from: `${SELF}/` }, false],
+      [SELF, "the GET document of our own page", { url: `${SELF}/sign-in`, method: "GET", from: `${SELF}/` }, false],
+      [SELF, "a GET API call on our own host", { url: `${SELF}/api/checks/today`, method: "GET", from: `${SELF}/check` }, false],
+      [SELF, "a HEAD on our own host", { url: `${SELF}/api/checks`, method: "HEAD", from: `${SELF}/check` }, false],
+      [SELF, "a script served by our own host", { url: `${SELF}/_next/static/chunks/main.js`, from: `${SELF}/` }, false],
+      [SELF, "a cross-origin POST to our host from somewhere else", { url: `${SELF}/api/checks`, method: "POST", from: "https://evil.example/page" }, false],
+      [SELF, "a POST whose initiator cannot be read (service worker)", { url: `${SELF}/api/checks`, method: "POST" }, false],
+      [CUSTOMER, "a mutating request on a customer's app", { url: `${CUSTOMER}/api/orders`, method: "POST", from: `${CUSTOMER}/cart` }, false],
+      [CUSTOMER, "a customer's app posting to our host", { url: `${SELF}/api/checks`, method: "POST", from: `${CUSTOMER}/cart` }, false],
+      ["https://evil-checkmyapp.dev", "a look-alike host", { url: "https://evil-checkmyapp.dev/api/x", method: "POST", from: "https://evil-checkmyapp.dev/" }, false],
+      ["not a url", "an unparsable target", { url: `${SELF}/api/checks`, method: "POST", from: `${SELF}/check` }, false],
+    ];
+    for (const [target, name, request, expect] of cases) {
+      const decided = selfCheckRequestHeaders(target, {
+        url: request.url,
+        method: request.method ?? "GET",
+        initiatorUrl: request.from ?? null,
+      });
+      check(`decision: ${name} → ${expect ? "announced" : "untouched"}`,
+        (decided?.[SELF_CHECK_HEADER] === "1") === expect, JSON.stringify(decided));
+
+      // The same case through the real routing handler.
+      const routed = routedContext();
+      await announceSelfCheckOn(routed.context, target);
+      const sent = await routed.send(request);
+      check(`routing: ${name} → ${expect ? "announced" : "untouched"}`,
+        (sent[SELF_CHECK_HEADER] === "1") === expect, JSON.stringify(sent));
+    }
+
+    // The mechanism itself: the requests that made #156 fail are not merely
+    // header-free, they are never intercepted, so they leave the browser
+    // exactly as a visitor's do.
+    {
+      const routed = routedContext();
+      await announceSelfCheckOn(routed.context, SELF);
+      check("routing: the announcement is installed for a run of our own product", routed.installed());
+      for (const url of [CLERK_BUNDLE, CDN, "https://fonts.gstatic.com/s/inter/v13/font.woff2", "https://www.checkmyapp.dev/x.js"]) {
+        check(`routing: ${new URL(url).hostname} is not intercepted at all`, !routed.intercepted(url));
+      }
+      check("routing: our own host is intercepted so the guarded requests can be marked", routed.intercepted(`${SELF}/api/checks`));
+
+      const script = await routed.send({ url: `${SELF}/_next/static/chunks/main.js`, from: `${SELF}/` });
+      check("routing: a script request from our own host carries no extra header",
+        Object.keys(script).every((h) => h.toLowerCase() !== SELF_CHECK_HEADER), JSON.stringify(script));
+
+      const posted = await routed.send({
+        url: `${SELF}/api/checks`,
+        method: "POST",
+        from: `${SELF}/check`,
+        headers: { "content-type": "application/json", cookie: "__session=abc" },
+      });
+      check("routing: the announced request keeps the headers it already had",
+        posted["content-type"] === "application/json" && posted.cookie === "__session=abc" && posted["user-agent"] === "Mozilla/5.0 Chrome",
+        JSON.stringify(posted));
+    }
+
+    // A customer's app: no interception, anywhere, ever.
+    {
+      const routed = routedContext();
+      await announceSelfCheckOn(routed.context, CUSTOMER);
+      check("routing: a run of a customer's app installs no routing at all", !routed.installed());
+      check("routing: nothing on a customer's host is intercepted", !routed.intercepted(`${CUSTOMER}/api/orders`));
+    }
+
+    // An env-listed staging host is ours on the same terms.
+    {
+      const staging = "https://staging.example.com";
+      check("decision: an env-listed staging host is announced",
+        selfCheckRequestHeaders(staging, { url: `${staging}/api/checks`, method: "POST", initiatorUrl: `${staging}/check` }, "staging.example.com")?.[SELF_CHECK_HEADER] === "1");
+      check("decision: a customer target with the env list set still carries nothing",
+        selfCheckRequestHeaders(CUSTOMER, { url: `${CUSTOMER}/api/orders`, method: "POST", initiatorUrl: `${CUSTOMER}/cart` }, "staging.example.com") === undefined);
+      const routed = routedContext();
+      await announceSelfCheckOn(routed.context, staging, "staging.example.com");
+      const sent = await routed.send({ url: `${staging}/api/checks`, method: "POST", from: `${staging}/check` });
+      check("routing: an env-listed staging host is announced through the real handler", sent[SELF_CHECK_HEADER] === "1");
+      check("routing: a subdomain of the staging host is not intercepted", !routed.intercepted("https://clerk.staging.example.com/x.js"));
+    }
+
+    // Installing the route is the one part of this that has never run under
+    // workerd. If it throws, the cost must be exactly the lost announcement:
+    // the run walks on, and the click gate in tools.ts still refuses every
+    // create/mark control. A run that fails outright would be a worse trade
+    // than the false finding we are fixing.
+    {
+      const boom = new Error("route interception unavailable");
+      const context: SelfCheckRoutable = {
+        route: async () => {
+          throw boom;
+        },
+      };
+      const warnings: string[] = [];
+      const realWarn = console.warn;
+      console.warn = (...args: unknown[]) => {
+        warnings.push(args.join(" "));
+      };
+      let threw: unknown = null;
+      try {
+        await announceSelfCheckOn(context, SELF);
+      } catch (err) {
+        threw = err;
+      } finally {
+        console.warn = realWarn;
+      }
+      check("routing: a context that cannot install the route does not fail the run", threw === null, String(threw));
+      check("routing: the failure says so in the log, naming the target and the reason",
+        warnings.length === 1 && warnings[0].includes("[self-check]") && warnings[0].includes(SELF) && warnings[0].includes(boom.message),
+        warnings.join(" | "));
+
+      // …and the context is still usable afterwards: a page still loads, it
+      // simply carries no announcement.
+      const routed = routedContext();
+      await announceSelfCheckOn(routed.context, SELF);
+      const stillWorks = await routed.send({ url: `${SELF}/sign-in`, from: `${SELF}/` });
+      check("routing: a later context installs the route as usual",
+        routed.installed() && stillWorks[SELF_CHECK_HEADER] === undefined, JSON.stringify(stillWorks));
+    }
+
+    // The shape of the mistake, not just its instance: extraHTTPHeaders sets a
+    // header on EVERY request a context makes, which is what preflighted
+    // Clerk's bundle. No file in the agent may reach for it again.
+    {
+      const dir = path.resolve(__dirname, "../src/agent");
+      const code = (file: string) =>
+        readFileSync(path.join(dir, file), "utf8")
+          .split("\n")
+          .filter((l) => {
+            const t = l.trim();
+            return !t.startsWith("//") && !t.startsWith("*") && !t.startsWith("/*");
+          })
+          .join("\n");
+      const offenders = readdirSync(dir)
+        .filter((f) => f.endsWith(".ts"))
+        .filter((f) => code(f).includes("extraHTTPHeaders"));
+      check("source: no context-wide extraHTTPHeaders anywhere in src/agent", offenders.length === 0, offenders.join(", "));
+    }
   }
 
   // 3 — the click gate: our own create/mark controls, on our own host only.

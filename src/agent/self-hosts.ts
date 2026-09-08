@@ -25,6 +25,17 @@
 // A customer's app must never receive the header: an unexpected custom header
 // changes CORS/preflight behaviour, and their product was not built to see it.
 //
+// CHE-212: neither must OUR OWN pages. The first version of this attached the
+// header to the whole browser context (extraHTTPHeaders), so it rode on every
+// subresource, including the Clerk bundle on clerk.checkmyapp.dev — a custom
+// header makes that script request non-simple, the browser must preflight it,
+// the bundle URL answers 307, a preflight may not be redirected, Clerk never
+// loads, the sign-in page renders empty. Run #156 published that as "Sign-in
+// page renders blank", severity high, and emailed the owner: rule 8, a claim
+// resting on our own state. The announcement now goes only on the requests the
+// web half actually inspects, and only where a custom header cannot cause a
+// preflight (see shouldAnnounceSelfCheck).
+//
 // Pure: no Playwright, no bindings, so the verify script runs it on plain Node.
 
 export const SELF_CHECK_HEADER = "x-checkmyapp-checker";
@@ -70,12 +81,167 @@ export function isSelfUrl(url: string, extra?: string): boolean {
   }
 }
 
-// The extra request headers for a browser context whose run targets `targetUrl`:
-// the announcement when the target is ours, nothing at all otherwise. Kept as a
-// pure function so the verify script can prove "customer host → no header"
-// without loading Playwright.
-export function selfCheckHeaders(targetUrl: string, extra?: string): Record<string, string> | undefined {
-  return isSelfUrl(targetUrl, extra) ? { [SELF_CHECK_HEADER]: SELF_CHECK_HEADER_VALUE } : undefined;
+// The methods the web half's read-only guard looks at — the same four the
+// refusal shape below matches. A GET or HEAD is never guarded, so a page, a
+// script, a stylesheet, an image or a font never needs the announcement.
+const MUTATING_METHODS: ReadonlySet<string> = new Set(["POST", "PATCH", "PUT", "DELETE"]);
+
+function hostKey(hostname: string): string {
+  return hostname.trim().toLowerCase().replace(/\.$/, "");
+}
+
+function originOf(url: string): string | null {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
+}
+
+// One request the checker's browser is about to make. `initiatorUrl` is the URL
+// of the frame that started it (Playwright's request.frame().url()), or null
+// when that is unknowable — a service worker, a detached frame.
+export interface SelfCheckRequest {
+  url: string;
+  method: string;
+  initiatorUrl?: string | null;
+}
+
+// Does THIS request carry the announcement? Four conditions, all necessary:
+//
+//   1. the run's target is one of our hosts — a customer's app never sees it;
+//   2. the request goes to the target's own host, exactly. Subdomains are ours
+//      (isSelfHost still says so, and the click gate and 403 reading depend on
+//      that) but they are a different origin, and Clerk lives on one: CHE-212;
+//   3. the method is one the web half guards. Every subresource a visitor
+//      loads is a GET, so a document, script, style, image or font goes out
+//      byte-identical to a visitor's;
+//   4. the request is same-origin with the frame that made it. A custom header
+//      can only force a CORS preflight on a CROSS-origin request; refusing to
+//      add one there is what makes "the checker never changes how the product
+//      loads" a property of the code rather than a hope. Unknown initiator is
+//      treated as cross-origin: losing an announcement costs a 403 we could
+//      have read, adding a preflight costs the customer a false verdict.
+export function shouldAnnounceSelfCheck(
+  targetUrl: string,
+  request: SelfCheckRequest,
+  extra?: string,
+): boolean {
+  if (!isSelfUrl(targetUrl, extra)) return false;
+  if (!MUTATING_METHODS.has(request.method.trim().toUpperCase())) return false;
+
+  let target: URL;
+  let requested: URL;
+  try {
+    target = new URL(targetUrl);
+    requested = new URL(request.url);
+  } catch {
+    return false;
+  }
+  if (hostKey(requested.hostname) !== hostKey(target.hostname)) return false;
+
+  const initiator = request.initiatorUrl ? originOf(request.initiatorUrl) : null;
+  return initiator !== null && initiator === requested.origin;
+}
+
+// The header map for a request that must carry the announcement, or undefined.
+// Kept pure so the verify script can prove the whole rule — customer host, our
+// subdomain, a CDN, a document GET, a mutating API call — without Playwright.
+export function selfCheckRequestHeaders(
+  targetUrl: string,
+  request: SelfCheckRequest,
+  extra?: string,
+): Record<string, string> | undefined {
+  return shouldAnnounceSelfCheck(targetUrl, request, extra)
+    ? { [SELF_CHECK_HEADER]: SELF_CHECK_HEADER_VALUE }
+    : undefined;
+}
+
+// ─── Attaching it: routing, not context headers (CHE-212) ────────────────────
+//
+// Playwright's shapes, declared structurally so this module still loads on
+// plain Node (the verify script drives the real handler with a stub context;
+// browser.ts hands it a real BrowserContext).
+export interface SelfCheckRoutedRequest {
+  url(): string;
+  method(): string;
+  headers(): Record<string, string>;
+  frame(): { url(): string };
+}
+export interface SelfCheckRoute {
+  request(): SelfCheckRoutedRequest;
+  continue(options?: { headers?: Record<string, string> }): Promise<void>;
+}
+export interface SelfCheckRoutable {
+  route(
+    matcher: (url: URL) => boolean,
+    handler: (route: SelfCheckRoute) => Promise<void>,
+  ): Promise<void>;
+}
+
+// Installs the announcement on a context. Nothing is intercepted at all unless
+// the run targets one of our hosts, and even then the matcher lets only the
+// target's own host through — a subdomain (clerk.), a CDN, a font provider is
+// never routed, so those requests cannot differ from a visitor's by so much as
+// a header order. Inside the handler the decision is shouldAnnounceSelfCheck's
+// alone, and whatever happens the request continues.
+//
+// Installing the route is itself guarded. Interception under workerd
+// (@cloudflare/playwright) is exercised for the first time by this change, and
+// a run must never fail because our own bookkeeping could not be set up: an
+// announcement we lose costs a 403 we could have read, and nothing else — the
+// click gate and the 403/redirect reading in tools.ts do not depend on the
+// header, so the self-check still presses nothing.
+export async function announceSelfCheckOn(
+  context: SelfCheckRoutable,
+  targetUrl: string,
+  extraHosts?: string,
+): Promise<void> {
+  if (!isSelfUrl(targetUrl, extraHosts)) return;
+  let targetHost: string;
+  try {
+    targetHost = hostKey(new URL(targetUrl).hostname);
+  } catch {
+    return;
+  }
+
+  const matcher = (url: URL) => hostKey(url.hostname) === targetHost;
+  const handler = async (route: SelfCheckRoute) => {
+    try {
+      const request = route.request();
+      let initiatorUrl: string | null = null;
+      try {
+        initiatorUrl = request.frame().url();
+      } catch {
+        /* a service worker or a detached frame: treated as cross-origin */
+      }
+      const extra = selfCheckRequestHeaders(
+        targetUrl,
+        { url: request.url(), method: request.method(), initiatorUrl },
+        extraHosts,
+      );
+      if (extra) {
+        await route.continue({ headers: { ...request.headers(), ...extra } });
+        return;
+      }
+    } catch {
+      /* our own bookkeeping never fails a request */
+    }
+    await route.continue().catch(() => {});
+  };
+
+  try {
+    await context.route(matcher, handler);
+  } catch (err) {
+    // The run continues without the announcement. If this line is in the log,
+    // the web half saw an ordinary request from the checker and the read-only
+    // 403 did not fire: the guard that actually stops the self-check pressing
+    // things is the click gate in tools.ts, which is unaffected.
+    console.warn(
+      `[self-check] could not install the announcement route for ${targetUrl}: ` +
+        `${err instanceof Error ? err.message : String(err)} — the run continues without the header`,
+    );
+  }
 }
 
 // A network-log line ("METHOD url → status") that is our own read-only guard

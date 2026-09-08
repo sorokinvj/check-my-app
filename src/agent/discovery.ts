@@ -7,7 +7,7 @@ import { decryptSecret } from "@/lib/crypto";
 import type { AppAnatomy } from "@/lib/types";
 import { runAgentLoop, finalizeStructured, type TranscriptEntry } from "./core";
 import { knownUrlsFrom, prepareAgentPage, type ToolEnv } from "./tools";
-import { selfCheckContextOptions } from "./browser";
+import { newAgentContext } from "./browser";
 import {
   DISCOVERY_ITERATIONS,
   DISCOVERY_ITERATIONS_WITH_MEMORY,
@@ -121,8 +121,9 @@ export async function discoverApp(args: {
   // free-text scrape. Off by default — the ladder below is unchanged.
   const structOptions = { judgeFallback: harnessMode(env.bindings).judge };
 
-  // CHE-193: on our own hosts the context announces itself (self-hosts.ts).
-  const context = await browser.newContext(selfCheckContextOptions(browser, run.targetUrl, env.bindings));
+  // CHE-193: on our own hosts the context announces itself on the requests the
+  // web half guards, and on nothing else (CHE-212; self-hosts.ts).
+  const context = await newAgentContext(browser, run.targetUrl, env.bindings);
   const page = await context.newPage();
 
   const toolEnv: ToolEnv = {

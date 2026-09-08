@@ -69,7 +69,9 @@ export interface AgentBindings {
   // CHE-193: extra hosts that count as OURS, comma-separated (a preview or
   // staging deploy). checkmyapp.dev and its subdomains are always ours. A run
   // targeting one of these hosts announces itself with the
-  // x-checkmyapp-checker header and is refused every create/mark control —
+  // x-checkmyapp-checker header — on the mutating requests to that host only,
+  // never on a page's subresources (CHE-212) — and is refused every
+  // create/mark control —
   // the self-check of 2026-09-05 (run #146) created two real runs on a
   // stranger's app and graded a stranger's verdict. Unset → production only.
   SELF_CHECK_HOSTS?: string;

@@ -270,7 +270,7 @@ async function main() {
         { order: 4, label: "Garbage column", actions: "{not json" },
       ],
     },
-    {},
+    (b) => b.newContext({}),
   );
   check(
     "replay: origin gate and create gate both refuse; journey is refused",

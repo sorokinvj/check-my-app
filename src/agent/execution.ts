@@ -15,7 +15,7 @@ import {
   type RecordedAction,
   type ToolEnv,
 } from "./tools";
-import { selfCheckContextOptions } from "./browser";
+import { newAgentContext } from "./browser";
 import { walkingSystem } from "./instructions";
 import type { AppKnowledge } from "./knowledge";
 import { harnessMode, putScreenshot, putText, walkImageWindow, type AgentEnv } from "./env";
@@ -110,8 +110,9 @@ export async function walkOneJourney(args: {
   await env.db.journey.deleteMany({ where: { runId: run.id, order: index } });
 
   {
-    // CHE-193: on our own hosts the context announces itself (self-hosts.ts).
-    const context = await browser.newContext(selfCheckContextOptions(browser, run.targetUrl, env.bindings));
+    // CHE-193: on our own hosts the context announces itself on the requests
+    // the web half guards, and on nothing else (CHE-212; self-hosts.ts).
+    const context = await newAgentContext(browser, run.targetUrl, env.bindings);
     const page = await context.newPage();
 
     const journey = await env.db.journey.create({
