@@ -185,6 +185,13 @@ export interface SelfCheckRoutable {
 // never routed, so those requests cannot differ from a visitor's by so much as
 // a header order. Inside the handler the decision is shouldAnnounceSelfCheck's
 // alone, and whatever happens the request continues.
+//
+// Installing the route is itself guarded. Interception under workerd
+// (@cloudflare/playwright) is exercised for the first time by this change, and
+// a run must never fail because our own bookkeeping could not be set up: an
+// announcement we lose costs a 403 we could have read, and nothing else — the
+// click gate and the 403/redirect reading in tools.ts do not depend on the
+// header, so the self-check still presses nothing.
 export async function announceSelfCheckOn(
   context: SelfCheckRoutable,
   targetUrl: string,
@@ -198,32 +205,43 @@ export async function announceSelfCheckOn(
     return;
   }
 
-  await context.route(
-    (url: URL) => hostKey(url.hostname) === targetHost,
-    async (route) => {
+  const matcher = (url: URL) => hostKey(url.hostname) === targetHost;
+  const handler = async (route: SelfCheckRoute) => {
+    try {
+      const request = route.request();
+      let initiatorUrl: string | null = null;
       try {
-        const request = route.request();
-        let initiatorUrl: string | null = null;
-        try {
-          initiatorUrl = request.frame().url();
-        } catch {
-          /* a service worker or a detached frame: treated as cross-origin */
-        }
-        const extra = selfCheckRequestHeaders(
-          targetUrl,
-          { url: request.url(), method: request.method(), initiatorUrl },
-          extraHosts,
-        );
-        if (extra) {
-          await route.continue({ headers: { ...request.headers(), ...extra } });
-          return;
-        }
+        initiatorUrl = request.frame().url();
       } catch {
-        /* our own bookkeeping never fails a request */
+        /* a service worker or a detached frame: treated as cross-origin */
       }
-      await route.continue().catch(() => {});
-    },
-  );
+      const extra = selfCheckRequestHeaders(
+        targetUrl,
+        { url: request.url(), method: request.method(), initiatorUrl },
+        extraHosts,
+      );
+      if (extra) {
+        await route.continue({ headers: { ...request.headers(), ...extra } });
+        return;
+      }
+    } catch {
+      /* our own bookkeeping never fails a request */
+    }
+    await route.continue().catch(() => {});
+  };
+
+  try {
+    await context.route(matcher, handler);
+  } catch (err) {
+    // The run continues without the announcement. If this line is in the log,
+    // the web half saw an ordinary request from the checker and the read-only
+    // 403 did not fire: the guard that actually stops the self-check pressing
+    // things is the click gate in tools.ts, which is unaffected.
+    console.warn(
+      `[self-check] could not install the announcement route for ${targetUrl}: ` +
+        `${err instanceof Error ? err.message : String(err)} — the run continues without the header`,
+    );
+  }
 }
 
 // A network-log line ("METHOD url → status") that is our own read-only guard

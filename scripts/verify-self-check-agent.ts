@@ -297,6 +297,45 @@ async function main() {
       check("routing: a subdomain of the staging host is not intercepted", !routed.intercepted("https://clerk.staging.example.com/x.js"));
     }
 
+    // Installing the route is the one part of this that has never run under
+    // workerd. If it throws, the cost must be exactly the lost announcement:
+    // the run walks on, and the click gate in tools.ts still refuses every
+    // create/mark control. A run that fails outright would be a worse trade
+    // than the false finding we are fixing.
+    {
+      const boom = new Error("route interception unavailable");
+      const context: SelfCheckRoutable = {
+        route: async () => {
+          throw boom;
+        },
+      };
+      const warnings: string[] = [];
+      const realWarn = console.warn;
+      console.warn = (...args: unknown[]) => {
+        warnings.push(args.join(" "));
+      };
+      let threw: unknown = null;
+      try {
+        await announceSelfCheckOn(context, SELF);
+      } catch (err) {
+        threw = err;
+      } finally {
+        console.warn = realWarn;
+      }
+      check("routing: a context that cannot install the route does not fail the run", threw === null, String(threw));
+      check("routing: the failure says so in the log, naming the target and the reason",
+        warnings.length === 1 && warnings[0].includes("[self-check]") && warnings[0].includes(SELF) && warnings[0].includes(boom.message),
+        warnings.join(" | "));
+
+      // …and the context is still usable afterwards: a page still loads, it
+      // simply carries no announcement.
+      const routed = routedContext();
+      await announceSelfCheckOn(routed.context, SELF);
+      const stillWorks = await routed.send({ url: `${SELF}/sign-in`, from: `${SELF}/` });
+      check("routing: a later context installs the route as usual",
+        routed.installed() && stillWorks[SELF_CHECK_HEADER] === undefined, JSON.stringify(stillWorks));
+    }
+
     // The shape of the mistake, not just its instance: extraHTTPHeaders sets a
     // header on EVERY request a context makes, which is what preflighted
     // Clerk's bundle. No file in the agent may reach for it again.
