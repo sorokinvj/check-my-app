@@ -52,7 +52,14 @@ import { deliverWebhook, type RunCompletedPayload } from "@/lib/notify/webhook";
 import { deliverSlack } from "@/lib/notify/slack";
 import { decryptSecret } from "@/lib/crypto";
 import type { TranscriptEntry } from "./core";
-import { shortLabel, smokeOutcomeLine, smokeReplay, SMOKE_COST_USD, type SmokeReport } from "./replay";
+import {
+  consoleSetAsideLine,
+  shortLabel,
+  smokeOutcomeLine,
+  smokeReplay,
+  SMOKE_COST_USD,
+  type SmokeReport,
+} from "./replay";
 import {
   decideRunMode,
   mergeSurveyedPages,
@@ -1009,6 +1016,11 @@ function modeEvents(
     // sentence the owner does: healthy pages, pages that did not answer, and
     // the verdict carried forward.
     events.push({ icon: smoke.ok ? "ok" : "warn", text: smokeOutcomeLine(smoke, targetUrl) });
+    // CHE-213: on a green pass, any console burst the survey's answer let us
+    // set aside is said out loud. A red pass already names what went wrong,
+    // and adding "these other pages were fine" to it would only blur that.
+    const aside = smoke.ok ? consoleSetAsideLine(smoke.consoleBurstsSetAside, targetUrl) : null;
+    if (aside) events.push({ icon: "info", text: aside });
   } else {
     events.push({ icon: "info", text: `No smoke check — ${smoke.reason}` });
   }

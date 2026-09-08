@@ -38,6 +38,19 @@
 // is false and the counts are recorded without failing the pass. An HTTP 5xx,
 // a silent core page and an uncaught exception are live signals — the same
 // page can 500 today — and stay failures whatever the survey said.
+//
+// Two limits on that, because the survey compares MARKUP AND STATIC ASSETS,
+// not behaviour. A backend that has started answering 500 to an XHR leaves
+// every page byte-identical, and the console line is the only trace:
+//
+//   - the count threshold is what goes away on an unchanged app, not the
+//     class. A console error saying the product's own server answered with an
+//     error (isServerErrorConsoleLine) is trouble at one, on any app. It is
+//     also precisely the class the survey could not have checked, so setting
+//     it aside would be reading our own blind spot as calm;
+//   - what IS set aside is named in the feed (consoleSetAsideLine), on the
+//     green pass where it mattered. A signal swallowed in silence is the
+//     thing we open tickets against other people for.
 
 import type { ConsoleMessage, Page } from "@cloudflare/playwright";
 
@@ -131,6 +144,51 @@ export function isIgnoredConsoleError(text: string, url: string, targetOrigin: s
   return IGNORED_CONSOLE_ERRORS.some((rule) => rule.matches(text, url, targetOrigin));
 }
 
+/**
+ * A console error saying the product's own server answered with an error
+ * (CHE-213). This class is never set aside, however quiet the survey was: the
+ * survey compares markup and static assets, so a backend that has started
+ * returning 500 to an XHR leaves the page byte-identical and this line is the
+ * only trace. It is also the one console class the survey could not have
+ * checked, so setting it aside would be reading our own blind spot as calm.
+ *
+ * Two shapes, and both are judged after IGNORED_CONSOLE_ERRORS has already
+ * removed what our own environment causes (a blocked tracker, an aborted
+ * navigation) and what belongs to a third party (analytics, a foreign 4xx):
+ *
+ *   - a 5xx answer — the product's own origin, or one we cannot place, since
+ *     an error we cannot attribute is not one we may set aside;
+ *   - a transport failure (net::ERR_…) on a request to the product's own host.
+ *
+ * A 5xx reaches the console in two shapes and both count: the resource-load
+ * message ("Failed to load resource: the server responded with a status of
+ * 503 ()", the URL in msg.location()) and the XHR/fetch message ("POST
+ * https://app.example/api/save 503 (Service Unavailable)", the URL in the text
+ * itself). The second is the shape an unchanged page produces when only the
+ * backend has gone wrong, which is the whole reason this class exists.
+ *
+ * Below the burst limit or above it makes no difference: one is trouble.
+ */
+export function isServerErrorConsoleLine(text: string, url: string, targetOrigin: string): boolean {
+  const where = resourceOrigin(url, text);
+  const resourceLoad = /the server responded with a status of 5\d\d/i.test(text);
+  const xhr = /\b(?:GET|POST|PUT|PATCH|DELETE|HEAD)\s+https?:\/\/\S+\s+5\d\d\b/i.test(text);
+  if (resourceLoad || xhr) return where === null || where === targetOrigin;
+  if (/net::ERR_/i.test(`${text} ${url}`)) return where === targetOrigin;
+  return false;
+}
+
+/** Where the failing request went: the message's own location, else the first URL in its text. */
+function resourceOrigin(url: string, text: string): string | null {
+  const candidate = url || (text.match(/https?:\/\/[^\s'"()<>]+/)?.[0] ?? "");
+  if (!candidate) return null;
+  try {
+    return new URL(candidate).origin;
+  } catch {
+    return null;
+  }
+}
+
 export interface PageProbe {
   url: string;
   /** HTTP status of the final answer, or null when the page never answered. */
@@ -142,8 +200,12 @@ export interface PageProbe {
   consoleErrors: number;
   /** Console errors this page logged that match IGNORED_CONSOLE_ERRORS — kept for diagnosis. */
   ignoredConsoleErrors: number;
+  /** Of the counted errors, those saying the product's server answered with an error (CHE-213). */
+  serverErrors: number;
   /** The first counted console message, so a burst can be read without re-running. */
   consoleSample?: string;
+  /** The first server-error message, so the failure can be read without re-running (CHE-213). */
+  serverErrorSample?: string;
 }
 
 /** Which pages the smoke pass re-visits, and which of them a journey depends on. */
@@ -166,6 +228,13 @@ export interface ProbeOutcome {
   failures: string[];
   /** Counted console errors across every page visited — a fact, not a rule (CHE-187). */
   consoleErrors: number;
+  /**
+   * Pages whose console burst was recorded and NOT counted because the survey
+   * saw the app stand still (CHE-213). Empty on every other run. The feed says
+   * it out loud on a green pass: a signal we set aside silently would be the
+   * thing we file tickets against other people for.
+   */
+  consoleBurstsSetAside: string[];
   pageErrors: number;
   screenshotUrl: string | null;
 }
@@ -215,13 +284,14 @@ export async function probeTargets(
   const failures: string[] = [];
   const unreached: string[] = [];
   const uncaught: string[] = [];
+  const setAside: string[] = [];
   let screenshotUrl: string | null = null;
   const targetOrigin = originOf(targetUrl);
 
   // One listener for the whole pass; the tally it feeds is reset before each
   // navigation and copied onto that page's probe afterwards (CHE-187). What
   // the homepage logs while its JS settles lands on the homepage.
-  const tally: ConsoleTally = { counted: 0, ignored: 0, sample: undefined };
+  const tally: ConsoleTally = { counted: 0, ignored: 0, server: 0, sample: undefined, serverSample: undefined };
   page.on("console", (msg: ConsoleMessage) => {
     if (msg.type() !== "error") return;
     const text = msg.text();
@@ -232,6 +302,12 @@ export async function probeTargets(
     }
     tally.counted++;
     tally.sample ??= text.slice(0, 160);
+    // Classified among the COUNTED errors on purpose: what our environment
+    // causes and what a third party owns is already gone by here (CHE-213).
+    if (isServerErrorConsoleLine(text, url, targetOrigin)) {
+      tally.server++;
+      tally.serverSample ??= text.slice(0, 160);
+    }
   });
   page.on("pageerror", (err: Error) => {
     if (uncaught.length < 5) uncaught.push(err.message.slice(0, 200));
@@ -240,7 +316,9 @@ export async function probeTargets(
   const visit = async (url: string, timeout: number): Promise<PageProbe> => {
     tally.counted = 0;
     tally.ignored = 0;
+    tally.server = 0;
     tally.sample = undefined;
+    tally.serverSample = undefined;
     const probe = await probeWithRetry(page, url, timeout);
     return withConsole(probe, tally);
   };
@@ -284,12 +362,24 @@ export async function probeTargets(
     } else if (p.status >= 500) {
       failures.push(`${label} returned HTTP ${p.status}`);
     }
-    // A burst is one page logging CONSOLE_ERROR_LIMIT counted errors. The
-    // run-wide total decides nothing (CHE-187) and is only spoken when it
-    // did — so the failure names the page, and the ok line says nothing.
-    // On an unchanged app the burst is recorded and not counted (CHE-213).
-    if (burstIsTrouble && p.consoleErrors >= CONSOLE_ERROR_LIMIT) {
+    // Their server answering with an error is trouble at one, on any app, and
+    // is never set aside (CHE-213): the survey compares markup, so a backend
+    // that started failing leaves the page identical and this is the only
+    // trace. Named before the burst rule and instead of it, so one page never
+    // produces two lines about the same console output.
+    if (p.serverErrors > 0) {
+      failures.push(
+        `${label} — ${p.serverErrors} request${p.serverErrors === 1 ? "" : "s"} on this page came back as a server error`,
+      );
+    } else if (burstIsTrouble && p.consoleErrors >= CONSOLE_ERROR_LIMIT) {
+      // A burst is one page logging CONSOLE_ERROR_LIMIT counted errors. The
+      // run-wide total decides nothing (CHE-187) and is only spoken when it
+      // did — so the failure names the page, and the ok line says nothing.
+      // On an unchanged app there is no threshold at all: the burst is
+      // recorded, listed in the feed, and does not fail the pass (CHE-213).
       failures.push(`${label} logged ${p.consoleErrors} console errors`);
+    } else if (!burstIsTrouble && p.consoleErrors >= CONSOLE_ERROR_LIMIT) {
+      setAside.push(p.url);
     }
   }
   if (uncaught.length) {
@@ -303,6 +393,7 @@ export async function probeTargets(
     skipped: ordered.length - (probes.length - 1),
     failures,
     consoleErrors: probes.reduce((n, p) => n + p.consoleErrors, 0),
+    consoleBurstsSetAside: setAside,
     pageErrors: uncaught.length,
     screenshotUrl,
   };
@@ -311,7 +402,9 @@ export async function probeTargets(
 interface ConsoleTally {
   counted: number;
   ignored: number;
+  server: number;
   sample: string | undefined;
+  serverSample: string | undefined;
 }
 
 function withConsole(probe: PageProbe, tally: ConsoleTally): PageProbe {
@@ -319,7 +412,9 @@ function withConsole(probe: PageProbe, tally: ConsoleTally): PageProbe {
     ...probe,
     consoleErrors: tally.counted,
     ignoredConsoleErrors: tally.ignored,
+    serverErrors: tally.server,
     ...(tally.sample ? { consoleSample: tally.sample } : {}),
+    ...(tally.serverSample ? { serverErrorSample: tally.serverSample } : {}),
   };
 }
 
@@ -346,8 +441,8 @@ async function probe(page: ProbePage, url: string, timeout: number): Promise<Pag
     const res = await page.goto(url, { waitUntil: "domcontentloaded", timeout });
     const status = res?.status() ?? null;
     return status === null
-      ? { url, status: null, error: "no response", attempts: 1, consoleErrors: 0, ignoredConsoleErrors: 0 }
-      : { url, status, attempts: 1, consoleErrors: 0, ignoredConsoleErrors: 0 };
+      ? { url, status: null, error: "no response", attempts: 1, consoleErrors: 0, ignoredConsoleErrors: 0, serverErrors: 0 }
+      : { url, status, attempts: 1, consoleErrors: 0, ignoredConsoleErrors: 0, serverErrors: 0 };
   } catch (err) {
     return {
       url,
@@ -356,6 +451,7 @@ async function probe(page: ProbePage, url: string, timeout: number): Promise<Pag
       attempts: 1,
       consoleErrors: 0,
       ignoredConsoleErrors: 0,
+      serverErrors: 0,
     };
   }
 }
@@ -391,6 +487,32 @@ export interface SmokeSummary {
   unreached: string[];
   failures: string[];
   baselineRunNumber: number;
+}
+
+/**
+ * What the owner reads on a green pass where a console burst was recorded and
+ * not counted (CHE-213). Silently swallowing a signal is the thing we file
+ * tickets against other people for, so the feed says which pages logged, that
+ * none of it was their server answering with an error, and that the pages
+ * themselves have not moved. Null when nothing was set aside.
+ *
+ * Every clause is a fact about their app: the pages, the class of message, and
+ * the survey's own comparison. Nothing about how any of it was seen (rule §1).
+ */
+export function consoleSetAsideLine(
+  setAside: string[],
+  targetUrl: string,
+  max = 4,
+): string | null {
+  if (setAside.length === 0) return null;
+  const labels = setAside.map((u) => shortLabel(u, targetUrl));
+  const named = labels.slice(0, max).join(", ");
+  const rest = labels.length > max ? ` and ${labels.length - max} more` : "";
+  const n = setAside.length;
+  return (
+    `Console errors on ${n} page${n === 1 ? "" : "s"} (${named}${rest}) — none of them your ` +
+    `server answering with an error, and those pages have not changed since the last check`
+  );
 }
 
 export function smokeOutcomeLine(smoke: SmokeSummary, targetUrl: string): string {

@@ -680,6 +680,7 @@ function modeProbe(c: Case): ProbeRunner {
     skipped: 0,
     failures: c.probeFailures ?? [],
     consoleErrors: 0,
+    consoleBurstsSetAside: [],
     pageErrors: 0,
     screenshotUrl: null,
   });
@@ -729,8 +730,11 @@ async function modeTable() {
   await expectMode("mode: unchanged · clean baseline · NO specs → smoke (the survey re-visited the pages)", { ...base, specs: false }, "smoke");
   await expectMode("mode: unchanged · clean baseline · 30 days → smoke (a comparable pair beats the calendar)", { ...base, ageDays: 30 }, "smoke");
   await expectMode("mode: unchanged · a console burst is recorded, not trouble → smoke", base, "smoke");
-  // The live signals still cost a full walk on an unchanged app.
+  // The live signals still cost a full walk on an unchanged app. The classes
+  // themselves are decided in smoke.ts and asserted in verify-smoke-gate §i/§j;
+  // these two rows check that a red pass reaches the table as `full`.
   await expectMode("mode: unchanged · a page answered HTTP 500 → full", { ...base, probeFailures: ["/pricing returned HTTP 500"] }, "full");
+  await expectMode("mode: unchanged · their server answered with an error → full", { ...base, probeFailures: ["/pricing — 1 request on this page came back as a server error"] }, "full");
   // A journey that had trouble is still re-walked, and only that one.
   await expectMode("mode: unchanged · baseline had one bad journey · no specs → partial", { ...base, specs: false, baselineVerdict: "needs_attention", journeys: MIXED }, "partial");
 

@@ -40,8 +40,12 @@
 // beyond the homepage, and a console burst on a page whose structure had not
 // moved since a walk that judged it fine. When two comparable snapshots agree
 // none of the three applies: the survey's own re-visit is the coverage they
-// were standing in for. An HTTP 5xx, a silent core page and an uncaught
-// exception are live signals and still send the run full.
+// were standing in for. An HTTP 5xx, a silent core page, an uncaught exception
+// and a console line saying their server answered with an error are live
+// signals and still send the run full — the survey compares markup, so a
+// backend that started failing leaves the pages identical and only those say
+// so. What the survey's answer does let us set aside is said out loud in the
+// feed (consoleSetAsideLine), never swallowed.
 
 import type { Browser, Page } from "@cloudflare/playwright";
 import type { Verdict } from "@/lib/enums";
@@ -68,7 +72,7 @@ import {
 
 // workflow.ts reads these off the replay module; the pure half lives in smoke.ts
 // so scripts/verify-smoke-gate.ts can drive it without Browser Rendering.
-export { shortLabel, smokeOutcomeLine, type PageProbe } from "./smoke";
+export { consoleSetAsideLine, shortLabel, smokeOutcomeLine, type PageProbe } from "./smoke";
 
 // Browser-time only — no tokens are spent on a smoke pass. Recorded so a run's
 // cost column is never a lie by omission and the ledger still sums correctly.
@@ -133,6 +137,8 @@ export interface SmokeReport {
   failures: string[];
   /** Counted console errors across every page — a fact; the rule is per page (CHE-187). */
   consoleErrors: number;
+  /** Pages whose burst was recorded and not counted because the app stood still (CHE-213). */
+  consoleBurstsSetAside: string[];
   pageErrors: number;
   screenshotUrl: string | null;
 }
