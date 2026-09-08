@@ -27,13 +27,16 @@
 // (example.com, test-app-*) are not on our hosts and are swept by the janitor —
 // and dropping it would put those back in the owner's inbox.
 //
-// Consequence worth stating out loud, because it is a choice and not an
-// oversight: an anonymous visitor who runs a free public check of
-// checkmyapp.dev and leaves an address gets no mail either. The verdict page is
-// still public and still theirs to read. Production has never seen such a run
-// (0 of 30 checkmyapp.dev runs are ownerless), and the alternative — "ours,
-// unless a stranger asked" — reintroduces exactly the account-shaped reasoning
-// this ticket exists to remove.
+// What is silenced is OUR run of our app, not every run of it. Two conditions,
+// answering two different questions: the target is one of our hosts (is this
+// app ours?) and the run is ours — it has an owner, or it belongs to a watch
+// (is this run ours?). An anonymous visitor's free public check of
+// checkmyapp.dev is an ordinary run and gets its mail: pointing the checker at
+// the checker will be one of the most common first runs anyone ever does, and
+// silence there reads as "the form is broken", which costs exactly the trust §6
+// was written to protect. The account is not back in the definition of "our
+// app" — that is still the host. It answers "whose run is this", which is the
+// question it actually knows the answer to.
 
 import { sendVerdictReady } from "@/lib/email";
 import type { Verdict } from "@/lib/enums";
@@ -45,24 +48,40 @@ export interface NotifiableRun {
   appSlug: string;
   targetUrl: string;
   notifyEmail: string | null;
+  ownerId: string | null;
   watchId: string | null;
   baselineRunId: string | null;
 }
 
-// Why this run stays quiet, in the words the run feed and the log line use.
-// null = there is nothing self-check about it and the mail goes out.
-export type SilenceReason = "our own product" | "a self-check account";
+// Why this run stays quiet, in the words the log line uses.
+// null = the mail goes out.
+export type SilenceReason = "our own product, checked by us" | "a self-check account";
 
 // The whole rule, as a pure function, so it can be asserted directly and so the
 // log line and the decision cannot drift apart.
 export function silenceReason(input: {
   targetUrl: string;
+  // The run is ours rather than a visitor's: it has an owner, or a watch of
+  // ours scheduled it.
+  ownRun: boolean;
   ownedByTestAccount: boolean;
   selfCheckHosts?: string;
 }): SilenceReason | null {
-  if (isSelfUrl(input.targetUrl, input.selfCheckHosts)) return "our own product";
+  if (isSelfUrl(input.targetUrl, input.selfCheckHosts)) {
+    // Our host. Two answers live here, and they are different answers:
+    if (input.ownRun) return "our own product, checked by us";
+    // — our host, somebody else's run. A visitor pointed the public checker at
+    // the checker. Ordinary run, ordinary mail.
+    return null;
+  }
   if (input.ownedByTestAccount) return "a self-check account";
   return null;
+}
+
+// A run belongs to us when someone signed in started it or a watch scheduled
+// it. An ownerless run came off the public /check form.
+export function isOwnRun(run: { ownerId: string | null; watchId: string | null }): boolean {
+  return run.ownerId !== null || run.watchId !== null;
 }
 
 // Shared by the full run and the replay-first pass. Non-fatal by construction:
@@ -74,12 +93,13 @@ export async function notifyVerdictReady(
   verdict: Verdict | null,
 ): Promise<void> {
   if (!run.notifyEmail) return;
-  // CHE-105/CHE-156: self-checks are silent. A run of our own product exists so
+  // CHE-105/CHE-156: our own check of our own product is silent. It exists so
   // CheckMyApp can check itself; the person running the business must be able
   // to forget it exists. Its results live on the verdict page, where they can be
   // looked at deliberately — they never arrive in anyone's inbox.
   const silent = silenceReason({
     targetUrl: run.targetUrl,
+    ownRun: isOwnRun(run),
     ownedByTestAccount: await ownedByTestAccount(env, run.publicId),
     selfCheckHosts: bindings.SELF_CHECK_HOSTS,
   });
@@ -87,7 +107,7 @@ export async function notifyVerdictReady(
     // The reason is named so the next operator reading the feed sees a decision
     // rather than a delivery that failed quietly.
     console.log(
-      `[notify] run ${run.publicId} checks ${silent} — staying silent (self-check, CLAUDE.md §6)`,
+      `[notify] run ${run.publicId} — staying silent: ${silent} (self-check, CLAUDE.md §6)`,
     );
     return;
   }

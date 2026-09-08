@@ -26,7 +26,12 @@
 
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { notifyVerdictReady, silenceReason, type NotifiableRun } from "@/agent/notify-verdict";
+import {
+  isOwnRun,
+  notifyVerdictReady,
+  silenceReason,
+  type NotifiableRun,
+} from "@/agent/notify-verdict";
 import { isSelfHost } from "@/agent/self-hosts";
 import { sweepTestAccounts } from "@/agent/janitor";
 import type { AgentBindings, AgentEnv } from "@/agent/env";
@@ -50,6 +55,8 @@ interface Scenario {
   isTestAccount: boolean;
   selfCheckHosts?: string;
   notifyEmail?: string | null;
+  // Default: a signed-in run. `null` is the public /check form's anonymous run.
+  ownerId?: string | null;
   watchId?: string | null;
   baselineRunId?: string | null;
   notifyOnChangeOnly?: boolean;
@@ -62,6 +69,7 @@ async function didEmail(s: Scenario): Promise<{ sent: boolean; log: string[] }> 
     appSlug: s.appSlug,
     targetUrl: s.targetUrl,
     notifyEmail: s.notifyEmail === undefined ? "owner@example.com" : s.notifyEmail,
+    ownerId: s.ownerId === undefined ? "u_owner" : s.ownerId,
     watchId: s.watchId ?? null,
     baselineRunId: s.baselineRunId ?? null,
   };
@@ -133,13 +141,51 @@ async function main(): Promise<void> {
         isTestAccount,
         selfCheckHosts: hosts,
       });
-      check(`${label}, owned by ${who}: no email`, !sent);
+      check(`${label}, our run, owned by ${who}: no email`, !sent);
       check(
-        `${label}, owned by ${who}: the log names the reason`,
-        log.some((l) => l.includes("staying silent") && l.includes("our own product")),
+        `${label}, our run, owned by ${who}: the log names the reason`,
+        log.some((l) => l.includes("staying silent") && l.includes("our own product, checked by us")),
         log.join(" | ") || "(no log line)",
       );
     }
+  }
+
+  // Our host, a watch's run, nobody signed in as its owner: still ours.
+  {
+    const { sent, log } = await didEmail({
+      targetUrl: "https://checkmyapp.dev/",
+      appSlug: "checkmyapp.dev",
+      isTestAccount: false,
+      ownerId: null,
+      watchId: "w_self",
+    });
+    check("our host, a watch run with no owner: no email", !sent);
+    check(
+      "our host, a watch run: the log names the reason",
+      log.some((l) => l.includes("our own product, checked by us")),
+      log.join(" | ") || "(no log line)",
+    );
+  }
+
+  // Our host, somebody else's run. Pointing the public checker at the checker is
+  // an ordinary first run, and it gets its mail (team-lead ruling, 2026-09-08).
+  for (const [label, targetUrl] of [
+    ["our production host", "https://checkmyapp.dev/"],
+    ["a subdomain of ours", "https://www.checkmyapp.dev/"],
+  ] as const) {
+    const { sent, log } = await didEmail({
+      targetUrl,
+      appSlug: new URL(targetUrl).host,
+      isTestAccount: false,
+      ownerId: null,
+      watchId: null,
+    });
+    check(`${label}, anonymous visitor's run with an address: email is sent`, sent);
+    check(
+      `${label}, anonymous visitor's run: nothing was silenced`,
+      !log.some((l) => l.includes("staying silent")),
+      log.join(" | "),
+    );
   }
 
   // The boundary from the ticket: two real observed apps on the SAME account.
@@ -202,17 +248,38 @@ async function main(): Promise<void> {
 
   // The rule as a value, so a caller cannot read it differently from the gate.
   check(
-    "silenceReason: ours wins over the account flag and is named as the product",
-    silenceReason({ targetUrl: "https://checkmyapp.dev/", ownedByTestAccount: true }) ===
-      "our own product",
+    "silenceReason: our host + our run wins over the account flag",
+    silenceReason({
+      targetUrl: "https://checkmyapp.dev/",
+      ownRun: true,
+      ownedByTestAccount: true,
+    }) === "our own product, checked by us",
+  );
+  check(
+    "silenceReason: our host + a visitor's run is a different answer — not silent",
+    silenceReason({
+      targetUrl: "https://checkmyapp.dev/",
+      ownRun: false,
+      ownedByTestAccount: false,
+    }) === null,
   );
   check(
     "silenceReason: a customer host on an ordinary account is not silenced",
-    silenceReason({ targetUrl: "https://joblander.app/", ownedByTestAccount: false }) === null,
+    silenceReason({
+      targetUrl: "https://joblander.app/",
+      ownRun: true,
+      ownedByTestAccount: false,
+    }) === null,
   );
   check(
     "silenceReason: an unparsable target is not silently treated as ours",
-    silenceReason({ targetUrl: "not a url", ownedByTestAccount: false }) === null,
+    silenceReason({ targetUrl: "not a url", ownRun: true, ownedByTestAccount: false }) === null,
+  );
+  check(
+    "isOwnRun: an owner or a watch makes it ours; neither makes it a visitor's",
+    isOwnRun({ ownerId: "u", watchId: null }) &&
+      isOwnRun({ ownerId: null, watchId: "w" }) &&
+      !isOwnRun({ ownerId: null, watchId: null }),
   );
 
   // ─── Customer counting ─────────────────────────────────────────────────────
