@@ -1,0 +1,284 @@
+{
+  "note": "Run #159 (checkmyapp.dev, 2026-09-08) as recorded in production D1. Steps are verbatim apart from observed text truncated to 120 characters; actions are the machine trail (CHE-129) exactly as stored.",
+  "finding": {
+    "title": "Credential/notes field in 'Add login & notes' didn't accept input",
+    "category": "risky",
+    "severity": "medium",
+    "detail": {
+      "where": "/check — 'Add login & notes' accordion, test-login/notes text field",
+      "whatWeTried": [
+        "Expanded the accordion",
+        "Attempted to type test credentials into the notes field"
+      ],
+      "whatHappened": "The field is present in the DOM but the input attempt did not take — we could not enter text here, whereas the sign-in email field on /sign-in accepted input normally in the same run.",
+      "whyItMatters": "This field is how Starter/Growth customers give you test logins so checks can run behind their auth — the paid feature depends on it. Confirm the field accepts and persists input so credential-backed checks aren't silently blocked."
+    }
+  },
+  "journeys": [
+    {
+      "steps": [
+        {
+          "label": "Open sign-in page and confirm form renders",
+          "status": "ok",
+          "unverifiedReason": null,
+          "observed": "Sign-in page renders correctly: \"Sign in to Check My App\" heading, Continue with Google button, Email address and Pas…",
+          "actions": "[{\"kind\":\"navigate\",\"url\":\"https://checkmyapp.dev/\",\"outcome\":{\"urlAfter\":\"https://checkmyapp.dev/check\",\"status\":200}},{\"kind\":\"navigate\",\"url\":\"https://checkmyapp.dev/sign-in?redirect_url=%2Fcheck\",\"outcome\":{\"urlAfter\":\"https://checkmyapp.dev/sign-in?redirect_url=%2Fcheck\",\"status\":200}}]"
+        },
+        {
+          "label": "Review pricing page",
+          "status": "ok",
+          "unverifiedReason": null,
+          "observed": "Pricing page renders correctly: headline \"First check is free. Staying certain is $29.\" with four tiers — Free ($0, 1…",
+          "actions": "[{\"kind\":\"navigate\",\"url\":\"https://checkmyapp.dev/pricing\",\"outcome\":{\"urlAfter\":\"https://checkmyapp.dev/pricing\",\"status\":200}}]"
+        },
+        {
+          "label": "Review FAQ page",
+          "status": "ok",
+          "unverifiedReason": null,
+          "observed": "This step behaved as a user would expect; nothing failed.",
+          "actions": "[{\"kind\":\"navigate\",\"url\":\"https://checkmyapp.dev/faq\",\"outcome\":{\"urlAfter\":\"https://checkmyapp.dev/faq\",\"status\":200}}]"
+        },
+        {
+          "label": "Review example verdict page",
+          "status": "ok",
+          "unverifiedReason": null,
+          "observed": "Example verdict renders fully: \"theins.ru — All good\", \"Checked Sep 4, 08:59 PM · 1m · Run #143\", bottom-line summary…",
+          "actions": "[{\"kind\":\"navigate\",\"url\":\"https://checkmyapp.dev/verdict/cmtnf9n670003wh1rc9o2rild\",\"outcome\":{\"urlAfter\":\"https://checkmyapp.dev/verdict/cmtnf9n670003wh1rc9o2rild\",\"status\":200}}]"
+        },
+        {
+          "label": "Review latest verdict page (Mostly OK)",
+          "status": "ok",
+          "unverifiedReason": null,
+          "observed": "Re-check / Enable Daily Watch / That's fine / Watch it / Mark as fixed / Dispute buttons present but not pressed (rea…",
+          "actions": "[{\"kind\":\"navigate\",\"url\":\"https://checkmyapp.dev/verdict/cmtokcgh90003x91r292cdcn3\",\"outcome\":{\"urlAfter\":\"https://checkmyapp.dev/verdict/cmtokcgh90003x91r292cdcn3\",\"status\":200}}]"
+        },
+        {
+          "label": "Review About page",
+          "status": "ok",
+          "unverifiedReason": null,
+          "observed": "About page renders correctly: \"An independent project, watched daily by itself.\", description, LEGAL & CONTACT block …",
+          "actions": "[{\"kind\":\"navigate\",\"url\":\"https://checkmyapp.dev/about\",\"outcome\":{\"urlAfter\":\"https://checkmyapp.dev/about\",\"status\":200}}]"
+        },
+        {
+          "label": "Review Today's checks page",
+          "status": "ok",
+          "unverifiedReason": null,
+          "observed": "Page renders correctly: \"Today's checks\", \"0 of 20 free checks used\", \"Anonymous checks are public. The site runs 20 …",
+          "actions": "[{\"kind\":\"navigate\",\"url\":\"https://checkmyapp.dev/checks/today\",\"outcome\":{\"urlAfter\":\"https://checkmyapp.dev/checks/today\",\"status\":200}}]"
+        }
+      ]
+    },
+    {
+      "steps": [
+        {
+          "label": "Open sign-in page and confirm form renders",
+          "status": "ok",
+          "unverifiedReason": null,
+          "observed": "The sign-in page renders the full Clerk card: \"Sign in to Check My App\" with a \"Continue with Google\" button, an Emai…",
+          "actions": "[{\"kind\":\"navigate\",\"url\":\"https://checkmyapp.dev/\",\"outcome\":{\"urlAfter\":\"https://checkmyapp.dev/check\",\"status\":200}},{\"kind\":\"click\",\"role\":\"link\",\"name\":\"Sign in\",\"outcome\":{\"urlAfter\":\"https://checkmyapp.dev/sign-in?redirect_url=%2Fcheck\",\"navigated\":true,\"requests\":10,\"mutations\":222}},{\"kind\":\"fill\",\"label\":\"Email address\",\"value\":\"test@example.com\",\"outcome\":{\"urlAfter\":\"https://checkmyapp.dev/sign-in?redirect_url=%2Fcheck\"}}]"
+        },
+        {
+          "label": "Submit sign-in (email/password)",
+          "status": "skipped",
+          "unverifiedReason": "missing_access",
+          "observed": "The Email address field accepted text. No test credentials were provided for this run and the scope is read-only. Cou…",
+          "actions": null
+        },
+        {
+          "label": "Open example verdict page",
+          "status": "ok",
+          "unverifiedReason": null,
+          "observed": "The verdict page renders a complete \"All good\" verdict for theins.ru with headings, 5 journey steps, an App anatomy s…",
+          "actions": "[{\"kind\":\"navigate\",\"url\":\"https://checkmyapp.dev/pricing\",\"outcome\":{\"urlAfter\":\"https://checkmyapp.dev/pricing\",\"status\":200}},{\"kind\":\"navigate\",\"url\":\"https://checkmyapp.dev/faq\",\"outcome\":{\"urlAfter\":\"https://checkmyapp.dev/faq\",\"status\":200}},{\"kind\":\"navigate\",\"url\":\"https://checkmyapp.dev/verdict/cmtnf9n670003wh1rc9o2rild\",\"outcome\":{\"urlAfter\":\"https://checkmyapp.dev/verdict/cmtnf9n670003wh1rc9o2rild\",\"status\":200}}]"
+        },
+        {
+          "label": "Open latest verdict page",
+          "status": "ok",
+          "unverifiedReason": null,
+          "observed": "The verdict renders as \"Mostly OK\" for theins.ru with 5 journey steps, App anatomy, and run artifacts.",
+          "actions": "[{\"kind\":\"navigate\",\"url\":\"https://checkmyapp.dev/verdict/cmtokcgh90003x91r292cdcn3\",\"outcome\":{\"urlAfter\":\"https://checkmyapp.dev/verdict/cmtokcgh90003x91r292cdcn3\",\"status\":200}},{\"kind\":\"navigate\",\"url\":\"https://checkmyapp.dev/checks/today\",\"outcome\":{\"urlAfter\":\"https://checkmyapp.dev/checks/today\",\"status\":200}}]"
+        },
+        {
+          "label": "Open Today's checks page",
+          "status": "ok",
+          "unverifiedReason": null,
+          "observed": "The page renders showing \"Today's checks.\" with a working empty state: \"0 OF 20 FREE CHECKS USED\", \"No checks yet tod…",
+          "actions": null
+        },
+        {
+          "label": "Open About page",
+          "status": "ok",
+          "unverifiedReason": null,
+          "observed": "The About page renders with the \"An independent project, watched daily by itself\" heading, project copy, and a Legal …",
+          "actions": "[{\"kind\":\"navigate\",\"url\":\"https://checkmyapp.dev/about\",\"outcome\":{\"urlAfter\":\"https://checkmyapp.dev/about\",\"status\":200}}]"
+        }
+      ]
+    },
+    {
+      "steps": [
+        {
+          "label": "Navigate to today's public checks",
+          "status": "ok",
+          "unverifiedReason": null,
+          "observed": "Opened https://checkmyapp.dev/checks/today (HTTP 200), title \"Today's checks · CheckMyApp\". The page's GET /api/check…",
+          "actions": "[{\"kind\":\"navigate\",\"url\":\"https://checkmyapp.dev/\",\"outcome\":{\"urlAfter\":\"https://checkmyapp.dev/check\",\"status\":200}},{\"kind\":\"click\",\"role\":\"link\",\"name\":\"today's checks\",\"outcome\":{\"urlAfter\":\"https://checkmyapp.dev/checks/today\",\"navigated\":true,\"requests\":4,\"mutations\":205}}]"
+        },
+        {
+          "label": "View the empty-state public checks list",
+          "status": "ok",
+          "unverifiedReason": null,
+          "observed": "The empty-state list renders: \"TODAY · 0 OF 20 FREE CHECKS USED\", heading \"Today's checks.\", copy \"Anonymous checks a…",
+          "actions": null
+        },
+        {
+          "label": "View the new-check form via 'Check your app →'",
+          "status": "ok",
+          "unverifiedReason": null,
+          "observed": "Landed on /check. The URL field accepts input and the page reacted live: entering https://example.com produced an inl…",
+          "actions": "[{\"kind\":\"click\",\"role\":\"link\",\"name\":\"Check your app →\",\"outcome\":{\"urlAfter\":\"https://checkmyapp.dev/check\",\"navigated\":true,\"requests\":10,\"mutations\":257}},{\"kind\":\"fill\",\"selector\":\"input[type=text]\",\"value\":\"https://example.com\",\"outcome\":{\"urlAfter\":\"https://checkmyapp.dev/check\"}}]"
+        },
+        {
+          "label": "Open the example verdict",
+          "status": "ok",
+          "unverifiedReason": null,
+          "observed": "Opened /verdict/cmtnf9n670003wh1rc9o2rild (HTTP 200), title \"theins.ru — All good · CheckMyApp\". The verdict renders …",
+          "actions": "[{\"kind\":\"click\",\"role\":\"link\",\"name\":\"See an example verdict →\",\"outcome\":{\"urlAfter\":\"https://checkmyapp.dev/verdict/cmtnf9n670003wh1rc9o2rild\",\"navigated\":true,\"requests\":12,\"mutations\":323}}]"
+        },
+        {
+          "label": "Open sign-in page and confirm form renders",
+          "status": "ok",
+          "unverifiedReason": null,
+          "observed": "The sign-in page renders fully (HTTP 200): \"Sign in to Check My App\", \"Welcome back! Please sign in to continue\", a \"…",
+          "actions": "[{\"kind\":\"navigate\",\"url\":\"https://checkmyapp.dev/sign-in?redirect_url=%2Fcheck\",\"outcome\":{\"urlAfter\":\"https://checkmyapp.dev/sign-in?redirect_url=%2Fcheck\",\"status\":200}}]"
+        },
+        {
+          "label": "Open pricing page",
+          "status": "ok",
+          "unverifiedReason": null,
+          "observed": "Pricing page renders (HTTP 200): hero \"First check is free. Staying certain is $29.\" with four tiers — FREE $0, START…",
+          "actions": "[{\"kind\":\"navigate\",\"url\":\"https://checkmyapp.dev/pricing\",\"outcome\":{\"urlAfter\":\"https://checkmyapp.dev/pricing\",\"status\":200}}]"
+        },
+        {
+          "label": "Open FAQ page",
+          "status": "ok",
+          "unverifiedReason": null,
+          "observed": "FAQ page renders (HTTP 200): heading \"Questions, answered honestly.\" with a set of questions and answers (e.g. Answer…",
+          "actions": "[{\"kind\":\"navigate\",\"url\":\"https://checkmyapp.dev/faq\",\"outcome\":{\"urlAfter\":\"https://checkmyapp.dev/faq\",\"status\":200}}]"
+        }
+      ]
+    },
+    {
+      "steps": [
+        {
+          "label": "Click 'Start free' → lands on /sign-in, form renders",
+          "status": "ok",
+          "unverifiedReason": null,
+          "observed": "Redirected to https://checkmyapp.dev/sign-in. The sign-in page now renders a full form: \"Sign in to Check My App\" hea…",
+          "actions": "[{\"kind\":\"navigate\",\"url\":\"https://checkmyapp.dev/\",\"outcome\":{\"urlAfter\":\"https://checkmyapp.dev/check\",\"status\":200}},{\"kind\":\"click\",\"role\":\"link\",\"name\":\"Pricing\",\"outcome\":{\"urlAfter\":\"https://checkmyapp.dev/pricing\",\"navigated\":true,\"requests\":5,\"mutations\":211}},{\"kind\":\"click\",\"role\":\"link\",\"name\":\"Start free\",\"outcome\":{\"urlAfter\":\"https://checkmyapp.dev/sign-in\",\"navigated\":true,\"requests\":10,\"mutations\":270}}]"
+        },
+        {
+          "label": "Read FAQ page for automated checks, source-code privacy, credentials, trackers",
+          "status": "ok",
+          "unverifiedReason": null,
+          "observed": "All authoritative content loads over 200 responses.",
+          "actions": "[{\"kind\":\"click\",\"role\":\"link\",\"name\":\"FAQ\",\"outcome\":{\"urlAfter\":\"https://checkmyapp.dev/faq\",\"navigated\":true,\"requests\":2,\"mutations\":319}}]"
+        },
+        {
+          "label": "Read About page and verify founder mailto link",
+          "status": "ok",
+          "unverifiedReason": null,
+          "observed": "Renders \"An independent project, watched daily by itself.\" with a short project description, Legal & Contact block (o…",
+          "actions": "[{\"kind\":\"click\",\"role\":\"link\",\"name\":\"About\",\"outcome\":{\"urlAfter\":\"https://checkmyapp.dev/about\",\"navigated\":true,\"requests\":2,\"mutations\":359}}]"
+        },
+        {
+          "label": "Open an example verdict page",
+          "status": "ok",
+          "unverifiedReason": null,
+          "observed": "Renders a full verdict: \"All good\" status badge, \"Checked Sep 4, 08:59 PM · Ios · Run #143\", a \"How we saw your app\" …",
+          "actions": "[{\"kind\":\"navigate\",\"url\":\"https://checkmyapp.dev/verdict/cmtnf9n670003wh1rc9o2rild\",\"outcome\":{\"urlAfter\":\"https://checkmyapp.dev/verdict/cmtnf9n670003wh1rc9o2rild\",\"status\":200}}]"
+        },
+        {
+          "label": "Confirm /checks/today renders after header fix",
+          "status": "ok",
+          "unverifiedReason": null,
+          "observed": "Renders a clean empty state: \"Today's checks. Anonymous checks are public. The site runs 20 free checks a day (0 used…",
+          "actions": "[{\"kind\":\"navigate\",\"url\":\"https://checkmyapp.dev/checks/today\",\"outcome\":{\"urlAfter\":\"https://checkmyapp.dev/checks/today\",\"status\":200}}]"
+        }
+      ]
+    },
+    {
+      "steps": [
+        {
+          "label": "Open sign-in page / confirm form renders",
+          "status": "ok",
+          "unverifiedReason": null,
+          "observed": "The sign-in page at /sign-in renders a complete Clerk auth form: Email address and Password fields, a \"Continue\" butt…",
+          "actions": "[{\"kind\":\"navigate\",\"url\":\"https://checkmyapp.dev/\",\"outcome\":{\"urlAfter\":\"https://checkmyapp.dev/check\",\"status\":200}},{\"kind\":\"navigate\",\"url\":\"https://checkmyapp.dev/sign-in\",\"outcome\":{\"urlAfter\":\"https://checkmyapp.dev/sign-in\",\"status\":200}}]"
+        },
+        {
+          "label": "View pricing page",
+          "status": "ok",
+          "unverifiedReason": null,
+          "observed": "The pricing page renders correctly under the header: \"First check is free. Staying certain is $29.\" with four tiers (…",
+          "actions": "[{\"kind\":\"navigate\",\"url\":\"https://checkmyapp.dev/pricing\",\"outcome\":{\"urlAfter\":\"https://checkmyapp.dev/pricing\",\"status\":200}}]"
+        },
+        {
+          "label": "View FAQ page",
+          "status": "ok",
+          "unverifiedReason": null,
+          "observed": "Internal links to /checks/today and /check all render.",
+          "actions": "[{\"kind\":\"navigate\",\"url\":\"https://checkmyapp.dev/faq\",\"outcome\":{\"urlAfter\":\"https://checkmyapp.dev/faq\",\"status\":200}}]"
+        },
+        {
+          "label": "Review Run artifacts section of example verdict",
+          "status": "ok",
+          "unverifiedReason": null,
+          "observed": "All 27 spec links and the transcript JSON resolve HTTP 200 server-side (notably these spec links previously could not…",
+          "actions": "[{\"kind\":\"navigate\",\"url\":\"https://checkmyapp.dev/verdict/cmtnf9n670003wh1rc9o2rild\",\"outcome\":{\"urlAfter\":\"https://checkmyapp.dev/verdict/cmtnf9n670003wh1rc9o2rild\",\"status\":200}}]"
+        },
+        {
+          "label": "Review second example verdict (Mostly OK)",
+          "status": "ok",
+          "unverifiedReason": null,
+          "observed": "This step behaved as a user would expect; nothing failed.",
+          "actions": "[{\"kind\":\"navigate\",\"url\":\"https://checkmyapp.dev/verdict/cmtokcgh90003x91r292cdcn3\",\"outcome\":{\"urlAfter\":\"https://checkmyapp.dev/verdict/cmtokcgh90003x91r292cdcn3\",\"status\":200}}]"
+        },
+        {
+          "label": "View About page",
+          "status": "ok",
+          "unverifiedReason": null,
+          "observed": "The About page renders correctly: \"An independent project, watched daily by itself.\" with the project description, Le…",
+          "actions": "[{\"kind\":\"navigate\",\"url\":\"https://checkmyapp.dev/checks/today\",\"outcome\":{\"urlAfter\":\"https://checkmyapp.dev/checks/today\",\"status\":200}},{\"kind\":\"navigate\",\"url\":\"https://checkmyapp.dev/about\",\"outcome\":{\"urlAfter\":\"https://checkmyapp.dev/about\",\"status\":200}}]"
+        },
+        {
+          "label": "View Today's checks page",
+          "status": "ok",
+          "unverifiedReason": null,
+          "observed": "The page renders a clean empty state: \"Today's checks.\" with \"0 of 20 free checks used\", \"No checks yet today — yours…",
+          "actions": null
+        },
+        {
+          "label": "Sign in to access authenticated features",
+          "status": "skipped",
+          "unverifiedReason": "missing_access",
+          "observed": "The sign-in form renders correctly (Email address, Password, Continue, Continue with Google).",
+          "actions": null
+        },
+        {
+          "label": "Click 'Enable Daily Watch'",
+          "status": "skipped",
+          "unverifiedReason": "not_applicable",
+          "observed": "The button renders on both example verdict pages. Not pressed — this is a state-changing action the read-only scope f…",
+          "actions": null
+        },
+        {
+          "label": "Click 'Re-check after a deploy'",
+          "status": "skipped",
+          "unverifiedReason": "not_applicable",
+          "observed": "The button renders on both example verdict pages. Not pressed — this triggers an immediate re-check, a state-changing…",
+          "actions": null
+        }
+      ]
+    }
+  ]
+}

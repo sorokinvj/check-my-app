@@ -250,6 +250,13 @@ model Finding {
   severity  String // Severity
   // Structured detail: where, browser, reproduced, whatWeTried[], whatHappened, whyItMatters.
   detail    String? // JSON (FindingDetail)
+  // CHE-215: what this finding was allowed to rest on, written when it was.
+  // JSON, internal only — never rendered, never emailed:
+  //   { stepRef: {journeyIndex, stepIndex} | null, hands: string[], trail: "present"|"absent" }
+  // The retro this ticket asked for had to infer stepRef from whether a
+  // screenshot row existed, because persistence read it and dropped it. NULL
+  // on every row written before the column.
+  anchor    String?
   mark      String          @default("none") // FindingMark
 
   evidence  Evidence[]

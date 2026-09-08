@@ -1,5 +1,7 @@
 // CHE-188 verification: a finding that rests only on a skipped step is not
-// written.
+// written. CHE-215 extends it: a finding that says one of OUR interactions
+// produced nothing, in a run whose machine trail shows we never drove that
+// control, is not written either.
 //
 // Run #153 (joblander.app) recorded the step "Modify Insight Preferences
 // (slider) and Save/Reset" as skipped / our_capability and then wrote the
@@ -8,14 +10,34 @@
 // that now sits between synthesis and persistence does what the prompt only
 // asked for.
 //
+// Run #159 (checkmyapp.dev) is the harder version and gets the whole run as a
+// fixture: `fixtures-run-159.json` is its 35 steps and its published finding,
+// straight out of production D1. Nothing in that run mentions the accordion or
+// a failed fill, and the trail proves it — the two fills it performed were the
+// sign-in email box and the URL box.
+//
 // Pure: no browser, no network, no model, no database. Every case below is the
 // exact shape the workflow hands the gate — synthesized findings plus the
 // run's journeys with their steps — so what passes here is what runs.
 //
 // Usage: npx tsx --tsconfig tsconfig.json scripts/verify-findings-gate.ts
 
-import { EXPOSED_NO_EVIDENCE, distinctiveTokens, gateFindings, type GateJourney } from "@/agent/findings-gate";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import {
+  EXPOSED_NO_EVIDENCE,
+  NO_INTERACTION_RECORDED,
+  claimedHands,
+  distinctiveTokens,
+  drivenControls,
+  gateFindings,
+  type GateJourney,
+} from "@/agent/findings-gate";
 import type { SynthesizedFinding } from "@/agent/synthesis";
+
+const RUN_159: { note: string; finding: SynthesizedFinding; journeys: GateJourney[] } = JSON.parse(
+  readFileSync(fileURLToPath(new URL("./fixtures-run-159.json", import.meta.url)), "utf8"),
+);
 
 let failures = 0;
 function check(name: string, ok: boolean, detail = "") {
@@ -247,6 +269,189 @@ function main() {
       [...t].join(","),
     );
     check("tokens: 'would' and 'which' are stop words, 'save' and 'the' too short", !t.has("would") && !t.has("which") && !t.has("save"));
+  }
+
+  // ─── CHE-215 ───────────────────────────────────────────────────────────────
+
+  // 13 — the fixture is the run, not a paraphrase of it.
+  {
+    const steps = RUN_159.journeys.flatMap((j) => j.steps);
+    check("#159 fixture: 5 journeys, 35 steps", RUN_159.journeys.length === 5 && steps.length === 35, `${steps.length} steps`);
+    const text = steps.map((s) => `${s.label} ${s.observed ?? ""}`).join(" ").toLowerCase();
+    check(
+      "#159: no step mentions the accordion, an expansion or a notes field",
+      !text.includes("accordion") && !text.includes("expanded") && !/\bnotes field\b/.test(text),
+    );
+    const trail = drivenControls(steps.filter((s) => s.status !== "skipped"));
+    check("#159: the run recorded a machine trail", trail.recorded);
+    check(
+      "#159: every fill it performed was the sign-in email box (the URL box was filled by selector, so it names no control)",
+      [...trail.fill].join(" ") === "email address",
+      [...trail.fill].join(" ") || "(none)",
+    );
+  }
+
+  // 14 — the ticket's case: run #159's own finding against run #159's own
+  // steps → dropped.
+  {
+    const r = gateFindings([RUN_159.finding], RUN_159.journeys);
+    check("#159: the published finding is dropped", r.kept.length === 0 && r.dropped.length === 1, titles(r.kept));
+    check(
+      "#159: the reason is the missing interaction, not the skipped steps",
+      r.dropped[0]?.reason.startsWith(NO_INTERACTION_RECORDED) === true,
+      r.dropped[0]?.reason,
+    );
+    check(
+      "#159: it is dropped even when it names a walked step — CHE-188 alone would keep it",
+      gateFindings([{ ...RUN_159.finding, stepRef: { journeyIndex: 2, stepIndex: 2 } }], RUN_159.journeys).kept
+        .length === 0,
+    );
+  }
+
+  // 15 — a finding whose whatWeTried matches what the run actually did → kept.
+  // Same run, same trail; this one is about the sign-in email box, the one
+  // control run #159's trail shows we filled (step 1.0, "Email address").
+  {
+    const real: SynthesizedFinding = {
+      title: "Email address field does not accept input after a rejected submit",
+      category: "confusing",
+      severity: "medium",
+      detail: {
+        where: "/sign-in — Email address field",
+        whatWeTried: ["Typed an address into the Email address field"],
+        whatHappened: "Once the form had been rejected, the Email address field would not take a corrected address.",
+        whyItMatters: "A visitor who mistypes their address cannot correct it without reloading.",
+      },
+    };
+    const r = gateFindings([real], RUN_159.journeys);
+    check("a null-effect finding about a control we really filled is kept", r.kept.length === 1, r.dropped[0]?.reason);
+    check(
+      "…and the same finding moved to a control nothing filled is dropped",
+      gateFindings(
+        [{ ...real, title: "Notes field does not accept input", detail: { ...real.detail, where: "/check — notes" } }],
+        RUN_159.journeys,
+      ).kept.length === 0,
+    );
+  }
+
+  // 16 — a link check is not an interaction. verify_links resolves outbound
+  // URLs server-side (CLAUDE.md rule 3) and lands in a step's observed with no
+  // click behind it; such a finding must stay publishable.
+  {
+    const linkFinding: SynthesizedFinding = {
+      title: "Two YouTube embeds on the tour page are unplayable",
+      category: "broken",
+      severity: "medium",
+      detail: {
+        where: "/tour — video wall",
+        whatWeTried: ["Resolved every outbound video URL on the page"],
+        whatHappened: "Two of the eleven YouTube URLs return an oEmbed error: the videos are deleted or private.",
+        whyItMatters: "A visitor on the tour page meets two dead videos.",
+      },
+    };
+    check("a link-check finding claims no interaction of ours", claimedHands(linkFinding).length === 0);
+    const journeys: GateJourney[] = [
+      {
+        steps: [
+          {
+            label: "Check the tour page's outbound video links",
+            status: "broken",
+            unverifiedReason: null,
+            observed: "Eleven YouTube URLs resolved; two returned an oEmbed error (deleted or private).",
+            actions: JSON.stringify([
+              { kind: "navigate", url: "https://example.com/tour", outcome: { status: 200 } },
+            ]),
+          },
+          {
+            label: "Sign in to the members area",
+            status: "skipped",
+            unverifiedReason: "missing_access",
+            observed: "No credentials were provided this run.",
+            actions: null,
+          },
+        ],
+      },
+    ];
+    const r = gateFindings([linkFinding], journeys);
+    check("link-check finding with no click step is kept", r.kept.length === 1, r.dropped[0]?.reason);
+  }
+
+  // 17 — CHE-188 is untouched: a finding supported only by a skipped step is
+  // still dropped, and for CHE-188's reason, in a run that also carries a
+  // trail. The trail must not become a way to rescue one.
+  {
+    const withTrail: GateJourney[] = [
+      {
+        steps: RUN_153[1].steps.map((s) => ({
+          ...s,
+          actions: JSON.stringify([
+            { kind: "fill", label: "Insight Preferences", value: "0.5", outcome: {} },
+            { kind: "click", role: "button", name: "Save Changes", outcome: {} },
+          ]),
+        })),
+      },
+    ];
+    const r = gateFindings([{ ...SLIDER_FINDING, stepRef: { journeyIndex: 0, stepIndex: 2 } }], withTrail);
+    check(
+      "CHE-188 unchanged: a finding on a skipped step is dropped even when the trail would anchor it",
+      r.kept.length === 0 && r.dropped[0]?.reason.includes("our_capability") === true,
+      r.dropped[0]?.reason,
+    );
+  }
+
+  // 18 — the rule stays silent where it cannot speak: no trail at all, and a
+  // hand whose recorded controls have no nameable token.
+  {
+    const noTrail: GateJourney[] = [
+      { steps: [{ label: "Open the settings page", status: "ok", unverifiedReason: null, observed: "Settings rendered." }] },
+    ];
+    check(
+      "a run with no machine trail keeps the finding (the rule cannot speak)",
+      gateFindings([{ ...SLIDER_FINDING, stepRef: undefined }], noTrail).kept.length === 1,
+    );
+    const shortNames: GateJourney[] = [
+      {
+        steps: [
+          {
+            label: "Press Save",
+            status: "ok",
+            unverifiedReason: null,
+            observed: "The Save button was pressed.",
+            actions: JSON.stringify([{ kind: "click", role: "button", name: "Save", outcome: {} }]),
+          },
+        ],
+      },
+    ];
+    const shortClaim: SynthesizedFinding = {
+      title: "Buy button does nothing",
+      category: "broken",
+      severity: "high",
+      detail: { where: "/pricing", whatWeTried: ["Clicked Buy"], whatHappened: "Clicking Buy had no effect." },
+    };
+    check(
+      "a trail whose controls have no nameable token is silence, not a denial",
+      gateFindings([shortClaim], shortNames).kept.length === 1,
+    );
+  }
+
+  // 19 — the null-effect phrases and the hand they name.
+  {
+    const claim = (title: string, whatHappened: string): SynthesizedFinding => ({
+      title,
+      category: "confusing",
+      severity: "low",
+      detail: { whatHappened },
+    });
+    check("'did not accept input' is a fill claim", claimedHands(claim("Field problem", "The field did not accept input.")).includes("fill"));
+    check("'nothing happened' after a click is a click claim", claimedHands(claim("Button problem", "We clicked the button and nothing happened.")).includes("click"));
+    check(
+      "a 500 is not a claim about our hands",
+      claimedHands(claim("Checkout returns 500", "Submitting the order returned HTTP 500 and no confirmation was shown.")).length === 0,
+    );
+    check(
+      "a curly apostrophe does not hide the phrase",
+      claimedHands(claim("Slider problem", "The slider didn’t respond to a drag.")).includes("click"),
+    );
   }
 
   console.log(failures ? `\n${failures} check(s) FAILED` : "\nall checks passed");
