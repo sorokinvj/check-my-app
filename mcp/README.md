@@ -95,6 +95,25 @@ and the sentence that means it is gone, and deliberately names no file, cause
 or fix — what to change is yours to decide. And read `coverage` before you call
 a deploy clean: a page nobody opened is not a page that works.
 
+## Claude Code skill
+
+[`.claude/skills/app-review/SKILL.md`](../.claude/skills/app-review/SKILL.md)
+is a skill that teaches an agent to use these tools well. Claude Code picks it
+up automatically in a checkout of this repo; for another project, copy the
+folder:
+
+```bash
+mkdir -p ~/.claude/skills/app-review
+cp .claude/skills/app-review/SKILL.md ~/.claude/skills/app-review/
+```
+
+The tool descriptions above say what each tool does. The skill says when to
+reach for one and how to read what comes back: write the plan as user steps
+before starting, use `ephemeral` on a preview, and treat a finding as a symptom
+with evidence rather than a diagnosis — including the two mistakes that look
+like success, calling `unverified` a defect and calling `all_good` with a
+non-empty `coverage` a clean sweep.
+
 ## Ephemeral runs (PR previews)
 
 `start_check{ ephemeral: true }` is for a hostname that will not outlive the
