@@ -388,6 +388,46 @@ export function cutUndrivenClaims(
   return { text: out.length > 0 ? out : null, cut };
 }
 
+// Where a sentence carries the claim and the observation together, cutting the
+// whole sentence throws away what we did see. Run #159's step read "The field
+// is present but the input attempt did not take" — one sentence, two halves,
+// and only the second is about us. CLAUSE_BREAK in tools.ts splits on
+// punctuation; a plain "but" needs no comma, so this list is its own.
+const CLAUSE_JOINS =
+  /\s+(?:but|though|although|however|yet|whereas|while)\s+|\s+[—–]+\s+|;\s+|,\s+(?=(?:but|though|although|however|yet|whereas|and|so|which|because|since)\b)/i;
+
+// The claim, cut at clause level, where our own failure is ALREADY established
+// — tools.ts calls this only after a control we could not drive, so no trail
+// comparison is needed: any clause saying our interaction produced nothing is,
+// by construction, our incapacity. The hand is read from the whole sentence
+// (a clause like "nothing happened" names no hand of its own) and only the
+// clauses carrying the null-effect phrase are removed.
+export function cutNullEffectClauses(text: string | null | undefined): ClaimCut {
+  if (!text || !text.trim()) return { text: text ?? null, cut: [] };
+  const kept: string[] = [];
+  const cut: string[] = [];
+  for (const sentence of splitSentences(text)) {
+    if (handsInText(sentence).length === 0) {
+      kept.push(sentence.trim());
+      continue;
+    }
+    const clauses = sentence.split(CLAUSE_JOINS).map((c) => c.trim()).filter(Boolean);
+    const survivors: string[] = [];
+    for (const clause of clauses) {
+      const claim = NULL_EFFECT_PHRASES.some((re) => re.test(clause.toLowerCase().replace(/[‘’ʼ]/g, "'")));
+      if (claim) cut.push(clause);
+      else survivors.push(clause.replace(/[.,;:\s]+$/, ""));
+    }
+    if (survivors.length) {
+      const joined = survivors.join(", ");
+      kept.push(/[.!?]$/.test(joined) ? joined : `${joined}.`);
+    }
+  }
+  if (cut.length === 0) return { text, cut: [] };
+  const out = kept.join(" ").replace(/\s+/g, " ").trim();
+  return { text: out.length > 0 ? out : null, cut };
+}
+
 export function gateFindings(findings: SynthesizedFinding[], journeys: GateJourney[]): GateResult {
   const kept: SynthesizedFinding[] = [];
   const dropped: GateResult["dropped"] = [];

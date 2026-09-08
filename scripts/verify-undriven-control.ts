@@ -32,6 +32,8 @@ import {
   type UndrivenControl,
 } from "@/agent/tools";
 import { GAP_CLASSES, classifyGap } from "@/agent/gap-classes";
+import { cutNullEffectClauses } from "@/agent/findings-gate";
+import { UNVERIFIABLE_FALLBACK } from "@/lib/verdict-language";
 
 let failures = 0;
 function check(name: string, ok: boolean, detail = "") {
@@ -145,6 +147,69 @@ async function main() {
     check("…and names the capability, so it files on our board", step.gapClass === "undriven_control", step.gapClass);
     check("…and the step says the control was not exercised", /could not be exercised this run/.test(step.observed));
     check("…and the record is drained, so the next step starts clean", (env.undrivenControls as UndrivenControl[]).length === 0);
+    // The status was only half of it. Step.observed is rendered word for word
+    // on the verdict page, so the model's own claim had to go with it —
+    // otherwise the owner still reads that their field refused input, with our
+    // caveat merely appended after it.
+    check(
+      "…and OUR claim is gone from the text the owner reads",
+      !/input attempt did not take/i.test(step.observed),
+      step.observed,
+    );
+    check(
+      "…while what we actually saw survives",
+      step.observed.startsWith("The field is present."),
+      step.observed,
+    );
+  }
+
+  // 3c — the text cut, on its own, in the shapes a step arrives in.
+  {
+    const cases: Array<[string, string]> = [
+      // Run #159's step, verbatim: one sentence, two halves, only one is ours.
+      ["The field is present but the input attempt did not take.", "The field is present."],
+      // A comma and a "but".
+      ["The control renders correctly, but clicking it did nothing.", "The control renders correctly."],
+      // An em dash.
+      ["The notes box is in the DOM — it would not accept input.", "The notes box is in the DOM."],
+      // Two sentences: only the one making the claim is touched.
+      [
+        "The accordion expands and shows four fields. The field did not accept input.",
+        "The accordion expands and shows four fields.",
+      ],
+      // A claim whose clause names no hand of its own; the sentence does.
+      ["We typed into the notes field, but nothing happened.", "We typed into the notes field."],
+    ];
+    for (const [observed, expected] of cases) {
+      const r = cutNullEffectClauses(observed);
+      check(`clause cut: ${JSON.stringify(observed.slice(0, 44))}`, r.text === expected, r.text ?? "(null)");
+    }
+    // Nothing about our hands: untouched, not even reflowed.
+    const product = "The order endpoint answered HTTP 500 and no confirmation appeared.";
+    check("an observation about the product is returned unchanged", cutNullEffectClauses(product).text === product);
+    // Nothing survives the cut ⇒ null, so the caller stands in the coverage
+    // sentence instead of publishing a bare caveat.
+    const onlyClaim = cutNullEffectClauses("The field did not accept input.");
+    check("an observation that was only the claim comes back null", onlyClaim.text === null, onlyClaim.text ?? "null");
+  }
+
+  // 3d — and that null becomes the fixed coverage sentence on the step, never
+  // an empty panel or a lone caveat.
+  {
+    const env = stubEnv({ fillThrows: true, typingWorks: false });
+    await executeTool(env, "fill", NOTES);
+    const step: ReportedStep = {
+      label: "Type into the notes field",
+      status: "broken",
+      attempted: "Typed into the notes field",
+      observed: "The field did not accept input.",
+    };
+    await executeTool(env, "report_step", step as unknown as Record<string, unknown>);
+    check(
+      "a step whose whole observation was the claim gets the coverage sentence",
+      step.observed === UNVERIFIABLE_FALLBACK,
+      step.observed,
+    );
   }
 
   // 3b — the field already held something. Typing appends, so the DOM value

@@ -20,6 +20,7 @@ import {
   splitSentences,
   UNVERIFIABLE_FALLBACK,
 } from "@/lib/verdict-language";
+import { cutNullEffectClauses } from "./findings-gate";
 import { isSelfCheckRedirect, isSelfUrl, selfCheckRefusalIn } from "./self-hosts";
 import type { GapClass } from "./gap-classes";
 
@@ -1417,8 +1418,22 @@ export function coerceUndrivenControl(
   step.status = "skipped";
   step.unverifiedReason = "our_capability";
   step.gapClass = "undriven_control";
-  const observed = (step.observed ?? "").trim();
-  step.observed = `${observed}${observed && !/[.!?]$/.test(observed) ? "." : ""} This control could not be exercised this run.`.trim();
+  // The status was the easy half. Step.observed is rendered to the owner word
+  // for word on the verdict page, so leaving the model's sentence in place and
+  // appending ours means they still read that their field refused input, now
+  // with a caveat after it. Same cut as CHE-219, one level down: the clause
+  // asserting our interaction produced nothing goes, what we actually saw
+  // stays ("The field is present"), and our sentence follows it. When nothing
+  // of the observation survives, the fixed coverage sentence stands in rather
+  // than a bare caveat.
+  const claim = cutNullEffectClauses(step.observed);
+  if (claim.cut.length) {
+    console.warn(`[report_step] "${step.label}": cut our own claim from the step — ${claim.cut.join(" / ")}`);
+  }
+  const observed = (claim.text ?? "").trim();
+  step.observed = observed
+    ? `${observed}${/[.!?]$/.test(observed) ? "" : "."} This control could not be exercised this run.`
+    : UNVERIFIABLE_FALLBACK;
 }
 
 export function coerceUnreachable(step: ReportedStep, env: Pick<ToolEnv, "targetOrigin">): void {
