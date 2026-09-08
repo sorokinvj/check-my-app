@@ -26,6 +26,18 @@
 // total limit every day. Now the count is per page — a burst is one page
 // logging five — and messages our own environment causes (a blocked tracker,
 // an aborted navigation, a third party's 4xx) are recorded but never counted.
+//
+// CHE-213, 2026-09-07 — the per-page limit was still not enough for a chatty
+// app. Run #157 on joblander.app: the survey compared two snapshots and
+// reported no change, and nine of thirty-one pages logged five or six counted
+// errors apiece, so the pass went red and the day cost $0.24 instead of $0.01.
+// The walk it paid for returned all_good with zero findings, and the walk
+// before it (#153, mostly_ok) had seen the same console noise. So on an app
+// whose pages are structurally identical to ones we already walked and
+// adjudicated, a console burst is not new evidence: `consoleBurstIsTrouble`
+// is false and the counts are recorded without failing the pass. An HTTP 5xx,
+// a silent core page and an uncaught exception are live signals — the same
+// page can 500 today — and stay failures whatever the survey said.
 
 import type { ConsoleMessage, Page } from "@cloudflare/playwright";
 
@@ -180,6 +192,14 @@ export interface ProbeOptions {
   /** Injected clock for the budget; defaults to Date.now. */
   now?: () => number;
   budgetMs?: number;
+  /**
+   * Whether a page logging CONSOLE_ERROR_LIMIT counted errors fails the pass
+   * (CHE-213). Default true. replay.ts passes false when the survey compared
+   * two snapshots and they agree: the pages are the pages a full walk already
+   * adjudicated, so their console noise is not news. Counts are recorded
+   * either way.
+   */
+  consoleBurstIsTrouble?: boolean;
 }
 
 export async function probeTargets(
@@ -190,6 +210,7 @@ export async function probeTargets(
 ): Promise<ProbeOutcome> {
   const now = opts.now ?? (() => Date.now());
   const budgetMs = opts.budgetMs ?? PROBE_BUDGET_MS;
+  const burstIsTrouble = opts.consoleBurstIsTrouble ?? true;
   const probes: PageProbe[] = [];
   const failures: string[] = [];
   const unreached: string[] = [];
@@ -266,7 +287,8 @@ export async function probeTargets(
     // A burst is one page logging CONSOLE_ERROR_LIMIT counted errors. The
     // run-wide total decides nothing (CHE-187) and is only spoken when it
     // did — so the failure names the page, and the ok line says nothing.
-    if (p.consoleErrors >= CONSOLE_ERROR_LIMIT) {
+    // On an unchanged app the burst is recorded and not counted (CHE-213).
+    if (burstIsTrouble && p.consoleErrors >= CONSOLE_ERROR_LIMIT) {
       failures.push(`${label} logged ${p.consoleErrors} console errors`);
     }
   }

@@ -34,6 +34,16 @@
 //   h. the trouble line names the page and its count; the ok line has no
 //      console sentence at all.
 //
+// CHE-213, 2026-09-07 — the per-page limit was still not enough for a chatty
+// app. Run #157 on joblander.app: the survey reported no change and nine of
+// thirty-one pages logged five or six counted errors apiece, so the pass went
+// red and the day cost $0.24 for a walk that returned all_good with no
+// findings. On an unchanged app the burst is recorded and not counted:
+//   i. two pages at six errors with consoleBurstIsTrouble false → ok, counts
+//      still on the probes; the same pages with it true (the default) are
+//      trouble; an HTTP 500, a silent core page and an uncaught exception are
+//      trouble either way.
+//
 // Usage: npx tsx --tsconfig tsconfig.json scripts/verify-smoke-gate.ts
 
 import {
@@ -293,6 +303,33 @@ async function main() {
     stub.fire("pageerror", new Error("TypeError: x is undefined"));
     const uncaught = await pending;
     check("g: an uncaught exception is still trouble on its own", JSON.stringify(uncaught.failures) === JSON.stringify(['uncaught JS error on load — "TypeError: x is undefined"']), uncaught.failures.join("; "));
+  }
+
+  // i — CHE-213: on an app the survey saw unchanged, a console burst is
+  // recorded and does not fail the pass; the live signals still do. This is
+  // the rule that decides whether run #157's shape (nine chatty pages, two
+  // comparable snapshots that agreed) costs $0.24 or $0.01. replay.ts passes
+  // consoleBurstIsTrouble: false exactly when surveySaysUnchanged is true.
+  {
+    const chatty = (path: string) =>
+      path === "/docs" || path === "/pricing"
+        ? Array.from({ length: 6 }, (_, i) => ({ text: `ReferenceError: x${i} is not defined`, url: u("/app.js") }))
+        : [];
+    const quiet = await probeTargets(stubPage({}, chatty).page, u("/"), { core, extra }, { consoleBurstIsTrouble: false });
+    check("i: unchanged app · two pages at 6 errors → ok", quiet.failures.length === 0, quiet.failures.join("; "));
+    check("i: … the counts are still recorded, per page and in total", quiet.consoleErrors === 12 && quiet.probes.find((p) => p.url === u("/docs"))?.consoleErrors === 6, String(quiet.consoleErrors));
+    const loud = await probeTargets(stubPage({}, chatty).page, u("/"), { core, extra }, { consoleBurstIsTrouble: true });
+    check("i: … the same pages are trouble when the survey did not say the app stood still", loud.failures.length === 2, loud.failures.join("; "));
+    check("i: … and the option defaults to trouble when nobody passes it", (await probeTargets(stubPage({}, chatty).page, u("/"), { core, extra })).failures.length === 2);
+    const dead = await probeTargets(stubPage({ "/pricing": 500 }, chatty).page, u("/"), { core, extra }, { consoleBurstIsTrouble: false });
+    check("i: an HTTP 500 is still trouble on an unchanged app", JSON.stringify(dead.failures) === JSON.stringify(["/pricing returned HTTP 500"]), dead.failures.join("; "));
+    const silent = await probeTargets(stubPage({ "/sign-in": "timeout" }, chatty).page, u("/"), { core, extra }, { consoleBurstIsTrouble: false });
+    check("i: a silent core page is still trouble on an unchanged app", silent.failures.length === 1 && /sign-in/.test(silent.failures[0]), silent.failures.join("; "));
+    const thrower = stubPage({}, chatty);
+    const pending = probeTargets(thrower.page, u("/"), { core, extra }, { consoleBurstIsTrouble: false });
+    thrower.fire("pageerror", new Error("TypeError: x is undefined"));
+    const crash = await pending;
+    check("i: an uncaught exception is still trouble on an unchanged app", crash.failures.length === 1 && /uncaught/.test(crash.failures[0]), crash.failures.join("; "));
   }
 
   // h — the feed line: the count appears only when it decided something.

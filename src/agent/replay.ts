@@ -32,6 +32,16 @@
 // is NOT a full run is a page the survey merely saw serve going quiet: on
 // 2026-09-04 that sent every watched app full for +$0.6–0.75 apiece, and
 // silence is not evidence (rule 3).
+//
+// CHE-213, 2026-09-07: "the app did not change" now decides the mode instead
+// of merely failing to force one. Three of this module's refusals were written
+// before the survey existed and each of them sent an app the survey had just
+// re-crawled page by page to a full walk anyway — no recorded specs, nothing
+// beyond the homepage, and a console burst on a page whose structure had not
+// moved since a walk that judged it fine. When two comparable snapshots agree
+// none of the three applies: the survey's own re-visit is the coverage they
+// were standing in for. An HTTP 5xx, a silent core page and an uncaught
+// exception are live signals and still send the run full.
 
 import type { Browser, Page } from "@cloudflare/playwright";
 import type { Verdict } from "@/lib/enums";
@@ -48,7 +58,13 @@ import {
   type ProbeOutcome,
   type SmokeTargetSets,
 } from "./smoke";
-import { fullRunGate, gateInputFrom, smokeTargetsFromSnapshot, type SurveyOutcome } from "./snapshot";
+import {
+  fullRunGate,
+  gateInputFrom,
+  smokeTargetsFromSnapshot,
+  surveySaysUnchanged,
+  type SurveyOutcome,
+} from "./snapshot";
 
 // workflow.ts reads these off the replay module; the pure half lives in smoke.ts
 // so scripts/verify-smoke-gate.ts can drive it without Browser Rendering.
@@ -123,6 +139,17 @@ export interface SmokeReport {
 
 export type SmokeResult = SmokeSkipped | SmokeReport;
 
+/**
+ * The browser half, injectable so scripts/verify-survey.ts can drive the real
+ * decision without Browser Rendering. Production passes probePages.
+ */
+export type ProbeRunner = (
+  env: AgentEnv,
+  targetUrl: string,
+  targets: SmokeTargetSets,
+  opts: { consoleBurstIsTrouble: boolean },
+) => Promise<ProbeOutcome>;
+
 // ─── Decision + execution ────────────────────────────────────────────────────
 
 export async function smokeReplay(
@@ -130,6 +157,7 @@ export async function smokeReplay(
   run: SmokeRun,
   survey?: SurveyOutcome | null,
   now: Date = new Date(),
+  probe: ProbeRunner = probePages,
 ): Promise<SmokeResult> {
   if (!run.watchId) return { taken: false, reason: "one-off check — nothing to replay against" };
   if (!run.baselineRunId) {
@@ -162,16 +190,23 @@ export async function smokeReplay(
   const gate = fullRunGate(gateInputFrom(survey, ageDays, FULL_RUN_MAX_AGE_DAYS));
   if (gate.force) return { taken: false, reason: gate.reason };
 
+  // CHE-213: the survey's answer is what decides how much this day costs. Two
+  // comparable snapshots that agree mean every page the survey knows was
+  // re-visited this run and came back identical — which is more coverage than
+  // the two refusals below were ever standing in for. So they apply only when
+  // the survey could not answer.
+  const unchanged = surveySaysUnchanged(survey);
+
   // "Specs missing → full run": with nothing recorded there is nothing to
   // re-visit, and a homepage-only smoke pass would be worth less than its
-  // reassurance.
+  // reassurance. Written before CHE-132 gave the pass the survey's pages.
   const specs = await env.db.generatedTest.findMany({
     where: { appSlug: run.appSlug },
     orderBy: [{ title: "asc" }, { version: "desc" }],
     distinct: ["title"],
     select: { content: true },
   });
-  if (specs.length === 0) {
+  if (specs.length === 0 && !unchanged) {
     return { taken: false, reason: "no recorded specs for this app yet" };
   }
 
@@ -187,12 +222,15 @@ export async function smokeReplay(
   );
   // Specs that navigate nowhere we can pin down (and an anatomy we couldn't
   // read paths out of) leave only the homepage. Same reasoning as no specs at
-  // all: "the front door opens" is not enough to skip a day's check on.
-  if (targets.core.length + targets.extra.length === 0) {
+  // all: "the front door opens" is not enough to skip a day's check on —
+  // unless the survey already re-checked the pages and found them identical.
+  if (targets.core.length + targets.extra.length === 0 && !unchanged) {
     return { taken: false, reason: "nothing beyond the homepage to re-check" };
   }
 
-  const outcome = await probePages(env, run.targetUrl, targets);
+  const outcome = await probe(env, run.targetUrl, targets, {
+    consoleBurstIsTrouble: !unchanged,
+  });
   return {
     taken: true,
     ok: outcome.failures.length === 0,
@@ -328,6 +366,7 @@ async function probePages(
   env: AgentEnv,
   targetUrl: string,
   targets: SmokeTargetSets,
+  opts: { consoleBurstIsTrouble: boolean },
 ): Promise<ProbeOutcome> {
   const browser: Browser = await launchAgentBrowser(env);
   // CHE-193: on our own hosts the context announces itself on the requests the
@@ -337,6 +376,7 @@ async function probePages(
     const page: Page = await context.newPage();
     await applyNameShim(page);
     return await probeTargets(page, targetUrl, targets, {
+      consoleBurstIsTrouble: opts.consoleBurstIsTrouble,
       saveScreenshot: async () =>
         (await putScreenshot(env, await page.screenshot({ fullPage: false }))).storageUrl,
     });

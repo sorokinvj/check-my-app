@@ -310,6 +310,14 @@ export function fullRunGate(input: GateInput): GateDecision {
   return { force: false };
 }
 
+/**
+ * The survey compared two snapshots and they agree — the app is the same app
+ * we last walked. The one fact the whole mode ladder turns on (CHE-213).
+ */
+export function surveySaysUnchanged(survey: SurveyOutcome | null | undefined): boolean {
+  return survey?.comparable === true && survey.snapshot?.changed === false;
+}
+
 /** What the gate needs, taken off a survey outcome (or its absence). */
 export function gateInputFrom(
   survey: SurveyOutcome | null | undefined,
@@ -323,6 +331,59 @@ export function gateInputFrom(
     lastWalkAgeDays,
     maxAgeDays,
   };
+}
+
+// ─── The mode decision (CHE-213) ─────────────────────────────────────────────
+//
+// The ladder is smoke → partial → full, and until now no one place said so:
+// workflow.ts read `smoke.taken && smoke.ok` here, `plan.taken` there, and the
+// survey's answer reached neither — fullRunGate could only ever FORCE a full
+// walk, never permit a cheap one. Run #157 (joblander.app, 2026-09-07) is what
+// that cost: two comparable snapshots that agreed, and a full walk of five
+// journeys for $0.24 that returned all_good with no findings.
+//
+// The rule is one function so scripts/verify-survey.ts can assert the whole
+// table instead of re-deriving it. It reads the two rungs' own answers — both
+// produced by the real planners — and nothing else:
+//
+//   smoke ran, green   → smoke   (the app is up and serving what it served)
+//   smoke ran, red     → full    (positive evidence; the smoke line said so)
+//   smoke stepped aside, partial planned → partial
+//   smoke stepped aside, partial stepped aside → full, and the reason the
+//                        owner reads is smoke's — the first rung that could
+//                        not run is the one that explains the day's cost.
+//
+// What makes "nothing changed" reach this table is upstream, in replay.ts: on
+// an unchanged app the two thin-target refusals ("no recorded specs",
+// "nothing beyond the homepage") no longer apply, because the survey has
+// already re-visited every page it knows and found them identical. So a clean
+// baseline is the cheapest case, not the most expensive.
+
+export type RunMode = "smoke" | "partial" | "full";
+
+export interface ModeInput {
+  /** What smokeReplay answered. */
+  smoke: { ran: true; ok: boolean } | { ran: false; reason: string };
+  /** What planPartialRun answered. */
+  partial: { planned: true } | { planned: false; reason: string };
+}
+
+export interface ModeDecision {
+  mode: RunMode;
+  /** Why, in the owner's terms — the feed already prints the rungs' own lines. */
+  reason: string;
+}
+
+export function decideRunMode(input: ModeInput): ModeDecision {
+  if (input.smoke.ran) {
+    return input.smoke.ok
+      ? { mode: "smoke", reason: "the app is up and serving what it served" }
+      : { mode: "full", reason: "the smoke check found trouble" };
+  }
+  if (input.partial.planned) {
+    return { mode: "partial", reason: "only the journeys that had trouble need re-walking" };
+  }
+  return { mode: "full", reason: input.smoke.reason };
 }
 
 // ─── Smoke targets ───────────────────────────────────────────────────────────
