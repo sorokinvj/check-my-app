@@ -1,5 +1,5 @@
 {
-  "note": "Run #159 (checkmyapp.dev, 2026-09-08) as recorded in production D1. Steps are verbatim apart from observed text truncated to 120 characters; actions are the machine trail (CHE-129) exactly as stored.",
+  "note": "Run #159 (checkmyapp.dev, 2026-09-08) as recorded in production D1. Steps are verbatim apart from observed text truncated to 120 characters; actions are the machine trail (CHE-129) exactly as stored. Journey titles, summaries and the run bottom line are verbatim.",
   "finding": {
     "title": "Credential/notes field in 'Add login & notes' didn't accept input",
     "category": "risky",
@@ -66,7 +66,9 @@
           "observed": "Page renders correctly: \"Today's checks\", \"0 of 20 free checks used\", \"Anonymous checks are public. The site runs 20 …",
           "actions": "[{\"kind\":\"navigate\",\"url\":\"https://checkmyapp.dev/checks/today\",\"outcome\":{\"urlAfter\":\"https://checkmyapp.dev/checks/today\",\"status\":200}}]"
         }
-      ]
+      ],
+      "title": "Check a URL and review the verdict",
+      "summary": "The credential-note text field in the \"Add login & notes\" accordion on the /check page fails to accept input — the fill operation times out even though the field is present in the DOM. The sign-in page, which previously rendered blank, now loads correctly with Clerk scripts."
     },
     {
       "steps": [
@@ -112,7 +114,9 @@
           "observed": "The About page renders with the \"An independent project, watched daily by itself\" heading, project copy, and a Legal …",
           "actions": "[{\"kind\":\"navigate\",\"url\":\"https://checkmyapp.dev/about\",\"outcome\":{\"urlAfter\":\"https://checkmyapp.dev/about\",\"status\":200}}]"
         }
-      ]
+      ],
+      "title": "Sign in / Log in to CheckMyApp",
+      "summary": "The read-only public flow pass is complete and clean."
     },
     {
       "steps": [
@@ -165,7 +169,9 @@
           "observed": "FAQ page renders (HTTP 200): heading \"Questions, answered honestly.\" with a set of questions and answers (e.g. Answer…",
           "actions": "[{\"kind\":\"navigate\",\"url\":\"https://checkmyapp.dev/faq\",\"outcome\":{\"urlAfter\":\"https://checkmyapp.dev/faq\",\"status\":200}}]"
         }
-      ]
+      ],
+      "title": "Browse public checks and example verdicts",
+      "summary": "The formerly blank sign-in page now renders correctly (email/password + Google OAuth), and the rest of the app we walked was clean — public checks empty state, example verdict, pricing, FAQ, About, and the live URL preview on /check all render with no issues, and all outbound links returned 200/mailto-valid."
     },
     {
       "steps": [
@@ -204,7 +210,9 @@
           "observed": "Renders a clean empty state: \"Today's checks. Anonymous checks are public. The site runs 20 free checks a day (0 used…",
           "actions": "[{\"kind\":\"navigate\",\"url\":\"https://checkmyapp.dev/checks/today\",\"outcome\":{\"urlAfter\":\"https://checkmyapp.dev/checks/today\",\"status\":200}}]"
         }
-      ]
+      ],
+      "title": "Explore pricing, FAQ, and about pages",
+      "summary": "The read-only pass found everything rendering correctly: the sign-in form now renders (email + password + Continue + Clerk footer, confirming the previously-blank Clerk-auth page after the header fix), and the Pricing, FAQ, About, example verdict (theins.ru), and /checks/today pages all load over HTTP 200 with their intended content."
     },
     {
       "steps": [
@@ -278,7 +286,10 @@
           "observed": "The button renders on both example verdict pages. Not pressed — this triggers an immediate re-check, a state-changing…",
           "actions": null
         }
-      ]
+      ],
+      "title": "Manage checks and view run artifacts",
+      "summary": "The reported sign-in blank screen is fixed — /sign-in now renders the full Clerk form. A brief check of the sign-up page, the example verdict, pricing, FAQ, About and Today's checks pages found nothing broken; all run-artifact spec links on the verdict pages resolve 200."
     }
-  ]
+  ],
+  "bottomLine": "The credential/notes field in the 'Add login & notes' accordion on /check would not accept input this run — the very field paying customers use to hand you test logins. Otherwise everything we walked is healthy: the previously-blank Clerk sign-in page now renders, all verdict artifact links resolve, and pricing, FAQ, About, and the public checks feed all load cleanly. We could not verify anything behind sign-in this run (no test credentials) — add test-account credentials in your dashboard and we'll cover the authenticated experience next time. Not opened this run: /verdict/cmtokcgh90003x91r292cdcn3 — so nothing here speaks to it."
 }

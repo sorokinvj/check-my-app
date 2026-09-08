@@ -27,6 +27,8 @@ import { WALK_WRAP_UP_ITERATIONS, walkingIterationCap } from "./limits";
 import { walkingVision } from "./harness";
 import { adjudicateStep } from "./judge";
 import { classifyGap, gapEvidenceText } from "./gap-classes";
+import { cutUndrivenClaims, type GateStep } from "./findings-gate";
+import { summaryFallback } from "@/lib/verdict-language";
 import { summarizeWalk } from "./summary";
 
 export interface WalkRun extends RunInput {
@@ -130,6 +132,9 @@ export async function walkOneJourney(args: {
     // CHE-214: controls a fill or a click could not drive, drained by the same
     // report_step that drains the trail above.
     const undrivenControls: UndrivenControl[] = [];
+    // CHE-219: this journey's steps as they land, so its summary can be held to
+    // the same evidence a finding is.
+    const walkedSteps: GateStep[] = [];
 
     const toolEnv: ToolEnv = {
       page,
@@ -222,6 +227,16 @@ export async function walkOneJourney(args: {
         productizeStep(step);
         stepStatuses.push(step.status as StepStatus);
         const trail = actionTrail.splice(0);
+        // CHE-219: the same rows the summary below is judged against, kept as
+        // they are written so the cut sees this journey's own evidence.
+        walkedSteps.push({
+          status: step.status,
+          unverifiedReason: step.unverifiedReason ?? null,
+          label: step.label,
+          observed: step.observed,
+          attempted: step.attempted,
+          actions: trail.length ? JSON.stringify(trail) : null,
+        });
         await env.db.step.create({
           data: {
             journeyId: journey.id,
@@ -325,7 +340,19 @@ export async function walkOneJourney(args: {
       // cap cut mid-action (run #144: "Let me try the Reset to Defaults
       // button") is asked once more for the summary alone.
       const status = journeyStatus(stepStatuses);
-      const summary = await summarizeWalk(llm, result, usage, status);
+      const written = await summarizeWalk(llm, result, usage, status);
+      // CHE-219: run #159's journey 0 summary said the notes field "fails to
+      // accept input — the fill operation times out", about a control this
+      // journey never drove. The phrase tables cannot see that sentence; the
+      // machine trail can. What is left of the summary stands; when nothing is,
+      // the journey gets the same fixed sentence an empty summary gets.
+      const claim = cutUndrivenClaims(written, [{ steps: walkedSteps }]);
+      if (claim.cut.length) {
+        console.warn(
+          `[walk] summary claimed ${claim.cut.length} interaction(s) this journey never performed — cutting: ${claim.cut.join(" / ")}`,
+        );
+      }
+      const summary = claim.cut.length ? (claim.text ?? summaryFallback(status)) : written;
 
       await env.db.journey.update({
         where: { id: journey.id },

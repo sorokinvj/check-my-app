@@ -9,6 +9,7 @@ import { addUsage, costOf, emptyUsage, mergeUsage, type LlmConfig, type UsageTot
 import { finalizeStructured } from "./core";
 import { harnessMode, type AgentEnv } from "./env";
 import type { ProposedJourney } from "./discovery";
+import { cutUndrivenClaims } from "./findings-gate";
 import { knowledgeBlock } from "./instructions";
 import type { AppKnowledge } from "./knowledge";
 import {
@@ -154,6 +155,11 @@ export async function synthesizeVerdict(args: {
           observed: true,
           consoleLog: true,
           networkLog: true,
+          // CHE-219: read for the bottom-line cut below, and deliberately kept
+          // out of the observation — the trail is our machinery, and the model
+          // has never needed it to describe the product.
+          unverifiedReason: true,
+          actions: true,
         },
       },
     },
@@ -184,7 +190,7 @@ export async function synthesizeVerdict(args: {
       status: j.status,
       summary: j.summary,
       ...(j.carriedFromRunId ? { carried: true } : {}),
-      steps: j.steps,
+      steps: j.steps.map(({ actions: _actions, unverifiedReason: _reason, ...step }) => step),
     })),
   });
 
@@ -255,6 +261,21 @@ export async function synthesizeVerdict(args: {
       .filter((f): f is SynthesizedFinding => f !== null);
 
     let bottomLine = parsed.bottomLine;
+    // CHE-219: before anything else, a sentence claiming one of our
+    // interactions produced nothing at a control the run never drove. Run
+    // #159's bottom line opened with one, and no phrase table could see it —
+    // it names none of our words. Same cut as the homework rule below, same
+    // evidence as the findings gate, and the same fail-open: a run with no
+    // machine trail is left alone.
+    {
+      const claim = cutUndrivenClaims(bottomLine, journeys);
+      if (claim.cut.length) {
+        console.warn(
+          `[synthesis] bottom line claimed ${claim.cut.length} interaction(s) this run never performed — cutting: ${claim.cut.join(" / ")}`,
+        );
+        bottomLine = claim.text ?? BOTTOM_LINE_FALLBACK;
+      }
+    }
     // CHE-191: a trailing "Worth checking …" is one sentence to cut, not a
     // reason to spend a model call rewriting the line. Cut first; what is
     // left goes through the machinery check below as before.

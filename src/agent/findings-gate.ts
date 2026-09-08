@@ -41,6 +41,7 @@
 // nothing") given the one record that cannot be contaminated by our own prose,
 // and rule 8's demand that a claim rest on evidence uncontaminated by our state.
 
+import { splitSentences } from "@/lib/verdict-language";
 import type { SynthesizedFinding } from "./synthesis";
 
 export interface GateStep {
@@ -207,6 +208,16 @@ export const NULL_EFFECT_PHRASES: RegExp[] = [
   /\b(?:aren|isn|weren|wasn)'?t\s+(?:clickable|reachable|interactable|editable|selectable)\b/,
   /\b(?:input|fill|click|typing)\s+(?:attempt\s+)?(?:did\s+not|didn'?t)\b/,
   /\bhad\s+no\s+(?:effect|result)\b/,
+  // CHE-219, from run #159's journey summary and bottom line, which the list
+  // above did not match: "fails to accept input", "the fill operation times
+  // out". The timeout pattern is deliberately tied to one of our own verbs —
+  // a bare "times out" is often the product's own answer (a checkout that
+  // stalls), and only "the fill/click/… times out" is a sentence about us.
+  /\bfails?\s+to\s+(?:accept|respond|react|register|take|open|expand|submit|load|work)\b/,
+  /\bnever\s+(?:responds?|responded|reacts?|reacted|registers?|registered|opens?|opened)\b/,
+  /\b(?:does|did)\s+nothing\b/,
+  /\b(?:fill|click|type|typing|input|press|tap|drag|interaction|operation)\b[^.]{0,40}?\btimes?\s+out\b/,
+  /\b(?:fill|click|type|typing|input|press|tap|drag|interaction|operation)\b[^.]{0,40}?\btimed\s+out\b/,
 ];
 
 // Which hand did the finding claim to use. Kept apart because the trail is
@@ -228,10 +239,17 @@ const CLICK_WORDS =
 // hands and is never touched here.
 export function claimedHands(f: SynthesizedFinding): ClaimedHand[] {
   const d = f.detail ?? {};
-  const text = [f.title, d.whatHappened ?? "", ...(Array.isArray(d.whatWeTried) ? d.whatWeTried : [])]
-    .join(" · ")
-    .toLowerCase()
-    .replace(/[‘’ʼ]/g, "'");
+  return handsInText(
+    [f.title, d.whatHappened ?? "", ...(Array.isArray(d.whatWeTried) ? d.whatWeTried : [])].join(" · "),
+  );
+}
+
+// The same question of any prose — a finding's fields joined, or one sentence
+// of a journey summary (CHE-219). One idea, two entry points: a second notion
+// of "we pressed this" would drift from the first the week after it was
+// written.
+export function handsInText(raw: string): ClaimedHand[] {
+  const text = raw.toLowerCase().replace(/[‘’ʼ]/g, "'");
   if (!NULL_EFFECT_PHRASES.some((re) => re.test(text))) return [];
   const hands: ClaimedHand[] = [];
   if (FILL_WORDS.test(text)) hands.push("fill");
@@ -250,19 +268,27 @@ interface TrailEntry {
   name?: unknown;
 }
 
-// The controls this run actually drove, as tokens, one set per hand.
-// `recorded` is false when no step carried a parseable trail at all — runs from
-// before CHE-129, and any run whose steps recorded nothing executable. A hand
-// whose set is empty says nothing either: a control named "Save" or "Buy" has
-// no token of its own, so an empty set is silence, never a denial. In both
-// cases the finding is kept.
+// What one hand did: how many times it acted, and the tokens of the controls it
+// named. The count and the tokens answer different questions and conflating
+// them cost run #159's journey summary a cut — journey 0 performed no fill at
+// all, which is not the same as performing fills we cannot name.
+export interface Hand {
+  /** How many actions of this kind the trail recorded. */
+  count: number;
+  /** Distinctive tokens of their labels and accessible names. */
+  tokens: Set<string>;
+}
+
+// The controls these steps actually drove. `recorded` is false when no step
+// carried a parseable trail at all — runs from before CHE-129, and any run
+// whose steps recorded nothing executable; then nothing here may speak.
 export function drivenControls(steps: GateStep[]): {
   recorded: boolean;
-  fill: Set<string>;
-  click: Set<string>;
+  fill: Hand;
+  click: Hand;
 } {
-  const fill = new Set<string>();
-  const click = new Set<string>();
+  const fill: Hand = { count: 0, tokens: new Set() };
+  const click: Hand = { count: 0, tokens: new Set() };
   let recorded = false;
   for (const s of steps) {
     if (!s.actions) continue;
@@ -278,13 +304,75 @@ export function drivenControls(steps: GateStep[]): {
       if (!raw || typeof raw !== "object") continue;
       const into = raw.kind === "fill" ? fill : raw.kind === "click" ? click : null;
       if (!into) continue;
+      into.count++;
       for (const field of [raw.label, raw.name]) {
         if (typeof field !== "string") continue;
-        for (const t of distinctiveTokens(field)) into.add(t);
+        for (const t of distinctiveTokens(field)) into.tokens.add(t);
       }
     }
   }
   return { recorded, fill, click };
+}
+
+// Is a claim that this hand produced nothing supported by what the hand did?
+// Three answers, and only the third is a denial:
+//   - the hand never acted        → we are describing something we never did;
+//   - it acted but named nothing  → silence (a button called "Save" carries no
+//                                    token of its own), so the claim stands;
+//   - it acted and named controls → the claim must name one of them.
+function handSupports(hand: Hand, locus: Set<string>): boolean {
+  if (hand.count === 0) return false;
+  if (hand.tokens.size === 0) return true;
+  return sharedCount(locus, hand.tokens) > 0;
+}
+
+// ─── CHE-219: the same evidence, one sentence at a time ──────────────────────
+//
+// CHE-215 removes run #159's finding. The same claim stayed published twice
+// over: journey 0's summary ("…fails to accept input — the fill operation
+// times out even though the field is present in the DOM") and the first half
+// of the bottom line ("The credential/notes field … would not accept input
+// this run"). Neither field had a gate that could see it. The phrase tables of
+// CHE-82, CHE-180 and CHE-197 look for OUR words — browser, harness, oEmbed,
+// the walker's "I" — and that sentence contains none; "fill" is our word, but
+// it reads as ordinary product prose. So the answer is not a longer phrase
+// table. It is the same evidence the findings gate uses, applied per sentence.
+//
+// A sentence that asserts one of our interactions produced nothing is held to
+// what the run actually drove. Where the trail does not show it, the sentence
+// goes and the rest of the text stays — the cut CHE-191 and CHE-197 already
+// perform on these fields, driven by the machine trail instead of a word list.
+// Same fail-open as the gate: no trail, or no nameable control of that hand,
+// and nothing is touched.
+
+export interface ClaimCut {
+  /** The text with unsupported sentences removed; null when none survived. */
+  text: string | null;
+  /** The sentences that were cut, for the log. */
+  cut: string[];
+}
+
+export function cutUndrivenClaims(
+  text: string | null | undefined,
+  journeys: GateJourney[],
+): ClaimCut {
+  if (!text || !text.trim()) return { text: text ?? null, cut: [] };
+  const walked = journeys.flatMap((j) => j.steps).filter((s) => s.status !== "skipped");
+  const trail = drivenControls(walked);
+  if (!trail.recorded) return { text, cut: [] };
+
+  const kept: string[] = [];
+  const cut: string[] = [];
+  for (const sentence of splitSentences(text)) {
+    const hands = handsInText(sentence);
+    const locus = distinctiveTokens(sentence);
+    const unsupported = hands.some((hand) => !handSupports(trail[hand], locus));
+    if (unsupported) cut.push(sentence.trim());
+    else kept.push(sentence);
+  }
+  if (cut.length === 0) return { text, cut: [] };
+  const out = kept.join(" ").replace(/\s+/g, " ").trim();
+  return { text: out.length > 0 ? out : null, cut };
 }
 
 export function gateFindings(findings: SynthesizedFinding[], journeys: GateJourney[]): GateResult {
@@ -307,15 +395,15 @@ export function gateFindings(findings: SynthesizedFinding[], journeys: GateJourn
     const locus = distinctiveTokens(`${f.title} ${f.detail?.where ?? ""}`);
     for (const hand of hands) {
       const drove = trail[hand];
-      // Nothing nameable of that hand ⇒ silence, not a denial.
-      if (drove.size === 0) continue;
-      if (sharedCount(locus, drove) > 0) continue;
+      if (handSupports(drove, locus)) continue;
       return {
         ok: false,
         reason:
           `${NO_INTERACTION_RECORDED} — the finding says a ${hand} of ours produced nothing at ` +
-          `"${[...locus].join(" ")}", but every ${hand} this run performed was elsewhere ` +
-          `(${[...drove].join(" ")})`,
+          `"${[...locus].join(" ")}", but ` +
+          (drove.count === 0
+            ? `this run performed no ${hand} at all`
+            : `every ${hand} this run performed was elsewhere (${[...drove.tokens].join(" ")})`),
       };
     }
     return { ok: true };

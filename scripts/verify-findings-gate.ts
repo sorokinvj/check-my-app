@@ -28,6 +28,7 @@ import {
   EXPOSED_NO_EVIDENCE,
   NO_INTERACTION_RECORDED,
   claimedHands,
+  cutUndrivenClaims,
   distinctiveTokens,
   drivenControls,
   gateFindings,
@@ -35,9 +36,12 @@ import {
 } from "@/agent/findings-gate";
 import type { SynthesizedFinding } from "@/agent/synthesis";
 
-const RUN_159: { note: string; finding: SynthesizedFinding; journeys: GateJourney[] } = JSON.parse(
-  readFileSync(fileURLToPath(new URL("./fixtures-run-159.json", import.meta.url)), "utf8"),
-);
+const RUN_159: {
+  note: string;
+  finding: SynthesizedFinding;
+  bottomLine: string;
+  journeys: Array<GateJourney & { title: string; summary: string }>;
+} = JSON.parse(readFileSync(fileURLToPath(new URL("./fixtures-run-159.json", import.meta.url)), "utf8"));
 
 let failures = 0;
 function check(name: string, ok: boolean, detail = "") {
@@ -285,9 +289,9 @@ function main() {
     const trail = drivenControls(steps.filter((s) => s.status !== "skipped"));
     check("#159: the run recorded a machine trail", trail.recorded);
     check(
-      "#159: every fill it performed was the sign-in email box (the URL box was filled by selector, so it names no control)",
-      [...trail.fill].join(" ") === "email address",
-      [...trail.fill].join(" ") || "(none)",
+      "#159: it performed two fills, and the only one that names a control is the sign-in email box",
+      trail.fill.count === 2 && [...trail.fill.tokens].join(" ") === "email address",
+      `${trail.fill.count} fills: ${[...trail.fill.tokens].join(" ") || "(nothing named)"}`,
     );
   }
 
@@ -452,6 +456,105 @@ function main() {
       "a curly apostrophe does not hide the phrase",
       claimedHands(claim("Slider problem", "The slider didn’t respond to a drag.")).includes("click"),
     );
+  }
+
+  // ─── CHE-219: the same evidence, applied to a summary and a bottom line ────
+
+  // 20 — run #159's journey 0 summary, against journey 0's own steps. The
+  // false clause goes; the true sentence beside it stays, word for word.
+  {
+    const journey0 = RUN_159.journeys[0];
+    const r = cutUndrivenClaims(journey0.summary, [journey0]);
+    check("#159 summary: one sentence is cut", r.cut.length === 1, r.cut.join(" | ") || "(nothing cut)");
+    check(
+      "…the cut one is the fill claim",
+      r.cut[0]?.includes("fails to accept input") && r.cut[0]?.includes("the fill operation times out"),
+      r.cut[0],
+    );
+    check(
+      "…and the sign-in sentence survives verbatim",
+      r.text === "The sign-in page, which previously rendered blank, now loads correctly with Clerk scripts.",
+      r.text ?? "(nothing left)",
+    );
+  }
+
+  // 21 — the same run's bottom line, against the whole run.
+  {
+    const r = cutUndrivenClaims(RUN_159.bottomLine, RUN_159.journeys);
+    check("#159 bottom line: the opening claim is cut", r.cut.length === 1, r.cut.join(" | ") || "(nothing cut)");
+    check(
+      "…the cut one is the credential/notes claim",
+      r.cut[0]?.includes("would not accept input this run"),
+      r.cut[0],
+    );
+    check(
+      "…and everything the run did verify is kept",
+      Boolean(r.text?.startsWith("Otherwise everything we walked is healthy")) &&
+        Boolean(r.text?.includes("add test-account credentials in your dashboard")),
+      r.text ?? "(nothing left)",
+    );
+  }
+
+  // 22 — fail-open, the same three ways the finding gate fails open.
+  {
+    const noTrail: GateJourney[] = [
+      { steps: [{ label: "Open the form", status: "ok", unverifiedReason: null, observed: "It rendered." }] },
+    ];
+    const claim = "The notes field did not accept input.";
+    check("a run with no machine trail is left alone", cutUndrivenClaims(claim, noTrail).text === claim);
+    const named: GateJourney[] = [
+      {
+        steps: [
+          {
+            label: "Fill the notes",
+            status: "ok",
+            unverifiedReason: null,
+            observed: "Typed into the notes field.",
+            actions: JSON.stringify([{ kind: "fill", label: "Notes", value: "x", outcome: {} }]),
+          },
+        ],
+      },
+    ];
+    check("a claim about a control we did fill is kept", cutUndrivenClaims(claim, named).text === claim);
+    const unnamed: GateJourney[] = [
+      {
+        steps: [
+          {
+            label: "Fill it",
+            status: "ok",
+            unverifiedReason: null,
+            observed: "Typed something.",
+            actions: JSON.stringify([{ kind: "fill", selector: "input[type=text]", value: "x", outcome: {} }]),
+          },
+        ],
+      },
+    ];
+    check("a fill that named no control is silence, not a denial", cutUndrivenClaims(claim, unnamed).text === claim);
+    check("empty text is returned as it came", cutUndrivenClaims("", named).text === "");
+    check("null text is returned as null", cutUndrivenClaims(null, named).text === null);
+  }
+
+  // 23 — a sentence that says nothing about our hands is never touched, and a
+  // text that was ONLY the claim comes back null so the caller can stand in a
+  // fallback rather than publish an empty line.
+  {
+    const trail: GateJourney[] = [
+      {
+        steps: [
+          {
+            label: "Open the checkout",
+            status: "broken",
+            unverifiedReason: null,
+            observed: "The order endpoint answered 500.",
+            actions: JSON.stringify([{ kind: "navigate", url: "https://shop.test/checkout", outcome: { status: 500 } }]),
+          },
+        ],
+      },
+    ];
+    const product = "Checkout returns HTTP 500 and no order is created.";
+    check("a product failure with no claim about our hands is untouched", cutUndrivenClaims(product, trail).text === product);
+    const onlyClaim = cutUndrivenClaims("The Buy button did nothing when pressed.", trail);
+    check("a text that was only the claim comes back null", onlyClaim.text === null && onlyClaim.cut.length === 1, onlyClaim.text ?? "null");
   }
 
   console.log(failures ? `\n${failures} check(s) FAILED` : "\nall checks passed");
