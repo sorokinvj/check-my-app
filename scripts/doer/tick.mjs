@@ -115,6 +115,22 @@ for (const u of board.unknown ?? []) {
   say(`   ${u.ticket} matches no capability this repository knows about — the two lists have drifted apart`);
 }
 
+// How many claims for each ticket came back unanswered (CHE-211). No new store
+// for this: a withdrawn claim leaves a closed pull request on the ticket's own
+// branch, and that is the history. Merged ones are not counted — those are
+// claims that ended in work.
+const closedDoerPrs = gh([
+  "pr", "list", "--repo", REPO, "--state", "closed", "--limit", "100",
+  "--json", "headRefName,mergedAt",
+]).filter((p) => isDoerBranch(p.headRefName) && !p.mergedAt);
+
+const withdrawnByTicket = {};
+for (const p of closedDoerPrs) {
+  // Branches are `doer/<ticket>-<slug>`; the ticket is what the tick put there.
+  const ticket = p.headRefName.slice("doer/".length).split("-").slice(0, 2).join("-").toUpperCase();
+  withdrawnByTicket[ticket] = (withdrawnByTicket[ticket] ?? 0) + 1;
+}
+
 // The repository-wide stop stays on GitHub, where a person who wants the doer to
 // stop is already looking. It is the one brake that must not require the board.
 const issues = gh([
@@ -137,10 +153,14 @@ const stopped = issues.some((i) => i.labels.includes(STOP_LABEL));
 // in minutes, not in the two hours between claims. This one only claims.
 //
 // ─── Then: may we start something new? ───────────────────────────────────────
-const decision = decideTick({ queue, openDoerPrs, stopped });
+const decision = decideTick({ queue, openDoerPrs, stopped, withdrawnByTicket });
 if (!decision.act) {
   say(`No new work this tick: ${decision.reason}`);
   process.exit(0);
+}
+
+for (const t of decision.steppedAside ?? []) {
+  say(`   ${t.ticket} steps aside — ${t.withdrawn} claim(s) came back unanswered; it waits for an implementer that delivers`);
 }
 
 const item = decision.item;

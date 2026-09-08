@@ -42,6 +42,19 @@ export const STOP_LABEL = "doer:stop";
 export const MAX_OPEN_PRS = 1;
 
 /**
+ * How many unanswered claims a ticket may collect before it lets the queue move
+ * past it (CHE-211).
+ *
+ * Two, because one withdrawal is an incident and two in a row is a pattern: the
+ * implementer is not coming for this ticket today, and trying it a third time
+ * costs another branch, another pull request and another set of CI minutes to
+ * learn the same thing. It is not one, because a single failure can be a
+ * hiccup in the implementer's own queue and a ticket should not be set aside
+ * for that.
+ */
+export const MAX_WITHDRAWN_CLAIMS = 2;
+
+/**
  * Whether to claim anything this tick, and which ticket.
  *
  * The queue arrives already built and already filtered: it is the open tickets
@@ -62,7 +75,7 @@ export const MAX_OPEN_PRS = 1;
  * @returns {{act:false,reason:string} | {act:true,item:object,mayMerge:boolean}}
  */
 export function decideTick(state) {
-  const { queue = [], openDoerPrs = [], stopped = false } = state;
+  const { queue = [], openDoerPrs = [], stopped = false, withdrawnByTicket = {} } = state;
 
   // A stop the owner set outranks everything, including a queue on fire.
   if (stopped) return { act: false, reason: "stopped — a doer:stop label is set" };
@@ -85,7 +98,34 @@ export function decideTick(state) {
     return { act: false, reason: "queue empty — no open ticket of ours is admitted work" };
   }
 
-  return { act: true, item: ordered[0], mayMerge: true };
+  // A ticket whose claims keep coming back unanswered steps aside for the next
+  // one (CHE-211). Without this the loop is a treadmill: the queue hands over
+  // the oldest ticket, the implementer does not come, the claim is withdrawn
+  // (CHE-209), and the next tick picks the same ticket for ever — CHE-96 was
+  // claimed twice in twelve hours and the second admitted ticket was never
+  // going to be reached. Motion that produces nothing is the thing the loop is
+  // least allowed to look like.
+  //
+  // Stepping aside is not a verdict on the ticket: it stays open, untouched,
+  // and comes back the moment an implementer can deliver (CHE-165, CHE-196).
+  const fresh = [];
+  const exhausted = [];
+  for (const t of ordered) {
+    const n = Number(withdrawnByTicket?.[t.ticket] ?? 0);
+    (n >= MAX_WITHDRAWN_CLAIMS ? exhausted : fresh).push({ ...t, withdrawn: n });
+  }
+
+  if (fresh.length === 0) {
+    const list = exhausted.map((t) => `${t.ticket} (${t.withdrawn}×)`).join(", ");
+    return {
+      act: false,
+      reason:
+        `every admitted ticket has had its claims withdrawn unanswered — ${list}. ` +
+        `The queue is not empty and nothing is wrong with it: no implementer is delivering.`,
+    };
+  }
+
+  return { act: true, item: fresh[0], mayMerge: true, steppedAside: exhausted };
 }
 
 // A branch name that says where the work came from, and that the merge gate can

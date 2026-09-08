@@ -11,6 +11,7 @@ import {
   branchFor,
   isDoerBranch,
   isMergeCandidate,
+  MAX_WITHDRAWN_CLAIMS,
 } from "./doer/eligibility.mjs";
 import {
   decideShadow,
@@ -82,6 +83,58 @@ const item = (ticket, createdAt, label = "t") => ({ ticket, createdAt, label, ki
 {
   const d = decideTick({ queue: [item("CHE-96", "2026-08-20")], openDoerPrs: [], stopped: false });
   check("merging is the default, not an opt-in", d.act === true && d.mayMerge === true, `mayMerge=${d.mayMerge}`);
+}
+
+// ── a ticket nobody implements steps aside (CHE-211) ─────────────────────────
+//
+// The treadmill this prevents was live for twelve hours: CHE-96 claimed, the
+// claim withdrawn unanswered, the same ticket claimed again, and the second
+// admitted ticket never reached because it is younger.
+{
+  const d = decideTick({
+    queue: [item("CHE-96", "2026-08-27"), item("CHE-146", "2026-09-03")],
+    openDoerPrs: [],
+    stopped: false,
+    withdrawnByTicket: { "CHE-96": MAX_WITHDRAWN_CLAIMS },
+  });
+  check(
+    "a ticket with unanswered claims lets the next one through",
+    d.act === true && d.item.ticket === "CHE-146",
+    `picked ${d.item?.ticket}`,
+  );
+  check(
+    "and stepping aside is said out loud, with the count",
+    (d.steppedAside ?? []).some((t) => t.ticket === "CHE-96" && t.withdrawn === MAX_WITHDRAWN_CLAIMS),
+    JSON.stringify(d.steppedAside),
+  );
+}
+{
+  const d = decideTick({
+    queue: [item("CHE-96", "2026-08-27")],
+    openDoerPrs: [],
+    stopped: false,
+    withdrawnByTicket: { "CHE-96": MAX_WITHDRAWN_CLAIMS - 1 },
+  });
+  check(
+    "one withdrawal is an incident, not a pattern",
+    d.act === true && d.item.ticket === "CHE-96",
+    d.reason ?? d.item?.ticket,
+  );
+}
+{
+  // Everything exhausted is not "queue empty": the queue is full and nobody is
+  // implementing. Those are different states and must read differently.
+  const d = decideTick({
+    queue: [item("CHE-96", "2026-08-27"), item("CHE-146", "2026-09-03")],
+    openDoerPrs: [],
+    stopped: false,
+    withdrawnByTicket: { "CHE-96": 5, "CHE-146": 5 },
+  });
+  check(
+    "all tickets exhausted reads as 'no implementer', not 'empty queue'",
+    d.act === false && d.reason.includes("no implementer is delivering") && d.reason.includes("CHE-96 (5×)"),
+    d.reason,
+  );
 }
 
 // ── the merge gate ───────────────────────────────────────────────────────────
