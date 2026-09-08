@@ -13,6 +13,7 @@ import {
   productizeStep,
   scrubSecrets,
   type RecordedAction,
+  type UndrivenControl,
   type ToolEnv,
 } from "./tools";
 import { newAgentContext } from "./browser";
@@ -26,6 +27,8 @@ import { WALK_WRAP_UP_ITERATIONS, walkingIterationCap } from "./limits";
 import { walkingVision } from "./harness";
 import { adjudicateStep } from "./judge";
 import { classifyGap, gapEvidenceText } from "./gap-classes";
+import { cutUndrivenClaims, type GateStep } from "./findings-gate";
+import { summaryFallback } from "@/lib/verdict-language";
 import { summarizeWalk } from "./summary";
 
 export interface WalkRun extends RunInput {
@@ -126,6 +129,12 @@ export async function walkOneJourney(args: {
     // CHE-129: navigate/click/fill accumulate here between report_step calls;
     // each report drains what ran since the last one into that step's row.
     const actionTrail: RecordedAction[] = [];
+    // CHE-214: controls a fill or a click could not drive, drained by the same
+    // report_step that drains the trail above.
+    const undrivenControls: UndrivenControl[] = [];
+    // CHE-219: this journey's steps as they land, so its summary can be held to
+    // the same evidence a finding is.
+    const walkedSteps: GateStep[] = [];
 
     const toolEnv: ToolEnv = {
       page,
@@ -171,6 +180,7 @@ export async function walkOneJourney(args: {
       credentials: { rejected: await credentialsAlreadyRejected(env, run.id) },
       onCredentialRejected: (signature) => recordCredentialRejection(env, run.id, signature),
       actionTrail,
+      undrivenControls,
       // CHE-171: a 404 on an address outside this set is not a defect.
       knownUrls: knownUrlsFrom(run.targetUrl, publishedUrls),
       onScreenshot: async (buffer) => {
@@ -180,6 +190,10 @@ export async function walkOneJourney(args: {
         return stored.storageUrl;
       },
       onReportStep: async (reported) => {
+        // CHE-214: a class already decided from the machine trail at report
+        // time (a control our hands could not drive) is evidence, not a guess.
+        // Captured before adjudication, which may hand back a different object.
+        const machineClass = reported.gapClass;
         // CHE-169: a negative step gets its second opinion BEFORE anything is
         // written — the status that lands in the row is the adjudicated one.
         // With the judge off this returns the step untouched.
@@ -198,11 +212,13 @@ export async function walkOneJourney(args: {
         // our side. The filer (capability-gaps.ts) used to re-read the stored
         // text and could not find the words it keyed on.
         if (step.unverifiedReason === "our_capability") {
-          step.gapClass = classifyGap({
-            text: gapEvidenceText(reported.label, reported.attempted, reported.observed, step.observed),
-            actions: actionTrail,
-            targetOrigin: toolEnv.targetOrigin,
-          });
+          step.gapClass =
+            machineClass ??
+            classifyGap({
+              text: gapEvidenceText(reported.label, reported.attempted, reported.observed, step.observed),
+              actions: actionTrail,
+              targetOrigin: toolEnv.targetOrigin,
+            });
         } else {
           step.gapClass = undefined;
         }
@@ -211,6 +227,16 @@ export async function walkOneJourney(args: {
         productizeStep(step);
         stepStatuses.push(step.status as StepStatus);
         const trail = actionTrail.splice(0);
+        // CHE-219: the same rows the summary below is judged against, kept as
+        // they are written so the cut sees this journey's own evidence.
+        walkedSteps.push({
+          status: step.status,
+          unverifiedReason: step.unverifiedReason ?? null,
+          label: step.label,
+          observed: step.observed,
+          attempted: step.attempted,
+          actions: trail.length ? JSON.stringify(trail) : null,
+        });
         await env.db.step.create({
           data: {
             journeyId: journey.id,
@@ -314,7 +340,19 @@ export async function walkOneJourney(args: {
       // cap cut mid-action (run #144: "Let me try the Reset to Defaults
       // button") is asked once more for the summary alone.
       const status = journeyStatus(stepStatuses);
-      const summary = await summarizeWalk(llm, result, usage, status);
+      const written = await summarizeWalk(llm, result, usage, status);
+      // CHE-219: run #159's journey 0 summary said the notes field "fails to
+      // accept input — the fill operation times out", about a control this
+      // journey never drove. The phrase tables cannot see that sentence; the
+      // machine trail can. What is left of the summary stands; when nothing is,
+      // the journey gets the same fixed sentence an empty summary gets.
+      const claim = cutUndrivenClaims(written, [{ steps: walkedSteps }]);
+      if (claim.cut.length) {
+        console.warn(
+          `[walk] summary claimed ${claim.cut.length} interaction(s) this journey never performed — cutting: ${claim.cut.join(" / ")}`,
+        );
+      }
+      const summary = claim.cut.length ? (claim.text ?? summaryFallback(status)) : written;
 
       await env.db.journey.update({
         where: { id: journey.id },

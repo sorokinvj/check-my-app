@@ -17,6 +17,31 @@
 // persistence (workflow.ts checkVerdictIntegrity) downgrades a verdict that
 // leaned on a finding this gate removed.
 
+// CHE-215 extends the same gate with the harder version of the same failure: a
+// finding that rests on no step at all.
+//
+// Run #159 (checkmyapp.dev) published "Credential/notes field in 'Add login &
+// notes' didn't accept input", whatWeTried ["Expanded the accordion",
+// "Attempted to type test credentials into the notes field"]. None of the run's
+// 35 steps mentions an accordion, an expansion or a failed fill; the /check
+// step that exists says the URL field accepted input and the page reacted. The
+// finding had a stepRef — it carries a screenshot copied from the step it named
+// — so demanding a reference would not have stopped it, and its words overlap
+// the walked steps heavily enough that no bag-of-words rule tells it from a
+// true one ("field", "input", "accept" are the vocabulary of both).
+//
+// What tells them apart is the machine record. `Step.actions` (CHE-129) is
+// written by the tools, never by the model, and only after Playwright has done
+// the thing: a refused or errored call leaves no entry. Run #159's whole trail
+// is two fills — "Email address" and the URL box — and eight link clicks. No
+// control called notes, credentials or accordion was ever driven. So the rule
+// is narrow and machine-anchored: when a finding's evidence is that OUR
+// interaction produced nothing, the run must show that we drove that control.
+// This is CLAUDE.md rule 3 ("a step that produced no effect for us proves
+// nothing") given the one record that cannot be contaminated by our own prose,
+// and rule 8's demand that a claim rest on evidence uncontaminated by our state.
+
+import { splitSentences } from "@/lib/verdict-language";
 import type { SynthesizedFinding } from "./synthesis";
 
 export interface GateStep {
@@ -24,6 +49,12 @@ export interface GateStep {
   unverifiedReason: string | null;
   label: string;
   observed: string | null;
+  // CHE-215. Optional so the older callers and the verify scripts that build a
+  // step by hand keep compiling; absent means the rule below cannot speak and
+  // the finding is kept.
+  attempted?: string | null;
+  // JSON RecordedAction[] — what the browser actually executed for this step.
+  actions?: string | null;
 }
 
 export interface GateJourney {
@@ -41,6 +72,11 @@ export interface GateResult {
 // that showed it. Without a stepRef and with only skipped steps to match, it is
 // dropped like any other, and the log names it so the pattern can be counted.
 export const EXPOSED_NO_EVIDENCE = "exposed dropped — no step evidence";
+
+// CHE-215: the reason string for a finding whose evidence is that one of our
+// interactions produced nothing, in a run whose action trail shows we never
+// drove that control.
+export const NO_INTERACTION_RECORDED = "no interaction recorded";
 
 // Two shared distinctive tokens is the threshold: one is a coincidence ("page"
 // is on every step), two names a control ("insight" + "preferences").
@@ -153,16 +189,290 @@ function stepText(s: GateStep): string {
   return `${s.label} ${s.observed ?? ""}`;
 }
 
+// ─── CHE-215: the interaction anchor ─────────────────────────────────────────
+
+// A finding says "our interaction produced nothing" in a handful of shapes, and
+// they are listed here for the same reason the leak phrasings live in
+// verdict-language.ts rather than in a prompt: a new phrasing is a line added
+// here, not a paragraph asked of a model. Matched against the finding's title,
+// whatHappened and whatWeTried, on text with curly apostrophes folded.
+export const NULL_EFFECT_PHRASES: RegExp[] = [
+  /\b(?:did|does|do|would|will)\s+not\s+(?:accept|take|register|respond|react|work|open|expand|submit|fire|trigger|change|update|save|apply|appear|load)\b/,
+  /\b(?:didn|doesn|don|wouldn|won|couldn|can)'?t\s+(?:accept|take|register|respond|react|work|open|expand|submit|fire|trigger|change|update|save|apply|appear|load)\b/,
+  /\b(?:could|can)\s?not\s+(?:enter|type|input|fill|click|press|expand|collapse|toggle|select|drag|upload|interact|reach|scroll)\b/,
+  /\b(?:couldn|can)'?t\s+(?:enter|type|input|fill|click|press|expand|collapse|toggle|select|drag|upload|interact|reach|scroll)\b/,
+  /\b(?:no|without\s+any?)\s+(?:visible\s+|apparent\s+)?(?:effect|reaction|response|change|feedback)\b/,
+  /\bnothing\s+(?:happened|happens|occurred|changed|was\s+sent)\b/,
+  /\b(?:stayed|stays|stayed|remained|remains|stay)\s+(?:disabled|empty|blank|unchanged|greyed|grayed|inert|closed)\b/,
+  /\b(?:not|never|un)\s?(?:clickable|reachable|interactable|editable|typeable|selectable)\b/,
+  /\b(?:aren|isn|weren|wasn)'?t\s+(?:clickable|reachable|interactable|editable|selectable)\b/,
+  /\b(?:input|fill|click|typing)\s+(?:attempt\s+)?(?:did\s+not|didn'?t)\b/,
+  /\bhad\s+no\s+(?:effect|result)\b/,
+  // CHE-219, from run #159's journey summary and bottom line, which the list
+  // above did not match: "fails to accept input", "the fill operation times
+  // out". The timeout pattern is deliberately tied to one of our own verbs —
+  // a bare "times out" is often the product's own answer (a checkout that
+  // stalls), and only "the fill/click/… times out" is a sentence about us.
+  /\bfails?\s+to\s+(?:accept|respond|react|register|take|open|expand|submit|load|work)\b/,
+  /\bnever\s+(?:responds?|responded|reacts?|reacted|registers?|registered|opens?|opened)\b/,
+  /\b(?:does|did)\s+nothing\b/,
+  /\b(?:fill|click|type|typing|input|press|tap|drag|interaction|operation)\b[^.]{0,40}?\btimes?\s+out\b/,
+  /\b(?:fill|click|type|typing|input|press|tap|drag|interaction|operation)\b[^.]{0,40}?\btimed\s+out\b/,
+];
+
+// Which hand did the finding claim to use. Kept apart because the trail is
+// kept apart: run #159's words tie it to a "check" the run really did click
+// ("Check your app →", a link on the way to the page), while the fill it
+// actually claims — typing into a credentials field — has a trail of its own
+// with one entry, "Email address". Matching a fill claim against clicks is how
+// a navigation link ends up vouching for a form control.
+export type ClaimedHand = "fill" | "click";
+
+const FILL_WORDS =
+  /\b(?:type|typed|typing|enter|entered|entering|input|inputs|inputted|fill|filled|filling|paste|pasted|text|credential|credentials|password|keystroke)\b/;
+const CLICK_WORDS =
+  /\b(?:click|clicked|clicking|press|pressed|pressing|tap|tapped|button|expand|expanded|collapse|collapsed|toggle|toggled|select|selected|accordion|dropdown|checkbox|slider|drag|dragged)\b/;
+
+// Does this finding's evidence amount to "we acted and nothing came back", and
+// with which hand? Empty means no such claim — a finding about a wrong price, a
+// 500, a console exception or a dead outbound link says nothing about our own
+// hands and is never touched here.
+export function claimedHands(f: SynthesizedFinding): ClaimedHand[] {
+  const d = f.detail ?? {};
+  return handsInText(
+    [f.title, d.whatHappened ?? "", ...(Array.isArray(d.whatWeTried) ? d.whatWeTried : [])].join(" · "),
+  );
+}
+
+// The same question of any prose — a finding's fields joined, or one sentence
+// of a journey summary (CHE-219). One idea, two entry points: a second notion
+// of "we pressed this" would drift from the first the week after it was
+// written.
+export function handsInText(raw: string): ClaimedHand[] {
+  const text = raw.toLowerCase().replace(/[‘’ʼ]/g, "'");
+  if (!NULL_EFFECT_PHRASES.some((re) => re.test(text))) return [];
+  const hands: ClaimedHand[] = [];
+  if (FILL_WORDS.test(text)) hands.push("fill");
+  if (CLICK_WORDS.test(text)) hands.push("click");
+  return hands;
+}
+
+// One entry of Step.actions. Only the human-readable identity of a control is
+// read: `label` (a fill's field label) and `name` (a click's accessible name).
+// A CSS selector is our machinery — matching on it lets "input[type=text]"
+// vouch for any finding that says "input" — and a URL is a place, not a
+// control.
+interface TrailEntry {
+  kind?: unknown;
+  label?: unknown;
+  name?: unknown;
+}
+
+// What one hand did: how many times it acted, and the tokens of the controls it
+// named. The count and the tokens answer different questions and conflating
+// them cost run #159's journey summary a cut — journey 0 performed no fill at
+// all, which is not the same as performing fills we cannot name.
+export interface Hand {
+  /** How many actions of this kind the trail recorded. */
+  count: number;
+  /** Distinctive tokens of their labels and accessible names. */
+  tokens: Set<string>;
+}
+
+// The controls these steps actually drove. `recorded` is false when no step
+// carried a parseable trail at all — runs from before CHE-129, and any run
+// whose steps recorded nothing executable; then nothing here may speak.
+export function drivenControls(steps: GateStep[]): {
+  recorded: boolean;
+  fill: Hand;
+  click: Hand;
+} {
+  const fill: Hand = { count: 0, tokens: new Set() };
+  const click: Hand = { count: 0, tokens: new Set() };
+  let recorded = false;
+  for (const s of steps) {
+    if (!s.actions) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(s.actions);
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(parsed) || parsed.length === 0) continue;
+    recorded = true;
+    for (const raw of parsed as TrailEntry[]) {
+      if (!raw || typeof raw !== "object") continue;
+      const into = raw.kind === "fill" ? fill : raw.kind === "click" ? click : null;
+      if (!into) continue;
+      into.count++;
+      for (const field of [raw.label, raw.name]) {
+        if (typeof field !== "string") continue;
+        for (const t of distinctiveTokens(field)) into.tokens.add(t);
+      }
+    }
+  }
+  return { recorded, fill, click };
+}
+
+// Is a claim that this hand produced nothing supported by what the hand did?
+// Three answers, and only the third is a denial:
+//   - the hand never acted        → we are describing something we never did;
+//   - it acted but named nothing  → silence (a button called "Save" carries no
+//                                    token of its own), so the claim stands;
+//   - it acted and named controls → the claim must name one of them, by the
+//                                   same two-token rule the rest of this file
+//                                   uses. One token is a coincidence, and on
+//                                   this app a cheap one: our own primary page
+//                                   is /check, so almost every locus carries
+//                                   "check", and run #159's trail contains a
+//                                   click on the link "Check your app →".
+//                                   Anchoring on one token would let that nav
+//                                   link vouch for "Password reset button does
+//                                   nothing" at "/check — password reset",
+//                                   which is this PR's own failure moved one
+//                                   word to the left. Where a control's name
+//                                   yields only one token, the set is small
+//                                   enough that the whole of it must appear.
+function handSupports(hand: Hand, locus: Set<string>): boolean {
+  if (hand.count === 0) return false;
+  if (hand.tokens.size === 0) return true;
+  return sharedCount(locus, hand.tokens) >= Math.min(SHARED_TOKENS_MIN, hand.tokens.size);
+}
+
+// ─── CHE-219: the same evidence, one sentence at a time ──────────────────────
+//
+// CHE-215 removes run #159's finding. The same claim stayed published twice
+// over: journey 0's summary ("…fails to accept input — the fill operation
+// times out even though the field is present in the DOM") and the first half
+// of the bottom line ("The credential/notes field … would not accept input
+// this run"). Neither field had a gate that could see it. The phrase tables of
+// CHE-82, CHE-180 and CHE-197 look for OUR words — browser, harness, oEmbed,
+// the walker's "I" — and that sentence contains none; "fill" is our word, but
+// it reads as ordinary product prose. So the answer is not a longer phrase
+// table. It is the same evidence the findings gate uses, applied per sentence.
+//
+// A sentence that asserts one of our interactions produced nothing is held to
+// what the run actually drove. Where the trail does not show it, the sentence
+// goes and the rest of the text stays — the cut CHE-191 and CHE-197 already
+// perform on these fields, driven by the machine trail instead of a word list.
+// Same fail-open as the gate: no trail, or no nameable control of that hand,
+// and nothing is touched.
+
+export interface ClaimCut {
+  /** The text with unsupported sentences removed; null when none survived. */
+  text: string | null;
+  /** The sentences that were cut, for the log. */
+  cut: string[];
+}
+
+export function cutUndrivenClaims(
+  text: string | null | undefined,
+  journeys: GateJourney[],
+): ClaimCut {
+  if (!text || !text.trim()) return { text: text ?? null, cut: [] };
+  const walked = journeys.flatMap((j) => j.steps).filter((s) => s.status !== "skipped");
+  const trail = drivenControls(walked);
+  if (!trail.recorded) return { text, cut: [] };
+
+  const kept: string[] = [];
+  const cut: string[] = [];
+  for (const sentence of splitSentences(text)) {
+    const hands = handsInText(sentence);
+    const locus = distinctiveTokens(sentence);
+    const unsupported = hands.some((hand) => !handSupports(trail[hand], locus));
+    if (unsupported) cut.push(sentence.trim());
+    else kept.push(sentence);
+  }
+  if (cut.length === 0) return { text, cut: [] };
+  const out = kept.join(" ").replace(/\s+/g, " ").trim();
+  return { text: out.length > 0 ? out : null, cut };
+}
+
+// Where a sentence carries the claim and the observation together, cutting the
+// whole sentence throws away what we did see. Run #159's step read "The field
+// is present but the input attempt did not take" — one sentence, two halves,
+// and only the second is about us. CLAUSE_BREAK in tools.ts splits on
+// punctuation; a plain "but" needs no comma, so this list is its own.
+const CLAUSE_JOINS =
+  /\s+(?:but|though|although|however|yet|whereas|while)\s+|\s+[—–]+\s+|;\s+|,\s+(?=(?:but|though|although|however|yet|whereas|and|so|which|because|since)\b)/i;
+
+// The claim, cut at clause level, where our own failure is ALREADY established
+// — tools.ts calls this only after a control we could not drive, so no trail
+// comparison is needed: any clause saying our interaction produced nothing is,
+// by construction, our incapacity. The hand is read from the whole sentence
+// (a clause like "nothing happened" names no hand of its own) and only the
+// clauses carrying the null-effect phrase are removed.
+export function cutNullEffectClauses(text: string | null | undefined): ClaimCut {
+  if (!text || !text.trim()) return { text: text ?? null, cut: [] };
+  const kept: string[] = [];
+  const cut: string[] = [];
+  for (const sentence of splitSentences(text)) {
+    if (handsInText(sentence).length === 0) {
+      kept.push(sentence.trim());
+      continue;
+    }
+    const clauses = sentence.split(CLAUSE_JOINS).map((c) => c.trim()).filter(Boolean);
+    const survivors: string[] = [];
+    for (const clause of clauses) {
+      const claim = NULL_EFFECT_PHRASES.some((re) => re.test(clause.toLowerCase().replace(/[‘’ʼ]/g, "'")));
+      if (claim) cut.push(clause);
+      else survivors.push(clause.replace(/[.,;:\s]+$/, ""));
+    }
+    if (survivors.length) {
+      const joined = survivors.join(", ");
+      kept.push(/[.!?]$/.test(joined) ? joined : `${joined}.`);
+    }
+  }
+  if (cut.length === 0) return { text, cut: [] };
+  const out = kept.join(" ").replace(/\s+/g, " ").trim();
+  return { text: out.length > 0 ? out : null, cut };
+}
+
 export function gateFindings(findings: SynthesizedFinding[], journeys: GateJourney[]): GateResult {
   const kept: SynthesizedFinding[] = [];
   const dropped: GateResult["dropped"] = [];
 
   const steps = journeys.flatMap((j) => j.steps);
   const skipped = steps.filter((s) => s.status === "skipped");
-  // Nothing was skipped ⇒ nothing here can be about a skipped step.
-  if (skipped.length === 0) return { kept: [...findings], dropped };
-
   const walked = steps.filter((s) => s.status !== "skipped");
+
+  // CHE-215's anchor runs whether or not anything was skipped: run #159 had
+  // skipped steps, but a run with none can publish the same unsupported claim.
+  const trail = drivenControls(walked);
+  const anchored = (f: SynthesizedFinding): { ok: true } | { ok: false; reason: string } => {
+    const hands = claimedHands(f);
+    if (hands.length === 0) return { ok: true };
+    // No machine trail in this run ⇒ we cannot tell what we drove, so we do not
+    // pretend to. Logged by the caller as a kept finding, nothing more.
+    if (!trail.recorded) return { ok: true };
+    const locus = distinctiveTokens(`${f.title} ${f.detail?.where ?? ""}`);
+    for (const hand of hands) {
+      const drove = trail[hand];
+      if (handSupports(drove, locus)) continue;
+      return {
+        ok: false,
+        reason:
+          `${NO_INTERACTION_RECORDED} — the finding says a ${hand} of ours produced nothing at ` +
+          `"${[...locus].join(" ")}", but ` +
+          (drove.count === 0
+            ? `this run performed no ${hand} at all`
+            : `every ${hand} this run performed was elsewhere (${[...drove.tokens].join(" ")})`),
+      };
+    }
+    return { ok: true };
+  };
+
+  // Nothing was skipped ⇒ CHE-188 has nothing to match, but the anchor still
+  // does.
+  if (skipped.length === 0) {
+    for (const f of findings) {
+      const a = anchored(f);
+      if (a.ok) kept.push(f);
+      else dropped.push({ finding: f, reason: a.reason });
+    }
+    return { kept, dropped };
+  }
+
   const skippedTokens = skipped.map((s) => ({ step: s, tokens: distinctiveTokens(stepText(s)) }));
   const walkedTokens = walked.map((s) => distinctiveTokens(stepText(s)));
 
@@ -180,7 +490,11 @@ export function gateFindings(findings: SynthesizedFinding[], journeys: GateJourn
           reason: `rests on skipped step "${ref.label}" (${ref.unverifiedReason ?? "no reason recorded"})`,
         });
       } else {
-        kept.push(f);
+        // CHE-215: naming a walked step is not the same as that step showing
+        // the interaction the finding claims failed. Run #159 named one.
+        const a = anchored(f);
+        if (a.ok) kept.push(f);
+        else dropped.push({ finding: f, reason: a.reason });
       }
       continue;
     }
@@ -201,7 +515,9 @@ export function gateFindings(findings: SynthesizedFinding[], journeys: GateJourn
       });
       continue;
     }
-    kept.push(f);
+    const a = anchored(f);
+    if (a.ok) kept.push(f);
+    else dropped.push({ finding: f, reason: a.reason });
   }
 
   return { kept, dropped };

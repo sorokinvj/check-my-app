@@ -41,7 +41,7 @@ import { loadAppKnowledge, type AppKnowledge } from "./knowledge";
 import { walkOneJourney, type WalkRun } from "./execution";
 import { orderByFocus } from "./limits";
 import { parseActions, replayJourney, type ReplayResult } from "./journey-replay";
-import { gateFindings } from "./findings-gate";
+import { claimedHands, drivenControls, gateFindings } from "./findings-gate";
 import { synthesizeVerdict, type SynthesizedFinding } from "./synthesis";
 import { autoFileFindings } from "./autofile";
 import { fileCapabilityGaps } from "./capability-gaps";
@@ -668,6 +668,10 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
         // could not drive). Same journey/step order synthesis numbered its
         // stepRefs by. Logged, not recorded as a run event: the gate is our
         // machinery, and rule 1 keeps that out of what the customer reads.
+        // CHE-215 adds `actions` to the same read: a finding that says one of
+        // our interactions produced nothing is checked against the trail of
+        // what the browser actually drove (run #159 claimed a fill on a field
+        // nothing ever filled).
         const gated = gateFindings(
           synth.findings,
           await env.db.journey.findMany({
@@ -675,7 +679,14 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
             select: {
               steps: {
                 orderBy: { order: "asc" },
-                select: { status: true, unverifiedReason: true, label: true, observed: true },
+                select: {
+                  status: true,
+                  unverifiedReason: true,
+                  label: true,
+                  observed: true,
+                  attempted: true,
+                  actions: true,
+                },
               },
             },
             orderBy: { order: "asc" },
@@ -1274,6 +1285,12 @@ async function persistFindings(env: AgentEnv, runId: string, findings: Synthesiz
     }
   }
 
+  // CHE-215: the same walked steps the gate judged against, so the anchor
+  // written on the row says what the row was allowed to rest on.
+  const trailPresent = drivenControls(
+    journeys.flatMap((j) => j.steps).filter((s) => s.status !== "skipped"),
+  ).recorded;
+
   let number = 1;
   for (const f of findings) {
     const step = f.stepRef ? journeys[f.stepRef.journeyIndex]?.steps[f.stepRef.stepIndex] : undefined;
@@ -1284,12 +1301,18 @@ async function persistFindings(env: AgentEnv, runId: string, findings: Synthesiz
       severity: f.severity,
       detail: JSON.stringify(f.detail),
     };
+    const anchor = JSON.stringify({
+      stepRef: step ? f.stepRef : null,
+      hands: claimedHands(f),
+      trail: trailPresent ? "present" : "absent",
+    });
     const mark = run ? inheritedMarks.get(dedupKeyForFinding(shaped, { appSlug: run.appSlug })) : undefined;
     await env.db.finding.create({
       data: {
         runId,
         number: number++,
         ...shaped,
+        anchor,
         ...(mark ? { mark } : {}),
         evidence: shot
           ? { create: [{ type: "screenshot", storageUrl: shot.storageUrl, sha256: shot.sha256 }] }

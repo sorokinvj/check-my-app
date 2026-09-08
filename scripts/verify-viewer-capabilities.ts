@@ -8,7 +8,17 @@
 //
 // Usage: npx tsx --tsconfig tsconfig.json scripts/verify-viewer-capabilities.ts
 
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { viewerCapabilities, type ViewerCapabilities } from "@/lib/viewer-capabilities";
+import {
+  FINDING_INTERNAL_FIELDS,
+  FINDING_PUBLIC_FIELDS,
+  FINDING_PUBLIC_SELECT,
+} from "@/lib/finding-fields";
+// Prisma's own list of Finding columns: the schema is the source of truth for
+// what must be classified, so adding a column cannot quietly skip this file.
+import { FindingScalarFieldEnum } from "@/generated/prisma/internal/prismaNamespace";
 
 let failures = 0;
 function check(name: string, ok: boolean, detail = "") {
@@ -151,6 +161,53 @@ check(
     !ownerEphemeral.exportSpecs,
   JSON.stringify(ownerEphemeral),
 );
+
+// ─── CHE-215: what a Finding may carry into a browser ────────────────────────
+//
+// The verdict page hands its findings to FindingsList, a client component, so
+// every column on them is serialized into the RSC payload whether or not it is
+// rendered — readable in view-source. `anchor` is our own record of what a
+// finding was allowed to rest on, and rule 1 keeps that out of what a customer
+// reads. The `select` on that query fixes today; this fixes tomorrow, when
+// somebody adds a column and has no reason to think about serialization.
+{
+  const publicFields = new Set<string>(FINDING_PUBLIC_FIELDS);
+  const internalFields = new Set<string>(FINDING_INTERNAL_FIELDS);
+  const columns = Object.keys(FindingScalarFieldEnum);
+
+  const unclassified = columns.filter((c) => !publicFields.has(c) && !internalFields.has(c));
+  check(
+    "every Finding column is classified public or internal — a new one fails here until it is",
+    unclassified.length === 0,
+    unclassified.join(", ") || "none unclassified",
+  );
+  const phantom = [...publicFields, ...internalFields].filter((f) => !columns.includes(f));
+  check("…and neither list names a column that no longer exists", phantom.length === 0, phantom.join(", ") || "none");
+  check(
+    "…the two lists do not overlap",
+    [...publicFields].every((f) => !internalFields.has(f)),
+  );
+
+  check("anchor is internal", internalFields.has("anchor") && !publicFields.has("anchor"));
+  check(
+    "the select handed to the client carries every public column and no internal one",
+    Object.keys(FINDING_PUBLIC_SELECT).sort().join(",") === [...publicFields].sort().join(",") &&
+      [...internalFields].every((f) => !(f in FINDING_PUBLIC_SELECT)),
+    Object.keys(FINDING_PUBLIC_SELECT).join(","),
+  );
+  // The page must not have gone back to a blanket include: a `select` naming
+  // the projection is the only shape that keeps an added column out by default.
+  const page = readFileSync(
+    fileURLToPath(new URL("../src/app/verdict/[id]/page.tsx", import.meta.url)),
+    "utf8",
+  );
+  const findingsQuery = page.slice(page.indexOf("findings: {"), page.indexOf("watch: {"));
+  check(
+    "the verdict page selects findings through the projection, never `include`",
+    findingsQuery.includes("FINDING_PUBLIC_SELECT") && !findingsQuery.includes("include:"),
+    findingsQuery.replace(/\s+/g, " ").slice(0, 120),
+  );
+}
 
 console.log(failures === 0 ? "\nall pass" : `\n${failures} FAILED`);
 process.exit(failures === 0 ? 0 : 1);

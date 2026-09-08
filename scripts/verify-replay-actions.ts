@@ -152,13 +152,26 @@ async function main() {
     refused.startsWith("Refused:") && trail.length === before,
     refused.slice(0, 60),
   );
-  // …and a click Playwright could not perform is an error, not an action.
+  // …and a click Playwright could not perform is not an action either. CHE-214
+  // changed what it SAYS — a bare "Error:" invited the model to read the
+  // silence as a defect — but not what it records, and a replay still counts
+  // it as errored.
   const broken = stubEnv({ clickThrows: true });
   const errored = await executeTool(broken, "click", { role: "button", name: "Sign in" });
   check(
-    "errored click (locator timeout) records nothing",
-    errored.startsWith("Error:") && (broken.actionTrail as RecordedAction[]).length === 0,
+    "undrivable click (locator timeout) records nothing",
+    (broken.actionTrail as RecordedAction[]).length === 0,
     errored.slice(0, 60),
+  );
+  check(
+    "…and says it was ours, with the step to report",
+    errored.includes("could not be driven from here") && errored.includes("our_capability"),
+    errored.slice(0, 120),
+  );
+  check(
+    "…and a replay reads that as errored, not ok",
+    classifyResult("click", errored) === "errored",
+    classifyResult("click", errored),
   );
   // Observation tools are not part of the path.
   await executeTool(env, "get_network_log", {});

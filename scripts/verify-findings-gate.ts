@@ -1,5 +1,7 @@
 // CHE-188 verification: a finding that rests only on a skipped step is not
-// written.
+// written. CHE-215 extends it: a finding that says one of OUR interactions
+// produced nothing, in a run whose machine trail shows we never drove that
+// control, is not written either.
 //
 // Run #153 (joblander.app) recorded the step "Modify Insight Preferences
 // (slider) and Save/Reset" as skipped / our_capability and then wrote the
@@ -8,14 +10,38 @@
 // that now sits between synthesis and persistence does what the prompt only
 // asked for.
 //
+// Run #159 (checkmyapp.dev) is the harder version and gets the whole run as a
+// fixture: `fixtures-run-159.json` is its 35 steps and its published finding,
+// straight out of production D1. Nothing in that run mentions the accordion or
+// a failed fill, and the trail proves it — the two fills it performed were the
+// sign-in email box and the URL box.
+//
 // Pure: no browser, no network, no model, no database. Every case below is the
 // exact shape the workflow hands the gate — synthesized findings plus the
 // run's journeys with their steps — so what passes here is what runs.
 //
 // Usage: npx tsx --tsconfig tsconfig.json scripts/verify-findings-gate.ts
 
-import { EXPOSED_NO_EVIDENCE, distinctiveTokens, gateFindings, type GateJourney } from "@/agent/findings-gate";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import {
+  EXPOSED_NO_EVIDENCE,
+  NO_INTERACTION_RECORDED,
+  claimedHands,
+  cutUndrivenClaims,
+  distinctiveTokens,
+  drivenControls,
+  gateFindings,
+  type GateJourney,
+} from "@/agent/findings-gate";
 import type { SynthesizedFinding } from "@/agent/synthesis";
+
+const RUN_159: {
+  note: string;
+  finding: SynthesizedFinding;
+  bottomLine: string;
+  journeys: Array<GateJourney & { title: string; summary: string }>;
+} = JSON.parse(readFileSync(fileURLToPath(new URL("./fixtures-run-159.json", import.meta.url)), "utf8"));
 
 let failures = 0;
 function check(name: string, ok: boolean, detail = "") {
@@ -247,6 +273,339 @@ function main() {
       [...t].join(","),
     );
     check("tokens: 'would' and 'which' are stop words, 'save' and 'the' too short", !t.has("would") && !t.has("which") && !t.has("save"));
+  }
+
+  // ─── CHE-215 ───────────────────────────────────────────────────────────────
+
+  // 13 — the fixture is the run, not a paraphrase of it.
+  {
+    const steps = RUN_159.journeys.flatMap((j) => j.steps);
+    check("#159 fixture: 5 journeys, 35 steps", RUN_159.journeys.length === 5 && steps.length === 35, `${steps.length} steps`);
+    const text = steps.map((s) => `${s.label} ${s.observed ?? ""}`).join(" ").toLowerCase();
+    check(
+      "#159: no step mentions the accordion, an expansion or a notes field",
+      !text.includes("accordion") && !text.includes("expanded") && !/\bnotes field\b/.test(text),
+    );
+    const trail = drivenControls(steps.filter((s) => s.status !== "skipped"));
+    check("#159: the run recorded a machine trail", trail.recorded);
+    check(
+      "#159: it performed two fills, and the only one that names a control is the sign-in email box",
+      trail.fill.count === 2 && [...trail.fill.tokens].join(" ") === "email address",
+      `${trail.fill.count} fills: ${[...trail.fill.tokens].join(" ") || "(nothing named)"}`,
+    );
+  }
+
+  // 14 — the ticket's case: run #159's own finding against run #159's own
+  // steps → dropped.
+  {
+    const r = gateFindings([RUN_159.finding], RUN_159.journeys);
+    check("#159: the published finding is dropped", r.kept.length === 0 && r.dropped.length === 1, titles(r.kept));
+    check(
+      "#159: the reason is the missing interaction, not the skipped steps",
+      r.dropped[0]?.reason.startsWith(NO_INTERACTION_RECORDED) === true,
+      r.dropped[0]?.reason,
+    );
+    check(
+      "#159: it is dropped even when it names a walked step — CHE-188 alone would keep it",
+      gateFindings([{ ...RUN_159.finding, stepRef: { journeyIndex: 2, stepIndex: 2 } }], RUN_159.journeys).kept
+        .length === 0,
+    );
+  }
+
+  // 15 — a finding whose whatWeTried matches what the run actually did → kept.
+  // Same run, same trail; this one is about the sign-in email box, the one
+  // control run #159's trail shows we filled (step 1.0, "Email address").
+  {
+    const real: SynthesizedFinding = {
+      title: "Email address field does not accept input after a rejected submit",
+      category: "confusing",
+      severity: "medium",
+      detail: {
+        where: "/sign-in — Email address field",
+        whatWeTried: ["Typed an address into the Email address field"],
+        whatHappened: "Once the form had been rejected, the Email address field would not take a corrected address.",
+        whyItMatters: "A visitor who mistypes their address cannot correct it without reloading.",
+      },
+    };
+    const r = gateFindings([real], RUN_159.journeys);
+    check("a null-effect finding about a control we really filled is kept", r.kept.length === 1, r.dropped[0]?.reason);
+    check(
+      "…and the same finding moved to a control nothing filled is dropped",
+      gateFindings(
+        [{ ...real, title: "Notes field does not accept input", detail: { ...real.detail, where: "/check — notes" } }],
+        RUN_159.journeys,
+      ).kept.length === 0,
+    );
+  }
+
+  // 15b — one shared token is a coincidence, not an anchor. Our own primary
+  // page is /check, so almost every locus carries "check", and run #159's trail
+  // holds a click on the link "Check your app →". Anchoring on a single token
+  // would let that nav link vouch for a claim about an unrelated control, which
+  // is this PR's own failure moved one word to the left.
+  {
+    const coincidence: SynthesizedFinding = {
+      title: "Password reset button does nothing",
+      category: "broken",
+      severity: "high",
+      detail: {
+        where: "/check — password reset",
+        whatWeTried: ["Pressed the password reset button"],
+        whatHappened: "Pressing it had no effect and no message appeared.",
+      },
+    };
+    const r = gateFindings([coincidence], RUN_159.journeys);
+    check(
+      "a single token shared with a nav link does not anchor an unrelated claim",
+      r.kept.length === 0,
+      r.dropped[0]?.reason ?? "(kept)",
+    );
+    // …and where the hand's controls carry only one token, that one token is
+    // the whole of the set and must appear, or nothing could ever anchor.
+    const oneToken: GateJourney[] = [
+      {
+        steps: [
+          {
+            label: "Type into the notes box",
+            status: "ok",
+            unverifiedReason: null,
+            observed: "Typed into it.",
+            actions: JSON.stringify([{ kind: "fill", label: "Notes", value: "x", outcome: {} }]),
+          },
+        ],
+      },
+    ];
+    const aboutNotes: SynthesizedFinding = {
+      title: "Notes box does not accept input",
+      category: "broken",
+      severity: "medium",
+      detail: { where: "/check — notes", whatHappened: "It would not accept input." },
+    };
+    check("a one-token control name still anchors its own claim", gateFindings([aboutNotes], oneToken).kept.length === 1);
+    check(
+      "…and does not anchor a claim about something else",
+      gateFindings([{ ...aboutNotes, title: "Password box does not accept input", detail: { where: "/sign-in — password" } }], oneToken)
+        .kept.length === 0,
+    );
+  }
+
+  // 16 — a link check is not an interaction. verify_links resolves outbound
+  // URLs server-side (CLAUDE.md rule 3) and lands in a step's observed with no
+  // click behind it; such a finding must stay publishable.
+  {
+    const linkFinding: SynthesizedFinding = {
+      title: "Two YouTube embeds on the tour page are unplayable",
+      category: "broken",
+      severity: "medium",
+      detail: {
+        where: "/tour — video wall",
+        whatWeTried: ["Resolved every outbound video URL on the page"],
+        whatHappened: "Two of the eleven YouTube URLs return an oEmbed error: the videos are deleted or private.",
+        whyItMatters: "A visitor on the tour page meets two dead videos.",
+      },
+    };
+    check("a link-check finding claims no interaction of ours", claimedHands(linkFinding).length === 0);
+    const journeys: GateJourney[] = [
+      {
+        steps: [
+          {
+            label: "Check the tour page's outbound video links",
+            status: "broken",
+            unverifiedReason: null,
+            observed: "Eleven YouTube URLs resolved; two returned an oEmbed error (deleted or private).",
+            actions: JSON.stringify([
+              { kind: "navigate", url: "https://example.com/tour", outcome: { status: 200 } },
+            ]),
+          },
+          {
+            label: "Sign in to the members area",
+            status: "skipped",
+            unverifiedReason: "missing_access",
+            observed: "No credentials were provided this run.",
+            actions: null,
+          },
+        ],
+      },
+    ];
+    const r = gateFindings([linkFinding], journeys);
+    check("link-check finding with no click step is kept", r.kept.length === 1, r.dropped[0]?.reason);
+  }
+
+  // 17 — CHE-188 is untouched: a finding supported only by a skipped step is
+  // still dropped, and for CHE-188's reason, in a run that also carries a
+  // trail. The trail must not become a way to rescue one.
+  {
+    const withTrail: GateJourney[] = [
+      {
+        steps: RUN_153[1].steps.map((s) => ({
+          ...s,
+          actions: JSON.stringify([
+            { kind: "fill", label: "Insight Preferences", value: "0.5", outcome: {} },
+            { kind: "click", role: "button", name: "Save Changes", outcome: {} },
+          ]),
+        })),
+      },
+    ];
+    const r = gateFindings([{ ...SLIDER_FINDING, stepRef: { journeyIndex: 0, stepIndex: 2 } }], withTrail);
+    check(
+      "CHE-188 unchanged: a finding on a skipped step is dropped even when the trail would anchor it",
+      r.kept.length === 0 && r.dropped[0]?.reason.includes("our_capability") === true,
+      r.dropped[0]?.reason,
+    );
+  }
+
+  // 18 — the rule stays silent where it cannot speak: no trail at all, and a
+  // hand whose recorded controls have no nameable token.
+  {
+    const noTrail: GateJourney[] = [
+      { steps: [{ label: "Open the settings page", status: "ok", unverifiedReason: null, observed: "Settings rendered." }] },
+    ];
+    check(
+      "a run with no machine trail keeps the finding (the rule cannot speak)",
+      gateFindings([{ ...SLIDER_FINDING, stepRef: undefined }], noTrail).kept.length === 1,
+    );
+    const shortNames: GateJourney[] = [
+      {
+        steps: [
+          {
+            label: "Press Save",
+            status: "ok",
+            unverifiedReason: null,
+            observed: "The Save button was pressed.",
+            actions: JSON.stringify([{ kind: "click", role: "button", name: "Save", outcome: {} }]),
+          },
+        ],
+      },
+    ];
+    const shortClaim: SynthesizedFinding = {
+      title: "Buy button does nothing",
+      category: "broken",
+      severity: "high",
+      detail: { where: "/pricing", whatWeTried: ["Clicked Buy"], whatHappened: "Clicking Buy had no effect." },
+    };
+    check(
+      "a trail whose controls have no nameable token is silence, not a denial",
+      gateFindings([shortClaim], shortNames).kept.length === 1,
+    );
+  }
+
+  // 19 — the null-effect phrases and the hand they name.
+  {
+    const claim = (title: string, whatHappened: string): SynthesizedFinding => ({
+      title,
+      category: "confusing",
+      severity: "low",
+      detail: { whatHappened },
+    });
+    check("'did not accept input' is a fill claim", claimedHands(claim("Field problem", "The field did not accept input.")).includes("fill"));
+    check("'nothing happened' after a click is a click claim", claimedHands(claim("Button problem", "We clicked the button and nothing happened.")).includes("click"));
+    check(
+      "a 500 is not a claim about our hands",
+      claimedHands(claim("Checkout returns 500", "Submitting the order returned HTTP 500 and no confirmation was shown.")).length === 0,
+    );
+    check(
+      "a curly apostrophe does not hide the phrase",
+      claimedHands(claim("Slider problem", "The slider didn’t respond to a drag.")).includes("click"),
+    );
+  }
+
+  // ─── CHE-219: the same evidence, applied to a summary and a bottom line ────
+
+  // 20 — run #159's journey 0 summary, against journey 0's own steps. The
+  // false clause goes; the true sentence beside it stays, word for word.
+  {
+    const journey0 = RUN_159.journeys[0];
+    const r = cutUndrivenClaims(journey0.summary, [journey0]);
+    check("#159 summary: one sentence is cut", r.cut.length === 1, r.cut.join(" | ") || "(nothing cut)");
+    check(
+      "…the cut one is the fill claim",
+      r.cut[0]?.includes("fails to accept input") && r.cut[0]?.includes("the fill operation times out"),
+      r.cut[0],
+    );
+    check(
+      "…and the sign-in sentence survives verbatim",
+      r.text === "The sign-in page, which previously rendered blank, now loads correctly with Clerk scripts.",
+      r.text ?? "(nothing left)",
+    );
+  }
+
+  // 21 — the same run's bottom line, against the whole run.
+  {
+    const r = cutUndrivenClaims(RUN_159.bottomLine, RUN_159.journeys);
+    check("#159 bottom line: the opening claim is cut", r.cut.length === 1, r.cut.join(" | ") || "(nothing cut)");
+    check(
+      "…the cut one is the credential/notes claim",
+      r.cut[0]?.includes("would not accept input this run"),
+      r.cut[0],
+    );
+    check(
+      "…and everything the run did verify is kept",
+      Boolean(r.text?.startsWith("Otherwise everything we walked is healthy")) &&
+        Boolean(r.text?.includes("add test-account credentials in your dashboard")),
+      r.text ?? "(nothing left)",
+    );
+  }
+
+  // 22 — fail-open, the same three ways the finding gate fails open.
+  {
+    const noTrail: GateJourney[] = [
+      { steps: [{ label: "Open the form", status: "ok", unverifiedReason: null, observed: "It rendered." }] },
+    ];
+    const claim = "The notes field did not accept input.";
+    check("a run with no machine trail is left alone", cutUndrivenClaims(claim, noTrail).text === claim);
+    const named: GateJourney[] = [
+      {
+        steps: [
+          {
+            label: "Fill the notes",
+            status: "ok",
+            unverifiedReason: null,
+            observed: "Typed into the notes field.",
+            actions: JSON.stringify([{ kind: "fill", label: "Notes", value: "x", outcome: {} }]),
+          },
+        ],
+      },
+    ];
+    check("a claim about a control we did fill is kept", cutUndrivenClaims(claim, named).text === claim);
+    const unnamed: GateJourney[] = [
+      {
+        steps: [
+          {
+            label: "Fill it",
+            status: "ok",
+            unverifiedReason: null,
+            observed: "Typed something.",
+            actions: JSON.stringify([{ kind: "fill", selector: "input[type=text]", value: "x", outcome: {} }]),
+          },
+        ],
+      },
+    ];
+    check("a fill that named no control is silence, not a denial", cutUndrivenClaims(claim, unnamed).text === claim);
+    check("empty text is returned as it came", cutUndrivenClaims("", named).text === "");
+    check("null text is returned as null", cutUndrivenClaims(null, named).text === null);
+  }
+
+  // 23 — a sentence that says nothing about our hands is never touched, and a
+  // text that was ONLY the claim comes back null so the caller can stand in a
+  // fallback rather than publish an empty line.
+  {
+    const trail: GateJourney[] = [
+      {
+        steps: [
+          {
+            label: "Open the checkout",
+            status: "broken",
+            unverifiedReason: null,
+            observed: "The order endpoint answered 500.",
+            actions: JSON.stringify([{ kind: "navigate", url: "https://shop.test/checkout", outcome: { status: 500 } }]),
+          },
+        ],
+      },
+    ];
+    const product = "Checkout returns HTTP 500 and no order is created.";
+    check("a product failure with no claim about our hands is untouched", cutUndrivenClaims(product, trail).text === product);
+    const onlyClaim = cutUndrivenClaims("The Buy button did nothing when pressed.", trail);
+    check("a text that was only the claim comes back null", onlyClaim.text === null && onlyClaim.cut.length === 1, onlyClaim.text ?? "null");
   }
 
   console.log(failures ? `\n${failures} check(s) FAILED` : "\nall checks passed");
