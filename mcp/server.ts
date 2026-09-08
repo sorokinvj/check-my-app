@@ -14,15 +14,15 @@
 //
 // The tools themselves live in mcp/tools.ts (plain functions over the public
 // HTTP API, verified by scripts/verify-mcp.ts without a network). This file is
-// only the transport: it registers them and turns wait_for_run's polling into
-// MCP progress notifications so a client that resets its request timeout on
-// progress can block for the whole run.
+// only the transport: it registers them and turns the blocking tools' polling
+// into MCP progress notifications so a client that resets its request timeout
+// on progress can block for the whole run.
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { createTools, inputSchemas, type Tools } from "./tools";
 
-export const SERVER_VERSION = "1.3.0";
+export const SERVER_VERSION = "1.4.0";
 
 export function registerTools(server: McpServer, tools: Tools): void {
   server.registerTool(
@@ -36,9 +36,13 @@ export function registerTools(server: McpServer, tools: Tools): void {
         "Set CHECKMYAPP_API_KEY: the run is then attributed to the key's owner and follows " +
         "their plan quota, and the API's bot check does not apply. A refusal comes back " +
         "with isError and a stable `code` (quota_site, quota_anon, quota_free, " +
-        "turnstile_failed, self_check_read_only, invalid_input) plus a hint — do not retry " +
-        "a quota refusal. Pass deploy_sha (and deploy_env) in CI so the verdict names the " +
-        "exact build it checked — that is what makes the result safe to gate a release on.",
+        "turnstile_failed, self_check_read_only, ephemeral_requires_owner, invalid_input) plus " +
+        "a hint — do not retry a quota refusal. Pass deploy_sha (and deploy_env) in CI so the " +
+        "verdict names the exact build it checked — that is what makes the result safe to gate " +
+        "a release on. Set ephemeral: true for a throwaway hostname such as a PR preview: it " +
+        "needs the owner API key (an anonymous ephemeral request is refused with code " +
+        "ephemeral_requires_owner), the run stays private and is never listed publicly, no app " +
+        "is created or kept for the hostname, and the run is deleted after about 7 days.",
       inputSchema: inputSchemas.start_check,
     },
     (args) => tools.start_check(args),
@@ -103,6 +107,52 @@ export function registerTools(server: McpServer, tools: Tools): void {
       inputSchema: inputSchemas.get_verdict,
     },
     (args) => tools.get_verdict(args),
+  );
+
+  server.registerTool(
+    "get_review",
+    {
+      description:
+        "The run's result in the shape you act on — this is the tool to call when you are " +
+        "going to fix what the check found. Where get_verdict answers 'is the deploy fine?', " +
+        "this returns every finding in full (where it happens, what was tried, what happened, " +
+        "why it matters, evidence URLs), every journey step as walked, the pages and steps " +
+        "that were not covered, and for each finding the sentence that says when it counts as " +
+        "gone (`next_actions`). It names symptoms and evidence, never files or fixes — what to " +
+        "change is your call. isError with code not_found when the id is unknown.",
+      inputSchema: inputSchemas.get_review,
+    },
+    (args) => tools.get_review(args),
+  );
+
+  server.registerTool(
+    "wait_for_review",
+    {
+      description:
+        "Block until a CheckMyApp run finishes, then return get_review's payload — the one " +
+        "call for 'check this deploy and give me something I can work from'. Same polling as " +
+        "wait_for_run (every 30s, 45-minute cap, MCP progress notifications: pass a progress " +
+        "token and reset the request timeout on progress), and on the cap it returns " +
+        "timed_out with the last status. The result opens with a head — verdict, findings by " +
+        "severity, how many next_actions — and carries the whole review under `review`.",
+      inputSchema: inputSchemas.wait_for_review,
+    },
+    (args, extra) =>
+      tools.wait_for_review(args, {
+        signal: extra.signal,
+        onProgress: async (p) => {
+          const progressToken = extra._meta?.progressToken;
+          if (progressToken === undefined) return;
+          await extra.sendNotification({
+            method: "notifications/progress",
+            params: {
+              progressToken,
+              progress: p.polls,
+              message: `${p.status} · ${p.elapsed_s}s elapsed`,
+            },
+          });
+        },
+      }),
   );
 }
 

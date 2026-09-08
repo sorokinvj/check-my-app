@@ -1,21 +1,24 @@
-// CHE-200 verification: the MCP server's contract with today's HTTP API.
+// CHE-200/201/202 verification: the MCP server's contract with today's HTTP API.
 //
 // mcp/server.ts was written against the API of 2026-08-22. Since then the API
 // grew quota refusals with a `code` (429 quota_site / quota_anon / quota_free),
 // the self-check refusal (403 self_check_read_only, CHE-193), an anonymous
-// same-domain reuse answer (200 {id, reused: true}), and a Turnstile 403 that a
-// keyless machine caller hits on every production submission. This script
-// pins what the tools do with each of those, with fetch stubbed to answer
-// exactly the shapes the routes in src/app/api produce — no network, no
-// waiting between polls (the clock and sleep are injected too).
+// same-domain reuse answer (200 {id, reused: true}), a Turnstile 403 that a
+// keyless machine caller hits on every production submission, the review a
+// coding agent acts on (GET /api/runs/{id}/review, CHE-201) and ephemeral runs
+// for throwaway hostnames (CHE-202, refused for anonymous callers with code
+// ephemeral_requires_owner). This script pins what the tools do with each of
+// those, with fetch stubbed to answer exactly the shapes the routes in
+// src/app/api produce — no network, no waiting between polls (the clock and
+// sleep are injected too).
 //
 // Three layers:
 //   1. the tool functions (mcp/tools.ts) against every route answer;
 //   2. the input schemas (what a client may send) — the same bounds the API
 //      enforces, so a bad deploy_sha is refused before a request is made;
 //   3. the registered server over the SDK's in-memory transport: a real MCP
-//      client lists the four tools, calls them, and receives progress
-//      notifications while wait_for_run polls.
+//      client lists the six tools, calls them, and receives progress
+//      notifications while the blocking tools poll.
 //
 // Usage: npx tsx --tsconfig tsconfig.json scripts/verify-mcp.ts
 
@@ -24,6 +27,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { SELF_CHECK_HEADER, SELF_CHECK_READ_ONLY } from "@/lib/self-check";
+import { EPHEMERAL_REQUIRES_OWNER_CODE } from "@/lib/ephemeral";
 import {
   createTools,
   inputSchemas,
@@ -92,6 +96,117 @@ const VERDICT = {
 };
 
 const NOT_FOUND = { error: "Run not found" };
+
+// GET /api/runs/{id}/review (src/lib/review.ts buildReview). The shape a
+// coding agent acts on: findings in full, steps as walked, what was not
+// covered, and per finding the sentence that says when it is gone.
+const REVIEW = {
+  run: {
+    id: RUN_ID,
+    status: "completed",
+    verdict: "mostly_ok",
+    deploy: { sha: "78442cd", env: "production" },
+    startedAt: "2026-09-07T10:00:00.000Z",
+    completedAt: "2026-09-07T10:31:00.000Z",
+    appSlug: "checkmyapp.dev",
+  },
+  bottom_line: "The product works end to end; one form loses its draft on a slow connection.",
+  journeys: [
+    {
+      title: "Landing to first check",
+      status: "ok",
+      summary: "Reached the check form and back.",
+      steps: [
+        {
+          order: 1,
+          label: "Open the landing page",
+          attempted: "Opened checkmyapp.dev",
+          observed: "The page rendered with the check form.",
+          status: "ok",
+          unverified_reason: null,
+        },
+        {
+          order: 2,
+          label: "Submit a URL",
+          attempted: "Typed a URL and pressed Check",
+          observed: "The run page opened.",
+          status: "ok",
+          unverified_reason: null,
+        },
+      ],
+    },
+    {
+      title: "Pricing",
+      status: "partial",
+      summary: "Plans render; checkout was out of scope.",
+      steps: [
+        {
+          order: 1,
+          label: "Start checkout",
+          attempted: null,
+          observed: null,
+          status: "skipped",
+          unverified_reason: "missing_access",
+        },
+      ],
+    },
+  ],
+  findings: [
+    {
+      number: 1,
+      title: "Check form clears on a slow submit",
+      category: "risky",
+      severity: "medium",
+      mark: "on_slow_network",
+      where: "/ (the check form)",
+      what_we_tried: ["Typed a URL", "Pressed Check on a throttled connection"],
+      what_happened: "The form emptied and no run started.",
+      why_it_matters: "A visitor who tries once and sees nothing happen does not try again.",
+      evidence: [{ kind: "screenshot", url: `${BASE}/api/evidence/screenshots/abc123.png` }],
+    },
+    {
+      number: 2,
+      title: "FAQ anchor links skip the heading",
+      category: "polish",
+      severity: "low",
+      mark: null,
+      where: "/pricing#faq",
+      what_we_tried: ["Followed each FAQ anchor"],
+      what_happened: "The heading landed above the viewport.",
+      why_it_matters: "The answer opens mid-sentence.",
+      evidence: [],
+    },
+  ],
+  plan_results: [],
+  next_actions: [
+    {
+      finding: 1,
+      symptom: "The form emptied and no run started (/ (the check form))",
+      how_to_know_it_is_gone:
+        'The next check of / (the check form) shows behaviour a user can rely on instead of "The form emptied and no run started".',
+    },
+    {
+      finding: 2,
+      symptom: "The heading landed above the viewport (/pricing#faq)",
+      how_to_know_it_is_gone:
+        'The next check of /pricing#faq shows a finished, consistent state instead of "The heading landed above the viewport".',
+    },
+  ],
+  coverage: {
+    pages_not_opened: ["/dashboard", "/checks/today"],
+    unverified: [{ journey: "Pricing", step: "Start checkout", reason: "missing_access" }],
+  },
+  urls: { verdict: `${BASE}/verdict/${RUN_ID}`, live: `${BASE}/run/${RUN_ID}` },
+};
+
+// POST /api/checks, ephemeral (src/lib/ephemeral.ts).
+const EPHEMERAL_CREATED = { id: RUN_ID, ephemeral: true, expiresAt: "2026-09-14T10:00:00.000Z" };
+const EPHEMERAL_REFUSED = {
+  error:
+    "Ephemeral checks need an account: pass an API key (dashboard → API keys) or sign in. " +
+    "Anonymous checks are public and cannot be ephemeral.",
+  code: EPHEMERAL_REQUIRES_OWNER_CODE,
+};
 
 // POST /api/checks refusals (src/app/api/checks/route.ts, src/lib/plans.ts)
 const QUOTA_SITE = {
@@ -242,6 +357,31 @@ async function main() {
         String(out.hint).includes("not bound"),
       JSON.stringify(out));
   }
+  {
+    const h = harness({ apiKey: "cma_0123456789abcdef0123456789abcdef" });
+    h.answer({ status: 201, json: EPHEMERAL_CREATED });
+    const out = parse(
+      await h.tools.start_check({
+        url: "https://pr-123.preview.example.com",
+        notes: "PR #123 changed checkout",
+        deploy_sha: "78442cd",
+        ephemeral: true,
+      }),
+    );
+    const body = h.requests[0].body as Record<string, unknown>;
+    check("start_check: ephemeral true rides in the body", body.ephemeral === true, JSON.stringify(body));
+    check("start_check: the route's ephemeral confirmation and expiry come back",
+      out.ok === true && out.ephemeral === true && out.expires_at === EPHEMERAL_CREATED.expiresAt,
+      JSON.stringify(out));
+  }
+  {
+    const h = harness();
+    h.answer({ status: 201, json: { id: RUN_ID } });
+    const out = parse(await h.tools.start_check({ url: "https://checkmyapp.dev" }));
+    check("start_check: without the flag the body carries no `ephemeral`, the result says false",
+      !("ephemeral" in (h.requests[0].body as object)) && out.ephemeral === false && out.expires_at === null,
+      JSON.stringify(h.requests[0].body));
+  }
   for (const [name, fixture, status, expectCode, hintNeedle] of [
     ["429 quota_site", QUOTA_SITE, 429, "quota_site", "midnight UTC"],
     ["429 quota_anon", QUOTA_ANON, 429, "quota_anon", "CHECKMYAPP_API_KEY"],
@@ -249,6 +389,7 @@ async function main() {
     ["403 self_check_read_only", SELF_CHECK_READ_ONLY, 403, "self_check_read_only", SELF_CHECK_HEADER],
     ["403 Turnstile (today's body, no code)", TURNSTILE_TODAY, 403, "turnstile_failed", "CHECKMYAPP_API_KEY"],
     ["403 Turnstile (with code)", TURNSTILE_WITH_CODE, 403, "turnstile_failed", "CHECKMYAPP_API_KEY"],
+    ["400 ephemeral without an account", EPHEMERAL_REFUSED, 400, EPHEMERAL_REQUIRES_OWNER_CODE, "CHECKMYAPP_API_KEY"],
     ["400 validation", INVALID, 400, "invalid_input", "Fix the argument"],
   ] as const) {
     const h = harness();
@@ -410,6 +551,100 @@ async function main() {
       result.isError === true && parse(result).code === "not_found");
   }
 
+  // 5b — get_review and wait_for_review (CHE-201): the payload an agent acts on.
+  {
+    const h = harness();
+    h.answer({ status: 200, json: REVIEW });
+    const result = await h.tools.get_review({ run_id: RUN_ID });
+    const out = parse(result);
+    check("get_review: GET /api/runs/{id}/review",
+      h.requests.length === 1 && h.requests[0].url === `${BASE}/api/runs/${RUN_ID}/review`);
+    check("get_review: the whole payload passes through, nothing summarised away",
+      out.ok === true &&
+        JSON.stringify(out.run) === JSON.stringify(REVIEW.run) &&
+        out.bottom_line === REVIEW.bottom_line &&
+        JSON.stringify(out.journeys) === JSON.stringify(REVIEW.journeys) &&
+        JSON.stringify(out.findings) === JSON.stringify(REVIEW.findings) &&
+        JSON.stringify(out.plan_results) === "[]" &&
+        JSON.stringify(out.next_actions) === JSON.stringify(REVIEW.next_actions) &&
+        JSON.stringify(out.coverage) === JSON.stringify(REVIEW.coverage) &&
+        JSON.stringify(out.urls) === JSON.stringify(REVIEW.urls),
+      JSON.stringify(out));
+    // The fields the verdict does not carry are the reason this tool exists.
+    const finding = (out.findings as Array<Record<string, unknown>>)[0];
+    check("get_review: a finding keeps where / what we tried / what happened / evidence",
+      finding.where === "/ (the check form)" &&
+        (finding.what_we_tried as string[]).length === 2 &&
+        finding.what_happened === "The form emptied and no run started." &&
+        (finding.evidence as Array<{ url: string }>)[0].url.startsWith(`${BASE}/api/evidence/`),
+      JSON.stringify(finding));
+    const steps = (out.journeys as Array<{ steps: unknown[] }>)[0].steps;
+    check("get_review: journeys keep every step as walked", steps.length === 2, JSON.stringify(steps));
+  }
+  {
+    const h = harness();
+    h.answer({ status: 404, json: NOT_FOUND });
+    const result = await h.tools.get_review({ run_id: "nosuchrun" });
+    check("get_review: 404 → isError, code not_found, the API's message",
+      result.isError === true && parse(result).code === "not_found" &&
+        parse(result).error === "Run not found");
+  }
+  {
+    const h = harness();
+    h.answer(
+      { status: 200, json: runSnapshot("walking") },
+      { status: 200, json: runSnapshot("writing") },
+      { status: 200, json: runSnapshot("completed", { verdict: "mostly_ok" }) },
+      { status: 200, json: REVIEW },
+    );
+    const progress: Array<{ polls: number; status: string }> = [];
+    const out = parse(
+      await h.tools.wait_for_review({ run_id: RUN_ID }, { onProgress: (p) => { progress.push(p); } }),
+    );
+    check(`wait_for_review: wait_for_run's contract — ${WAIT_POLL_MS / 1000}s polls, a report each`,
+      h.sleeps.length === 2 && h.sleeps.every((ms) => ms === WAIT_POLL_MS) &&
+        progress.length === 2 && progress[0].status === "walking" && progress[1].status === "writing",
+      JSON.stringify({ sleeps: h.sleeps, progress }));
+    check("wait_for_review: then GET …/review, not …/verdict",
+      h.requests[3].url === `${BASE}/api/runs/${RUN_ID}/review`);
+    check("wait_for_review: a head — verdict, findings by severity, count of next actions",
+      out.ok === true && out.status === "completed" && out.verdict === "mostly_ok" &&
+        JSON.stringify(out.findings_by_severity) === JSON.stringify({ medium: 1, low: 1 }) &&
+        out.next_actions_count === 2,
+      JSON.stringify(out));
+    check("wait_for_review: and the whole review under `review`",
+      JSON.stringify(out.review) === JSON.stringify(REVIEW));
+  }
+  {
+    const h = harness();
+    // Never terminal: the cap ends it, and the answer is wait_for_run's.
+    for (let i = 0; i < 200; i++) h.answer({ status: 200, json: runSnapshot("walking") });
+    const out = parse(await h.tools.wait_for_review({ run_id: RUN_ID }));
+    check(`wait_for_review: the same ${WAIT_CAP_MS / 60_000}-minute cap, timed_out with the last status`,
+      out.timed_out === true && out.status === "walking" && out.waited_minutes === 45 &&
+        h.sleeps.length === Math.ceil(WAIT_CAP_MS / WAIT_POLL_MS),
+      JSON.stringify(out));
+  }
+  {
+    const h = harness();
+    h.answer({ status: 404, json: NOT_FOUND });
+    const result = await h.tools.wait_for_review({ run_id: "nosuchrun" });
+    check("wait_for_review: 404 → isError not_found, no polling",
+      result.isError === true && parse(result).code === "not_found" && h.sleeps.length === 0);
+  }
+  {
+    const h = harness();
+    h.answer(
+      { status: 200, json: runSnapshot("failed", { errorMessage: "internal: browser session lost" }) },
+      { status: 200, json: { ...REVIEW, run: { ...REVIEW.run, status: "failed", verdict: null }, findings: [], next_actions: [] } },
+    );
+    const out = parse(await h.tools.wait_for_review({ run_id: RUN_ID }));
+    check("wait_for_review: a failed run says it is ours, not the app's",
+      out.status === "failed" && out.verdict === null && out.next_actions_count === 0 &&
+        String(out.hint).includes("not the app"),
+      JSON.stringify(out));
+  }
+
   // 6 — input schemas: the same bounds the API enforces, refused before a request.
   {
     const s = z.object(inputSchemas.start_check);
@@ -419,6 +654,9 @@ async function main() {
     check("schema: deploy_sha with a space is refused", !s.safeParse({ url: "https://x.dev", deploy_sha: "abc 1234" }).success);
     check("schema: a bare domain is refused (the API wants a URL)", !s.safeParse({ url: "checkmyapp.dev" }).success);
     check("schema: notes over 2000 chars are refused", !s.safeParse({ url: "https://x.dev", notes: "x".repeat(2001) }).success);
+    check("schema: ephemeral is an optional boolean",
+      s.safeParse({ url: "https://x.dev", ephemeral: true }).success &&
+        !s.safeParse({ url: "https://x.dev", ephemeral: "yes" }).success);
   }
 
   // 7 — the registered server, driven by a real MCP client over an in-memory pair.
@@ -432,8 +670,16 @@ async function main() {
     await client.connect(clientTransport);
 
     const listed = (await client.listTools()).tools.map((t) => t.name).sort();
-    check("server: lists exactly the four tools",
-      JSON.stringify(listed) === JSON.stringify(["get_check_status", "get_verdict", "start_check", "wait_for_run"]),
+    check("server: lists exactly the six tools",
+      JSON.stringify(listed) ===
+        JSON.stringify([
+          "get_check_status",
+          "get_review",
+          "get_verdict",
+          "start_check",
+          "wait_for_review",
+          "wait_for_run",
+        ]),
       JSON.stringify(listed));
 
     h.answer({ status: 429, json: QUOTA_SITE });
@@ -464,6 +710,32 @@ async function main() {
       JSON.stringify(notes));
     check("server: and returns the verdict",
       waited.isError !== true && waitedOut.verdict === "mostly_ok" && waitedOut.cost_usd === 0.83);
+
+    h.answer({ status: 200, json: REVIEW });
+    const reviewed = await client.callTool({ name: "get_review", arguments: { run_id: RUN_ID } });
+    const reviewedOut = parse(reviewed as ToolResult);
+    check("server: get_review reaches the client with the findings and next actions intact",
+      reviewed.isError !== true &&
+        JSON.stringify(reviewedOut.findings) === JSON.stringify(REVIEW.findings) &&
+        JSON.stringify(reviewedOut.next_actions) === JSON.stringify(REVIEW.next_actions),
+      JSON.stringify(reviewedOut).slice(0, 200));
+
+    h.answer(
+      { status: 200, json: runSnapshot("walking") },
+      { status: 200, json: runSnapshot("completed", { verdict: "mostly_ok" }) },
+      { status: 200, json: REVIEW },
+    );
+    const reviewNotes: string[] = [];
+    const waitedReview = await client.callTool(
+      { name: "wait_for_review", arguments: { run_id: RUN_ID } },
+      undefined,
+      { onprogress: (p) => { reviewNotes.push(`${p.progress}:${p.message ?? ""}`); }, resetTimeoutOnProgress: true },
+    );
+    const waitedReviewOut = parse(waitedReview as ToolResult);
+    check("server: wait_for_review notifies progress too, and returns the review",
+      reviewNotes.length === 1 && reviewNotes[0].startsWith("1:walking") &&
+        waitedReview.isError !== true && waitedReviewOut.next_actions_count === 2,
+      JSON.stringify({ reviewNotes, head: waitedReviewOut.findings_by_severity }));
 
     await client.close();
     await server.close();

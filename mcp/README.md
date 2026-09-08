@@ -39,13 +39,15 @@ own private runs when the key is set.
 ## Tools
 
 - **`start_check`** `{url, notes?, scope_hints?, notify_email?, deploy_sha?,
-  deploy_env?}` — start a production check of a deployed app. Returns
-  `run_id`, `reused`, `deploy`, `live_url`, `verdict_url`. A full check takes
-  ~20–40 minutes. Use `notes` to focus the run on what just shipped, and
-  `deploy_sha` to bind the run to the build it verifies (see
-  [Deploy identity](#deploy-identity)). `reused: true` means an anonymous
-  submission of a domain with a fresh verdict got that verdict instead of a
-  new run — it is not bound to your `deploy_sha`.
+  deploy_env?, ephemeral?}` — start a production check of a deployed app.
+  Returns `run_id`, `reused`, `deploy`, `ephemeral`, `expires_at`, `live_url`,
+  `verdict_url`. A full check takes ~20–40 minutes. Use `notes` to focus the
+  run on what just shipped, and `deploy_sha` to bind the run to the build it
+  verifies (see [Deploy identity](#deploy-identity)). `reused: true` means an
+  anonymous submission of a domain with a fresh verdict got that verdict
+  instead of a new run — it is not bound to your `deploy_sha`. `ephemeral:
+  true` is the flag for a throwaway hostname; see
+  [Ephemeral runs](#ephemeral-runs-pr-previews).
 - **`wait_for_run`** `{run_id}` — block until the run is terminal (polls every
   30s, 45-minute cap), then return the verdict, bottom line, findings summary
   (`[severity/category] title`), `findings_by_severity`, `cost_usd`, the
@@ -60,8 +62,56 @@ own private runs when the key is set.
   journeys, findings with title/category/severity, `cost_usd`, `deploy`).
   Accepts a run id or a domain/URL; a domain resolves to its latest completed
   run via `/api/checks/lookup` (with an API key, your own runs are included).
+- **`get_review`** `{run_id}` — the result in the shape you act on. This is
+  the tool for an agent that is going to fix what the check found; see
+  [The review](#the-review) for the payload.
+- **`wait_for_review`** `{run_id}` — `wait_for_run`'s contract with the review
+  as the answer: same 30s polls, same 45-minute cap, same progress
+  notifications, same `timed_out: true` on the cap. Returns a head — `verdict`,
+  `findings_by_severity`, `next_actions_count`, `status`, `error` — with the
+  whole review under `review`.
 
 Every successful result carries `ok: true`.
+
+## The review
+
+`get_verdict` answers *is the deploy fine?* — a verdict, a bottom line, finding
+titles. `get_review` answers *what do I do about it?*, and returns
+`GET /api/runs/{id}/review` whole:
+
+| Field | What it holds |
+|-------|---------------|
+| `run` | `{id, status, verdict, deploy, startedAt, completedAt, appSlug}` |
+| `bottom_line` | The verdict in a sentence |
+| `journeys[]` | `{title, status, summary, steps[]}` — every step as walked: `order`, `label`, `attempted`, `observed`, `status`, `unverified_reason` |
+| `findings[]` | `{number, title, category, severity, where, what_we_tried[], what_happened, why_it_matters, evidence[]}`; evidence URLs are absolute |
+| `plan_results` | Always `[]` today; reserved for the plan-driven check |
+| `next_actions[]` | `{finding, symptom, how_to_know_it_is_gone}` — per finding, the sentence the next check must be able to say |
+| `coverage` | `{pages_not_opened[], unverified[]}` — what this run did **not** establish |
+| `urls` | `{verdict, live}` |
+
+Two habits make it useful. Act on `next_actions`: each one names the symptom
+and the sentence that means it is gone, and deliberately names no file, cause
+or fix — what to change is yours to decide. And read `coverage` before you call
+a deploy clean: a page nobody opened is not a page that works.
+
+## Ephemeral runs (PR previews)
+
+`start_check{ ephemeral: true }` is for a hostname that will not outlive the
+pull request. The run then:
+
+- **needs the owner API key.** An anonymous request for one is refused with
+  `400` and code `ephemeral_requires_owner`, never quietly downgraded into a
+  public check of a preview URL;
+- **stays private.** It is attributed to the key's owner and is not listed on
+  `/checks/today`;
+- **creates no app.** Nothing is kept for the hostname — no watch, no ticket
+  history, no exported specs;
+- **is deleted after about 7 days.** The response carries `expires_at`, so a CI
+  log can record the date.
+
+Everything else is an ordinary run: same quota, same tools, same verdict and
+review.
 
 ## Refusals and error codes
 
@@ -80,6 +130,7 @@ a JSON body:
 | `quota_free`           | 429  | The Free plan's lifetime runs are used | Upgrade in the dashboard, or enable Daily Watch on an already-checked app. Do not retry |
 | `turnstile_failed`     | 403  | Anonymous submission without a browser Turnstile token (always, in production) | Set `CHECKMYAPP_API_KEY` |
 | `self_check_read_only` | 403  | The request carried `x-checkmyapp-checker: 1`, the header of CheckMyApp's own checker; such requests never create anything | This server never sends it; something in between added it |
+| `ephemeral_requires_owner` | 400 | `ephemeral: true` from a caller with no account | Set `CHECKMYAPP_API_KEY`, or drop the flag (an anonymous check is public and is kept) |
 | `invalid_input`        | 400  | The API rejected an argument (the message names it) | Fix the argument |
 | `unauthorized`         | 401/403 | Key not accepted, or not the owner of the run | Check the key |
 | `not_found`            | 404  | No run with this id | Use the `run_id` from `start_check` |
@@ -93,8 +144,9 @@ production; with a key on a paid plan none of them apply.
 ## Long waits
 
 A full check runs 20–40 minutes; the MCP SDK's default request timeout is 60
-seconds. `wait_for_run` therefore sends a `notifications/progress` on every
-poll (once per 30s) when the client passes a progress token. Clients that
+seconds. `wait_for_run` and `wait_for_review` therefore send a
+`notifications/progress` on every poll (once per 30s) when the client passes a
+progress token. Clients that
 reset the request timeout on progress (the TypeScript SDK's
 `resetTimeoutOnProgress: true`, plus a `maxTotalTimeout` of about 50 minutes)
 can block for the whole run in one call; Claude Code does this on its own.
@@ -122,6 +174,36 @@ For Claude Code specifically, a post-deploy hook prompt can be as small as:
 > Deploy is out. Use the checkmyapp MCP: start_check on $DEPLOY_URL with notes
 > about what this PR changed, then wait_for_run. If the verdict is worse than
 > mostly_ok, summarize the findings and file one ticket per critical finding.
+
+## App review on a PR preview
+
+The loop for a pull request: check the preview deploy, then work from the
+review instead of the verdict.
+
+```
+1. preview is up → agent calls
+   start_check{ url: "https://pr-123.preview.example.com",
+                notes: "PR #123 rewrote the checkout form — verify checkout first",
+                ephemeral: true,
+                deploy_sha: "<the PR head sha>", deploy_env: "preview" }
+2. wait_for_review{ run_id }     # blocks ≤45 min, returns the review
+3. work the `next_actions`: each names a symptom and the sentence that says
+   when it is gone. Fix, push, and start_check the new preview to prove it.
+   Read `coverage` before calling the PR clean — `pages_not_opened` and
+   `unverified` are what this run did not establish.
+```
+
+Needs `CHECKMYAPP_API_KEY`: `ephemeral` is refused without an account. The run
+is private, no app is kept for the preview hostname, and it is deleted after
+about 7 days — so a repo that opens twenty pull requests a week accumulates
+nothing.
+
+As a Claude Code prompt:
+
+> Use the checkmyapp MCP. `start_check` on the preview URL with
+> `ephemeral: true`, `deploy_sha: $PR_HEAD_SHA`, and notes describing what this
+> PR changed. Then `wait_for_review`. Fix what `next_actions` names, and say
+> what `coverage` shows we did not establish.
 
 ## Deploy identity
 
@@ -226,10 +308,11 @@ finishing, not your app being broken; the result says so.
 ## Verifying the server
 
 - `npm run verify:mcp` — the contract test. Stubs `fetch` with answers shaped
-  exactly like today's routes (201, 200 `reused`, 429 `quota_*`, 403
-  `self_check_read_only`, 403 Turnstile, 400, 404, lookup found / not found),
-  checks every tool's result, the input schema bounds, and drives the
-  registered server through a real MCP client over an in-memory transport
+  exactly like today's routes (201, 201 ephemeral, 200 `reused`, 429
+  `quota_*`, 403 `self_check_read_only`, 403 Turnstile, 400
+  `ephemeral_requires_owner`, 400, 404, review found / not found, lookup found
+  / not found), checks every tool's result, the input schema bounds, and drives
+  the registered server through a real MCP client over an in-memory transport
   (tool list, refusal codes, progress notifications). No network; part of
   `verify:all` and CI.
 - `npm run mcp:smoke` — the live smoke. Spawns `mcp/server.ts` over stdio as
@@ -245,10 +328,14 @@ finishing, not your app being broken; the result says so.
 
 The same API is curl-able:
 
-- `POST /api/checks` with `Authorization: Bearer cma_…` — `201 {id}`; a
-  refusal is `429 {error, code}` or `403 {error, code}` as in the table above.
+- `POST /api/checks` with `Authorization: Bearer cma_…` — `201 {id}`, or
+  `201 {id, ephemeral: true, expiresAt}` when the body carries
+  `"ephemeral": true`; a refusal is `429 {error, code}`, `403 {error, code}` or
+  `400 {error, code}` as in the table above.
 - `GET /api/runs/{id}` — status and live events; `404 {error}`.
 - `GET /api/runs/{id}/verdict` — the structured verdict; `404 {error}`.
+- `GET /api/runs/{id}/review` — the review, as `get_review` returns it;
+  `404 {error}`. No key needed: the unguessable run id is the capability.
 - `GET /api/checks/lookup?url=…` — `{found: false}` or `{found: true, run,
   stale, ageDays, …}`.
 - `POST /api/runs/{id}/recheck` — re-run with the same parameters (`201

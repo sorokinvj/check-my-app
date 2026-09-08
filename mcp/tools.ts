@@ -6,14 +6,18 @@
 // `deps`, so the contract can be verified without a network and without
 // waiting 30 seconds per poll.
 //
-// Contract with the API (CHE-200, 2026-09-07 — the routes this mirrors):
-//   POST /api/checks                201 {id} | 200 {id, reused: true} (anonymous,
-//                                   fresh verdict exists) | 400 {error} |
+// Contract with the API (CHE-200/201/202, 2026-09-08 — the routes this mirrors):
+//   POST /api/checks                201 {id} | 201 {id, ephemeral: true, expiresAt} |
+//                                   200 {id, reused: true} (anonymous, fresh verdict
+//                                   exists) | 400 {error} |
+//                                   400 {error, code: "ephemeral_requires_owner"} |
 //                                   403 {error} (Turnstile, anonymous only) |
 //                                   403 {error, code: "self_check_read_only"} |
 //                                   429 {error, code: quota_site|quota_anon|quota_free}
 //   GET  /api/runs/{id}             200 {publicId, status, verdict, events, errorMessage, …} | 404 {error}
 //   GET  /api/runs/{id}/verdict     200 {verdict, deploy, bottom_line, journeys, findings, cost_usd, …} | 404 {error}
+//   GET  /api/runs/{id}/review      200 {run, bottom_line, journeys, findings, plan_results,
+//                                   next_actions, coverage, urls} | 404 {error}
 //   GET  /api/checks/lookup?url=…   200 {found: false} | {found: true, run: {publicId, …}, stale, ageDays, …}
 //
 // A refusal is never thrown: it comes back as a tool result with `isError`
@@ -53,6 +57,7 @@ export type FailureCode =
   | "quota_free"
   | "self_check_read_only"
   | "turnstile_failed"
+  | "ephemeral_requires_owner"
   | "invalid_input"
   | "unauthorized"
   | "not_found"
@@ -95,6 +100,13 @@ export const inputSchemas = {
       .max(40)
       .optional()
       .describe("Environment the deploy landed in, e.g. production or staging"),
+    ephemeral: z
+      .boolean()
+      .optional()
+      .describe(
+        "For a throwaway hostname (a PR preview): the run is private, no app is kept for the " +
+          "hostname, and it is deleted after about 7 days. Needs an API key",
+      ),
   },
   get_check_status: {
     run_id: z.string().describe("Run id returned by start_check"),
@@ -107,6 +119,12 @@ export const inputSchemas = {
       .string()
       .describe("Run id from start_check, or a domain/URL (e.g. your-app.com) for its latest run"),
   },
+  get_review: {
+    run_id: z.string().describe("Run id returned by start_check"),
+  },
+  wait_for_review: {
+    run_id: z.string().describe("Run id returned by start_check"),
+  },
 };
 
 export type StartCheckArgs = {
@@ -116,6 +134,7 @@ export type StartCheckArgs = {
   notify_email?: string;
   deploy_sha?: string;
   deploy_env?: string;
+  ephemeral?: boolean;
 };
 
 export interface WaitProgress {
@@ -144,6 +163,16 @@ interface VerdictPayload {
   findings?: Array<{ title: string; category: string; severity: string }>;
   deploy?: { sha: string; env: string | null } | null;
   cost_usd?: number | null;
+  [key: string]: unknown;
+}
+
+// GET /api/runs/{id}/review (src/lib/review.ts). Structurally typed only where
+// the head of wait_for_review reads it; everything else passes through whole,
+// so a field the route adds later reaches the agent without a change here.
+interface ReviewPayload {
+  run?: { id?: string; status?: string; verdict?: string | null } | null;
+  findings?: Array<{ severity: string }>;
+  next_actions?: unknown[];
   [key: string]: unknown;
 }
 
@@ -193,6 +222,12 @@ export function createTools(deps: ToolDeps) {
           "Anonymous submissions need a browser proof-of-human token, which a machine caller " +
           "cannot produce. Set CHECKMYAPP_API_KEY (dashboard → API keys): key-authenticated " +
           "callers are exempt."
+        );
+      case "ephemeral_requires_owner":
+        return (
+          "An ephemeral check belongs to an account: it is private, and only its owner can " +
+          "have it deleted at the end of its life. Set CHECKMYAPP_API_KEY (dashboard → API " +
+          "keys), or drop `ephemeral` — an anonymous check is public and is kept."
         );
       case "not_found":
         return "No run with this id. Use the run_id start_check returned; get_verdict also accepts a domain.";
@@ -277,9 +312,60 @@ export function createTools(deps: ToolDeps) {
   const isTerminal = (status: string) =>
     (TERMINAL_STATUSES as readonly string[]).includes(status);
 
+  // The wait both blocking tools share: poll until the run is terminal, the
+  // client cancels, or the cap is reached. `done: false` carries the result to
+  // return as-is — a refusal from the API, or the timed_out answer — so the
+  // two tools differ only in what they fetch once the run has stopped.
+  type PollOutcome = { done: true; run: RunSnapshot } | { done: false; result: ToolResult };
+
+  async function pollToTerminal(run_id: string, opts: WaitOptions): Promise<PollOutcome> {
+    const startedAt = deps.now();
+    let polls = 0;
+    let run = await getRun(run_id);
+    if (isResult(run)) return { done: false, result: run };
+    while (!isTerminal(run.status) && deps.now() - startedAt < WAIT_CAP_MS) {
+      if (opts.signal?.aborted) break;
+      polls++;
+      await opts.onProgress?.({
+        polls,
+        status: run.status,
+        elapsed_s: Math.round((deps.now() - startedAt) / 1000),
+      });
+      await deps.sleep(WAIT_POLL_MS);
+      const next = await getRun(run_id);
+      if (isResult(next)) return { done: false, result: next };
+      run = next;
+    }
+    if (isTerminal(run.status)) return { done: true, run };
+    return {
+      done: false,
+      result: text({
+        ok: true,
+        timed_out: true,
+        waited_minutes: Math.round((deps.now() - startedAt) / 60_000),
+        status: run.status,
+        hint:
+          "Run still in progress — call this tool again, or poll get_check_status. " +
+          "A full check takes ~20–40 minutes.",
+        live_url: `${base}/run/${run_id}`,
+      }),
+    };
+  }
+
+  // The failed-run note both blocking tools append: a run that did not finish
+  // is CheckMyApp not finishing, and says nothing about the app (§4).
+  const failedRunHint = (status: string) =>
+    status === "failed"
+      ? {
+          hint:
+            "A failed run is CheckMyApp not finishing, not the app being broken. " +
+            "No verdict was published; start another check.",
+        }
+      : {};
+
   return {
     async start_check(args: StartCheckArgs): Promise<ToolResult> {
-      const { url, notes, scope_hints, notify_email, deploy_sha, deploy_env } = args;
+      const { url, notes, scope_hints, notify_email, deploy_sha, deploy_env, ephemeral } = args;
       const res = await api(`/api/checks`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -290,10 +376,19 @@ export function createTools(deps: ToolDeps) {
           notifyEmail: notify_email,
           // Omitted entirely without a sha: `env` alone identifies no build.
           deploy: deploy_sha ? { sha: deploy_sha, env: deploy_env } : undefined,
+          // Omitted when not asked for, so the body a plain check sends is
+          // unchanged; `false` and absent mean the same thing to the route.
+          ephemeral: ephemeral ? true : undefined,
         }),
       });
       if (!res.ok) return failure(res);
-      const { id, reused } = (await res.json()) as { id: string; reused?: boolean };
+      const body = (await res.json()) as {
+        id: string;
+        reused?: boolean;
+        ephemeral?: boolean;
+        expiresAt?: string;
+      };
+      const { id, reused } = body;
       const deploy = deploy_sha ? { sha: deploy_sha, env: deploy_env ?? null } : null;
       return text({
         ok: true,
@@ -303,13 +398,18 @@ export function createTools(deps: ToolDeps) {
         // to deploy_sha and describes whatever was deployed when it ran.
         reused: reused === true,
         deploy: reused ? null : deploy,
+        // The route confirms an ephemeral run and dates it. Echoed rather than
+        // assumed from the argument: what the API decided is what is true.
+        ephemeral: body.ephemeral === true,
+        expires_at: body.expiresAt ?? null,
         live_url: `${base}/run/${id}`,
         verdict_url: `${base}/verdict/${id}`,
         hint: reused
           ? "An existing recent verdict for this domain was returned instead of a new run " +
             "(anonymous callers only). It is not bound to your deploy_sha; set CHECKMYAPP_API_KEY " +
             "for a fresh, attributed run."
-          : "Call wait_for_run to block until the verdict, or poll get_check_status.",
+          : "Call wait_for_review to block until the result a fix can be made from, " +
+            "wait_for_run for the verdict alone, or poll get_check_status.",
       });
     },
 
@@ -332,36 +432,9 @@ export function createTools(deps: ToolDeps) {
 
     async wait_for_run(args: { run_id: string }, opts: WaitOptions = {}): Promise<ToolResult> {
       const { run_id } = args;
-      const startedAt = deps.now();
-      let polls = 0;
-      let run = await getRun(run_id);
-      if (isResult(run)) return run;
-      while (!isTerminal(run.status) && deps.now() - startedAt < WAIT_CAP_MS) {
-        if (opts.signal?.aborted) break;
-        polls++;
-        await opts.onProgress?.({
-          polls,
-          status: run.status,
-          elapsed_s: Math.round((deps.now() - startedAt) / 1000),
-        });
-        await deps.sleep(WAIT_POLL_MS);
-        const next = await getRun(run_id);
-        if (isResult(next)) return next;
-        run = next;
-      }
-
-      if (!isTerminal(run.status)) {
-        return text({
-          ok: true,
-          timed_out: true,
-          waited_minutes: Math.round((deps.now() - startedAt) / 60_000),
-          status: run.status,
-          hint:
-            "Run still in progress — call wait_for_run again, or poll get_check_status. " +
-            "A full check takes ~20–40 minutes.",
-          live_url: `${base}/run/${run_id}`,
-        });
-      }
+      const outcome = await pollToTerminal(run_id, opts);
+      if (!outcome.done) return outcome.result;
+      const run = outcome.run;
 
       // Terminal: the structured verdict with a findings roll-up.
       const res = await api(`/api/runs/${encodeURIComponent(run_id)}/verdict`);
@@ -385,13 +458,7 @@ export function createTools(deps: ToolDeps) {
         cost_usd: verdict.cost_usd ?? null,
         error: run.errorMessage ?? null,
         verdict_url: `${base}/verdict/${run_id}`,
-        ...(run.status === "failed"
-          ? {
-              hint:
-                "A failed run is CheckMyApp not finishing, not the app being broken. " +
-                "No verdict was published; start another check.",
-            }
-          : {}),
+        ...failedRunHint(run.status),
       });
     },
 
@@ -402,6 +469,47 @@ export function createTools(deps: ToolDeps) {
       if (!res.ok) return failure(res);
       const payload = (await res.json()) as VerdictPayload;
       return text({ ok: true, run_id, ...payload, verdict_url: `${base}/verdict/${run_id}` });
+    },
+
+    // The review, whole. Nothing is summarised or dropped on the way through:
+    // an agent that is going to fix something needs each finding's where /
+    // what we tried / what happened / evidence, every step as walked, and what
+    // was not covered — the fields the verdict deliberately leaves out.
+    async get_review(args: { run_id: string }): Promise<ToolResult> {
+      const res = await api(`/api/runs/${encodeURIComponent(args.run_id)}/review`);
+      if (!res.ok) return failure(res);
+      const payload = (await res.json()) as ReviewPayload;
+      return text({ ok: true, ...payload });
+    },
+
+    // wait_for_run's contract, with the review as the answer: same 30s poll,
+    // same 45-minute cap, same progress notifications.
+    async wait_for_review(args: { run_id: string }, opts: WaitOptions = {}): Promise<ToolResult> {
+      const { run_id } = args;
+      const outcome = await pollToTerminal(run_id, opts);
+      if (!outcome.done) return outcome.result;
+      const run = outcome.run;
+
+      const res = await api(`/api/runs/${encodeURIComponent(run_id)}/review`);
+      if (!res.ok) return failure(res);
+      const review = (await res.json()) as ReviewPayload;
+
+      const bySeverity: Record<string, number> = {};
+      for (const f of review.findings ?? []) bySeverity[f.severity] = (bySeverity[f.severity] ?? 0) + 1;
+      // A head first — verdict, how many findings and of what weight, how many
+      // next actions — so a client that reads only the top of a long result
+      // still knows whether to act. `review` is the payload untouched.
+      return text({
+        ok: true,
+        run_id,
+        status: run.status,
+        verdict: review.run?.verdict ?? run.verdict,
+        findings_by_severity: bySeverity,
+        next_actions_count: (review.next_actions ?? []).length,
+        error: run.errorMessage ?? null,
+        review,
+        ...failedRunHint(run.status),
+      });
     },
   };
 }
