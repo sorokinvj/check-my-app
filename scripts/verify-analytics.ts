@@ -275,11 +275,24 @@ const silentServer = SERVER_ANALYTICS_EVENTS.filter((n) => !serverCalls.has(n));
 check("every server catalogue event has a call site", silentServer.length === 0, `uncalled: ${silentServer.join(", ")}`);
 for (const [name, files] of [...clientCalls, ...serverCalls]) console.log(`      ${name} ← ${[...new Set(files)].join(", ")}`);
 
-// The three inputs that hold what a customer typed for us carry the class
-// the SDK and guardEvent both honour.
+// Everything a customer types for us lives in one panel of the check form:
+// the test login, the free-text notes about their product, the notify e-mail.
+// Every field in that panel carries the class the SDK and guardEvent both
+// honour — counting them was not enough, because a fourth field was added
+// without the class and the count still passed (CHE-217).
 const form = readFileSync(join(process.cwd(), "src/components/submit-form.tsx"), "utf8");
-const noCapture = (form.match(/className="ph-no-capture"/g) ?? []).length;
-check("the test e-mail, password and notify e-mail inputs carry ph-no-capture", noCapture >= 3, `${noCapture} inputs`);
+const panelStart = form.indexOf("{expanded && (");
+const panelEnd = form.indexOf("\n      )}", panelStart);
+check("the check form still has an 'Add login & notes' panel", panelStart !== -1 && panelEnd > panelStart);
+const panel = form.slice(panelStart, panelEnd);
+const fields = [...panel.matchAll(/<(Input|Textarea|textarea|input)\b[\s\S]*?\/>/g)].map((m) => m[0]);
+check("the panel holds the fields a customer types into", fields.length >= 4, `${fields.length} fields`);
+const unmasked = fields.filter((f) => !/className="[^"]*\bph-no-capture\b/.test(f));
+check(
+  "every field in that panel carries ph-no-capture",
+  unmasked.length === 0,
+  unmasked.map((f) => f.split("\n")[1]?.trim() ?? f.slice(0, 60)).join(" | "),
+);
 
 // ─── Cookie → distinct id ───────────────────────────────────────────────────
 
