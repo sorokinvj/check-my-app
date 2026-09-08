@@ -47,7 +47,7 @@ import { autoFileFindings } from "./autofile";
 import { fileCapabilityGaps } from "./capability-gaps";
 import { auditCreatedResources } from "./cleanup";
 import { reconcileIssueLinks, reverifyInstructions, verifyFixedLinks } from "./reconcile";
-import { sendVerdictReady } from "@/lib/email";
+import { notifyVerdictReady } from "./notify-verdict";
 import { deliverWebhook, type RunCompletedPayload } from "@/lib/notify/webhook";
 import { deliverSlack } from "@/lib/notify/slack";
 import { decryptSecret } from "@/lib/crypto";
@@ -1017,62 +1017,9 @@ function modeEvents(
 }
 
 // ─── Verdict-ready notification ──────────────────────────────────────────────
-// Shared by the full run and the replay-first pass. Non-fatal by construction:
-// a notification failure must never fail a completed run.
-
-async function notifyVerdictReady(
-  env: AgentEnv,
-  bindings: AgentBindings,
-  run: {
-    publicId: string;
-    appSlug: string;
-    notifyEmail: string | null;
-    watchId: string | null;
-    baselineRunId: string | null;
-  },
-  verdict: Verdict | null,
-): Promise<void> {
-  if (!run.notifyEmail) return;
-  // CHE-105: self-checks are silent. A run owned by the test account exists so
-  // CheckMyApp can check itself; the person running the business must be able
-  // to forget it exists. Its results live in that account's dashboard, where
-  // they can be looked at deliberately — they never arrive in anyone's inbox.
-  if (await ownedByTestAccount(env, run.publicId)) {
-    console.log(`[notify] run ${run.publicId} belongs to a test account — staying silent`);
-    return;
-  }
-  if (run.watchId && !(await watchWantsNotice(env, run.watchId, run.baselineRunId, verdict))) {
-    return;
-  }
-  // CHE-96: carry the answer into the mail. Read back rather than threaded
-  // through, because both callers (smoke shortcut and full run) reach here at
-  // different points, and the row is the single source of truth by now.
-  const written = await env.db.run.findUnique({
-    where: { publicId: run.publicId },
-    select: {
-      bottomLine: true,
-      findings: { select: { category: true }, where: { mark: { not: "false_positive" } } },
-    },
-  });
-  const findings = written?.findings ?? [];
-  await sendVerdictReady({
-    to: run.notifyEmail,
-    appSlug: run.appSlug,
-    publicId: run.publicId,
-    verdict,
-    recurring: Boolean(run.watchId),
-    bottomLine: written?.bottomLine ?? null,
-    findingCounts: {
-      total: findings.length,
-      broken: findings.filter((f) => f.category === "broken" || f.category === "exposed").length,
-    },
-    apiKey: bindings.EMAIL_API_KEY,
-    from: bindings.EMAIL_FROM,
-    baseUrl: bindings.APP_URL,
-  }).catch((err) => {
-    console.warn(`[notify] verdict email failed: ${err instanceof Error ? err.message : err}`);
-  });
-}
+// notifyVerdictReady, its silence gate and the watch-notice rule live in
+// ./notify-verdict.ts (CHE-156) — that file has no `cloudflare:workers` import,
+// so scripts/verify-self-check-silence.ts can drive the real function.
 
 // ─── Verdict integrity (CHE-42) ──────────────────────────────────────────────
 // Two rules the synthesis prompt asks for and this code then enforces, because
@@ -1151,38 +1098,6 @@ function surveyedUrls(survey: SurveyOutcome | null | undefined): string[] {
 function sentence(text: string): string {
   const trimmed = text.trim();
   return /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
-}
-
-// ─── Watch notifications (CHE-41) ────────────────────────────────────────────
-// notifyOnChangeOnly means the owner only wants to hear from a recurring watch
-// when something moved: the verdict differs from the baseline this run was
-// diffed against. No baseline = first run of the watch = always worth sending.
-
-async function ownedByTestAccount(env: AgentEnv, publicId: string): Promise<boolean> {
-  const row = await env.db.run.findUnique({
-    where: { publicId },
-    select: { owner: { select: { isTestAccount: true } } },
-  });
-  return Boolean(row?.owner?.isTestAccount);
-}
-
-async function watchWantsNotice(
-  env: AgentEnv,
-  watchId: string,
-  baselineRunId: string | null,
-  verdict: string | null,
-): Promise<boolean> {
-  const watch = await env.db.watch.findUnique({
-    where: { id: watchId },
-    select: { notifyOnChangeOnly: true },
-  });
-  if (!watch?.notifyOnChangeOnly) return true;
-  if (!baselineRunId) return true;
-  const baseline = await env.db.run.findUnique({
-    where: { id: baselineRunId },
-    select: { verdict: true },
-  });
-  return !baseline || baseline.verdict !== verdict;
 }
 
 // ─── Outbound integrations (CHE-53) ──────────────────────────────────────────

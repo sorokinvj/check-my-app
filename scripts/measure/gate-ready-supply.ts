@@ -58,6 +58,15 @@
 // sample. The number is an observation of two apps, not an estimate of a fleet,
 // and a recount that adds a third app changes what it is measuring.
 //
+// RULE CHANGE, 2026-09-08 (CHE-156): "our own product" stopped being the string
+// "checkmyapp.dev" and became isSelfHost() — the predicate the notify gate and
+// the accuracy page read, so a subdomain or a SELF_CHECK_HOSTS preview host
+// cannot be counted as a customer. Per the paragraph above, the OLD window was
+// re-run: 2026-08-04 → 2026-09-04 classifies identically, 181 customer findings
+// either way (confirmed against a hand-written slug-excluding D1 query, also
+// 181), and checkmyapp.dev stays on its own row at 26 runs / 63 findings. So the
+// rule changed and the number did not — nothing here is a business movement.
+//
 // ─── What counts as gate-ready ───────────────────────────────────────────────
 //
 // A gate-ready finding is one whose outcome a machine can settle on its own:
@@ -96,6 +105,7 @@
 // one ticket, not ten, and the supply question is about tickets.
 
 import { execFileSync } from "node:child_process";
+import { isSelfHost } from "../../src/agent/self-hosts";
 import { requestSignature } from "../../src/lib/dedup";
 import { dedupKeyForFinding } from "../../src/lib/tracker/file";
 import { parseJson } from "../../src/lib/json";
@@ -134,7 +144,13 @@ for (const [name, value] of [["--since", SINCE], ["--until", UNTIL]] as const) {
 const PLACEHOLDER = /^(example\.com|your-app\.com|.*\.example\.com|test-app-.*)$/;
 // Our own product. Findings here are real, but they are findings about
 // CheckMyApp by CheckMyApp and must never be averaged in with customer supply.
-const OURS = "checkmyapp.dev";
+// CHE-156: the baseline below was produced by excluding the slug by hand, which
+// is exactly the failure the ticket names — the answer to "is this ours" now
+// comes from isSelfHost (src/agent/self-hosts.ts), the same predicate the
+// silence gate and the accuracy page read, so a subdomain or a SELF_CHECK_HOSTS
+// preview host cannot slip into the customer number. Set SELF_CHECK_HOSTS in the
+// environment to count a preview host as ours here too.
+const ours = (appSlug: string) => isSelfHost(appSlug, process.env.SELF_CHECK_HOSTS);
 
 // ─── D1 access (read-only) ───────────────────────────────────────────────────
 
@@ -246,7 +262,7 @@ const suppressed = new Set<string>([
 type Bucket = "customer" | "ours" | "excluded";
 
 function bucket(appSlug: string, ownerId: string | null): Bucket {
-  if (appSlug === OURS) return "ours";
+  if (ours(appSlug)) return "ours";
   if (PLACEHOLDER.test(appSlug)) return "excluded";
   if (ownerId && testAccounts.has(ownerId)) return "excluded";
   return "customer";
