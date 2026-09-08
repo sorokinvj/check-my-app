@@ -28,7 +28,9 @@ import {
   EXPOSED_NO_EVIDENCE,
   NO_INTERACTION_RECORDED,
   claimedHands,
+  cutNullEffectClauses,
   cutUndrivenClaims,
+  handsInText,
   distinctiveTokens,
   drivenControls,
   gateFindings,
@@ -606,6 +608,51 @@ function main() {
     check("a product failure with no claim about our hands is untouched", cutUndrivenClaims(product, trail).text === product);
     const onlyClaim = cutUndrivenClaims("The Buy button did nothing when pressed.", trail);
     check("a text that was only the claim comes back null", onlyClaim.text === null && onlyClaim.cut.length === 1, onlyClaim.text ?? "null");
+  }
+
+  // ─── What the retro sweep found in stored prod text ────────────────────────
+  //
+  // Both of these came out of the first dry run of sweep-undriven-claims.ts
+  // over production, and both were defects in the rule rather than in the data.
+
+  // 24 — a sentence that says the interaction WORKED is not a claim that it
+  // produced nothing. Run #158 stored a success narrated with the stumble
+  // before it, and the timeout phrasing fired on it.
+  {
+    const succeeded =
+      "The field accepted the text (a CSS-selector fill first timed out during hydration, but the placeholder-targeted fill succeeded).";
+    check("a success narrated with its stumble is not a claim", handsInText(succeeded).length === 0, JSON.stringify(handsInText(succeeded)));
+    check("…and the cut leaves it alone", cutNullEffectClauses(succeeded).text === succeeded);
+    // But a real claim in the same shape still counts, and a success elsewhere
+    // in the sentence does not excuse it — run #159's finding contrasted its
+    // own failure with the sign-in box accepting input normally.
+    const contrast =
+      "The input attempt did not take — we could not enter text here, whereas the sign-in email field accepted input normally in the same run.";
+    check("a claim contrasted with another control's success is still a claim", handsInText(contrast).includes("fill"));
+    check("'did not accept input' is not read as a success", handsInText("The field did not accept input.").includes("fill"));
+  }
+
+  // 25 — a dependent clause cannot be promoted to a sentence. The first sweep
+  // would have published "the very field paying customers use to hand you test
+  // logins." on run #159's verdict page, and "but the placeholder-targeted
+  // fill succeeded)" on a step.
+  {
+    const bottomLineShape =
+      "The credential/notes field on /check would not accept input this run — the very field paying customers use to hand you test logins.";
+    const r = cutNullEffectClauses(bottomLineShape);
+    check(
+      "a lower-case continuation is not promoted to a sentence",
+      r.text === null,
+      r.text ?? "(null)",
+    );
+    const brackets = cutNullEffectClauses("Clicking it did nothing (0 requests, no DOM change).");
+    check("an unbalanced bracket fragment is not published", brackets.text === null, brackets.text ?? "(null)");
+    // The clause that DID open its sentence still survives, which is the whole
+    // point of cutting at clause level.
+    check(
+      "the opening clause still survives",
+      cutNullEffectClauses("The field is present but the input attempt did not take.").text === "The field is present.",
+    );
   }
 
   console.log(failures ? `\n${failures} check(s) FAILED` : "\nall checks passed");

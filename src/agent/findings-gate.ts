@@ -248,9 +248,38 @@ export function claimedHands(f: SynthesizedFinding): ClaimedHand[] {
 // of a journey summary (CHE-219). One idea, two entry points: a second notion
 // of "we pressed this" would drift from the first the week after it was
 // written.
+// Where a sentence carries the claim and the observation together, judging or
+// cutting the whole sentence throws away what we did see. Run #159's step read
+// "The field is present but the input attempt did not take" — one sentence,
+// two halves, and only the second is about us. CLAUSE_BREAK in tools.ts splits
+// on punctuation; a plain "but" needs no comma, so this list is its own.
+const CLAUSE_JOINS =
+  /\s+(?:but|though|although|however|yet|whereas|while)\s+|\s+[—–]+\s+|;\s+|,\s+(?=(?:but|though|although|however|yet|whereas|and|so|which|because|since)\b)/i;
+
+// A clause that says the interaction WORKED is not a claim that it produced
+// nothing, whatever else the sentence mentions on the way. Run #158 stored "The field
+// accepted the text (a CSS-selector fill first timed out during hydration, but
+// the placeholder-targeted fill succeeded)" — a success, narrated with the
+// stumble that preceded it, and the timeout pattern above fires on it. Scoped
+// to the same vocabulary the hands use, so "the button did nothing, though the
+// page loaded successfully" is still a claim.
+// Affirmative forms only, and never a bare infinitive: "accept" appears inside
+// "did not accept input", which is the claim itself, so only "accepted" and
+// "accepts" count. A negator immediately before still wins.
+const HAND_SUCCEEDED =
+  /\b(?:fill|click|type|typing|input|press|tap|drag|interaction|operation|field|button|form)\b[^.]{0,60}?\b(?:succeeded|worked fine|went through|landed)\b|(?<!\bnot\s)(?<!n't\s)(?<!\bnever\s)\b(?:accepted|accepts|took|received)\s+(?:the\s+)?(?:text|input|value|credentials?|password|characters?)\b/;
+
+// Read at clause level, because one sentence often carries both: run #159's
+// finding said "the input attempt did not take … whereas the sign-in email
+// field accepted input normally in the same run". Judging the whole text at
+// once, the contrast would excuse the claim; judging the clause that makes the
+// claim, it does not.
 export function handsInText(raw: string): ClaimedHand[] {
   const text = raw.toLowerCase().replace(/[‘’ʼ]/g, "'");
-  if (!NULL_EFFECT_PHRASES.some((re) => re.test(text))) return [];
+  const claiming = text
+    .split(CLAUSE_JOINS)
+    .some((clause) => NULL_EFFECT_PHRASES.some((re) => re.test(clause)) && !HAND_SUCCEEDED.test(clause));
+  if (!claiming) return [];
   const hands: ClaimedHand[] = [];
   if (FILL_WORDS.test(text)) hands.push("fill");
   if (CLICK_WORDS.test(text)) hands.push("click");
@@ -388,20 +417,25 @@ export function cutUndrivenClaims(
   return { text: out.length > 0 ? out : null, cut };
 }
 
-// Where a sentence carries the claim and the observation together, cutting the
-// whole sentence throws away what we did see. Run #159's step read "The field
-// is present but the input attempt did not take" — one sentence, two halves,
-// and only the second is about us. CLAUSE_BREAK in tools.ts splits on
-// punctuation; a plain "but" needs no comma, so this list is its own.
-const CLAUSE_JOINS =
-  /\s+(?:but|though|although|however|yet|whereas|while)\s+|\s+[—–]+\s+|;\s+|,\s+(?=(?:but|though|although|however|yet|whereas|and|so|which|because|since)\b)/i;
-
 // The claim, cut at clause level, where our own failure is ALREADY established
 // — tools.ts calls this only after a control we could not drive, so no trail
 // comparison is needed: any clause saying our interaction produced nothing is,
 // by construction, our incapacity. The hand is read from the whole sentence
 // (a clause like "nothing happened" names no hand of its own) and only the
 // clauses carrying the null-effect phrase are removed.
+// Can this clause be published as a sentence of its own? A clause that opened
+// its sentence begins with a capital; one that was a continuation ("the very
+// field paying customers use to hand you test logins", "but the
+// placeholder-targeted fill succeeded)") does not, and promoting it produces
+// prose no one would sign. Unbalanced brackets are the same tell.
+function standsAlone(clause: string): boolean {
+  const text = clause.replace(/^["'“”‘’(\[\s]+/, "");
+  if (!/^[A-Z0-9]/.test(text)) return false;
+  const opens = (clause.match(/\(/g) ?? []).length;
+  const closes = (clause.match(/\)/g) ?? []).length;
+  return opens === closes;
+}
+
 export function cutNullEffectClauses(text: string | null | undefined): ClaimCut {
   if (!text || !text.trim()) return { text: text ?? null, cut: [] };
   const kept: string[] = [];
@@ -415,8 +449,17 @@ export function cutNullEffectClauses(text: string | null | undefined): ClaimCut 
     const survivors: string[] = [];
     for (const clause of clauses) {
       const claim = NULL_EFFECT_PHRASES.some((re) => re.test(clause.toLowerCase().replace(/[‘’ʼ]/g, "'")));
-      if (claim) cut.push(clause);
-      else survivors.push(clause.replace(/[.,;:\s]+$/, ""));
+      if (claim) {
+        cut.push(clause);
+      } else if (standsAlone(clause)) {
+        survivors.push(clause.replace(/[.,;:\s]+$/, ""));
+      } else {
+        // A dependent continuation cannot be promoted to a sentence: run
+        // #159's bottom line would have left "the very field paying customers
+        // use to hand you test logins." on the verdict page. It goes with the
+        // clause it belonged to.
+        cut.push(clause);
+      }
     }
     if (survivors.length) {
       const joined = survivors.join(", ");
