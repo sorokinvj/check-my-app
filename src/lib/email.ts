@@ -35,6 +35,11 @@ interface VerdictReadyArgs {
   baseUrl?: string;
 }
 
+// Returns the provider's own id for the accepted message, or null when there is
+// no provider configured (local dev). CHE-224: the id is stored on the run, so
+// "we sent it" can be taken to the provider and checked against what it did with
+// it — a 200 from Resend is acceptance, not delivery, and the two were
+// indistinguishable while nothing recorded either.
 export async function sendVerdictReady({
   to,
   appSlug,
@@ -47,7 +52,7 @@ export async function sendVerdictReady({
   apiKey,
   from,
   baseUrl,
-}: VerdictReadyArgs): Promise<void> {
+}: VerdictReadyArgs): Promise<string | null> {
   const base = baseUrl ?? "http://localhost:3000";
   const url = `${base}/verdict/${publicId}`;
   const label = verdict ? (VERDICT_META[verdict]?.label ?? verdict) : null;
@@ -58,9 +63,9 @@ export async function sendVerdictReady({
       : `Your verdict for ${appSlug} is ready`;
 
   if (!apiKey || !from) {
-     
+
     console.log(`[email:dev] to=${to} subject="${subject}" url=${url}`);
-    return;
+    return null;
   }
 
   const res = await fetch("https://api.resend.com/emails", {
@@ -86,6 +91,14 @@ export async function sendVerdictReady({
   });
   if (!res.ok) {
     throw new Error(`Resend send failed: ${res.status} ${await res.text()}`);
+  }
+  // The provider's id for the accepted message. Best-effort: an unreadable body
+  // must not turn a delivered mail into a failure.
+  try {
+    const body = (await res.json()) as { id?: unknown };
+    return typeof body.id === "string" ? body.id : null;
+  } catch {
+    return null;
   }
 }
 

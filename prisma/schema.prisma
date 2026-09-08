@@ -53,6 +53,12 @@ model Run {
   focusAreas           String? // CHE-81: owner's priority concerns
 
   notifyEmail          String?
+  // CHE-224: what happened to the verdict email. "sent" / "sent:<provider id>",
+  // "skipped: <reason>", "failed: <the provider's own words>". NULL on a
+  // terminal run that carried an address means the decision was never reached —
+  // which is itself the answer, and queryable. Written by recordNotifyOutcome
+  // (src/agent/notify-verdict.ts). Internal: never rendered, never emailed.
+  notifyOutcome        String?
 
   status   String @default("queued") // RunStatus
   verdict  String? // Verdict
