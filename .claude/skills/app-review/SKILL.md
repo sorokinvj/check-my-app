@@ -24,14 +24,25 @@ does it, and returns findings with evidence. You decide what to change.
 
 ## Setup
 
+The server runs over stdio from a checkout of the CheckMyApp repository, so the
+command carries the path to that checkout — not a relative path, which would
+resolve against whatever project you are working in:
+
 ```bash
-claude mcp add checkmyapp -e CHECKMYAPP_API_KEY=cma_xxxxxxxx -- npx tsx mcp/server.ts
+claude mcp add checkmyapp -e CHECKMYAPP_API_KEY=cma_xxxxxxxx \
+  -- npx tsx /path/to/check-my-app/mcp/server.ts
 ```
+
+Run `npm install` in that checkout once. A hosted endpoint that needs no
+checkout is being built; until it lands, this is the way in.
 
 The key comes from the dashboard at https://checkmyapp.dev/dashboard → **API
 keys**, and is shown once. API access is on the Business plan today. Without a
 key, `start_check` against production is refused (`turnstile_failed`), and
 `ephemeral: true` is refused (`ephemeral_requires_owner`).
+
+To have this skill in every project, copy `.claude/skills/app-review/` from the
+checkout to `~/.claude/skills/app-review/`.
 
 ## The loop
 
