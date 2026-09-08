@@ -84,6 +84,46 @@
 // have yet, and building it out of these two is how a launch number becomes
 // a fiction.
 //
+// THE DEFINITION, agreed with the marketing side 2026-09-09 so that one of it
+// stands in both places rather than two similar ones:
+//
+//   A customer is a `User` row that is not a test account and not one of the
+//   owner's rows; a customer app is one whose owner is such a row. For money
+//   questions one condition is added: the plan was set through Stripe, not by
+//   hand (both of the owner's rows were set by hand).
+//
+// ─── The control that makes this checkable today ─────────────────────────────
+//
+// More important than the definition. The right answer to "how many customers
+// do we have" is currently ZERO, so any query returning more than zero is
+// wrong — and that is testable now, without waiting for the first customer.
+// Paired with a known positive it gives what a number needs before it is an
+// instrument rather than a hope: a demonstration that it can return both
+// emptiness and non-emptiness. Until it has been run against both, it is not
+// yet a measurement.
+//
+// Run against prod 2026-09-09:
+//
+//   customers, by the definition above:                            0
+//     (isTestAccount = 0 AND plan <> 'free' AND stripeSubscriptionId IS NOT NULL)
+//   the same query without the Stripe condition — the trap:        1
+//   known positive, anonymous runs:                               42
+//   known positive, active watches:                                3
+//
+// Both owner rows carry stripeSubscriptionId = NULL, which is what "set by
+// hand" means in the definition and what makes the zero hold.
+//
+// And the counter in THIS file fails that control, which is the honest thing to
+// record about it. Run over the last 30 days on 2026-09-09, bucket() labels
+// TWELVE apps "customer": the owner's joblander.app and meetbashar.com, plus
+// theins.ru, linear.app, cal.com, posthog.com, ghost.org, tally.so,
+// seedcast.app, pelicanbay.pt, nkem.dev and play.google.com — other people's
+// products that anonymous public checks and the owner's own exploratory runs
+// were pointed at, none of them owned by a customer row. By the definition
+// above the answer is 0. The column remains correct for what this file
+// measures, which is how much observing an app yields per app-week; it is not
+// a customer count, and no report may quote it as one.
+//
 // RULE CHANGE, 2026-09-08 (CHE-156): "our own product" stopped being the string
 // "checkmyapp.dev" and became isSelfHost() — the predicate the notify gate and
 // the accuracy page read, so a subdomain or a SELF_CHECK_HOSTS preview host
