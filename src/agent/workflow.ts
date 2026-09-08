@@ -44,10 +44,16 @@ import { parseActions, replayJourney, type ReplayResult } from "./journey-replay
 import { claimedHands, drivenControls, gateFindings } from "./findings-gate";
 import { synthesizeVerdict, type SynthesizedFinding } from "./synthesis";
 import { autoFileFindings } from "./autofile";
-import { fileCapabilityGaps } from "./capability-gaps";
+import { fileCapabilityGaps, fileDeliveryGap } from "./capability-gaps";
 import { auditCreatedResources } from "./cleanup";
 import { reconcileIssueLinks, reverifyInstructions, verifyFixedLinks } from "./reconcile";
-import { notifyVerdictReady } from "./notify-verdict";
+import {
+  notifyOutcomeCode,
+  notifyVerdictReady,
+  recordNotifyOutcome,
+  SKIP_BUDGET_TICK,
+  type NotifiableRun,
+} from "./notify-verdict";
 import { deliverWebhook, type RunCompletedPayload } from "@/lib/notify/webhook";
 import { deliverSlack } from "@/lib/notify/slack";
 import { decryptSecret } from "@/lib/crypto";
@@ -295,6 +301,19 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
         // Deliberately silent: a budget tick is our accounting, not news about
         // the customer's product. Emailing "unverified" three times a day
         // because we chose to spend less would be alarming and useless.
+        //
+        // CHE-224: silent, but no longer unaccounted for. This return skips the
+        // notify step entirely, so without a recorded reason the run would look
+        // exactly like one where the send was attempted and vanished — the two
+        // cases this ticket existed because nobody could tell apart.
+        if (run.notifyEmail) {
+          await step.do("budget-notify-skip", async () => {
+            await recordNotifyOutcome(env, run.publicId, {
+              kind: "skipped",
+              reason: SKIP_BUDGET_TICK,
+            });
+          });
+        }
         return;
       }
 
@@ -338,7 +357,9 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
         // stays quiet, because the verdict we just carried forward is by
         // definition the baseline's.
         if (run.notifyEmail) {
-          await step.do("replay-notify", () => notifyVerdictReady(env, this.env, run, smoke.verdict));
+          await step.do("replay-notify", () =>
+            notifyAndRecord(env, this.env, runId, run, smoke.verdict),
+          );
         }
         // No credential cleanup: a smoke pass only happens on watch runs, and a
         // Watch retains its credentials for the next one.
@@ -868,7 +889,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
       // here too — the scheduler copies notifyEmail onto the run — but a
       // notifyOnChangeOnly watch stays quiet while the verdict holds steady.
       if (run.notifyEmail) {
-        await step.do("notify", () => notifyVerdictReady(env, this.env, run, verdict));
+        await step.do("notify", () => notifyAndRecord(env, this.env, runId, run, verdict));
       }
 
       // CHE-129 spike — redo each walked journey's recorded actions with no
@@ -1056,6 +1077,59 @@ function modeEvents(
 // notifyVerdictReady, its silence gate and the watch-notice rule live in
 // ./notify-verdict.ts (CHE-156) — that file has no `cloudflare:workers` import,
 // so scripts/verify-self-check-silence.ts can drive the real function.
+//
+// CHE-224: the ONE path a verdict email may be attempted on. Every send now
+// leaves three traces — the outcome on the run row (queryable), the step's own
+// output in the Workflow instance history, and, when it failed, a line in the
+// feed plus a ticket on our own board. The bug this closes is not that a send
+// failed; it is that thirty of them failed and nothing anywhere said so.
+async function notifyAndRecord(
+  env: AgentEnv,
+  bindings: AgentBindings,
+  runId: string,
+  run: NotifiableRun,
+  verdict: Verdict | null,
+): Promise<string> {
+  const outcome = await notifyVerdictReady(env, bindings, run, verdict);
+  // Bookkeeping never fails a finished run — but it is loud when it cannot do
+  // its job, which is the whole point of this ticket.
+  try {
+    await recordNotifyOutcome(env, run.publicId, outcome);
+  } catch (err) {
+    console.error(
+      `[notify] could not record the outcome for run ${run.publicId}: ` +
+        `${err instanceof Error ? err.message : err}`,
+    );
+  }
+  if (outcome.kind === "failed") {
+    try {
+      // The customer's line says the fact and nothing about our plumbing
+      // (CLAUDE.md rule 1); the provider's own words live on the run row and on
+      // the ticket, where the next person to look needs them.
+      await appendEvent(env, runId, "writing", {
+        icon: "warn",
+        text: `We couldn't deliver this verdict to ${run.notifyEmail}. That's on us — it's on our board.`,
+      });
+      await appendEvent(
+        env,
+        runId,
+        "writing",
+        await fileDeliveryGap(env, runId, {
+          address: run.notifyEmail ?? "(no address)",
+          error: outcome.error,
+        }),
+      );
+    } catch (err) {
+      console.error(
+        `[notify] could not report the delivery failure for run ${run.publicId}: ` +
+          `${err instanceof Error ? err.message : err}`,
+      );
+    }
+  }
+  // Returned so the Workflow step stores it: `wrangler workflows instances
+  // describe` then shows what happened to the mail beside every other step.
+  return notifyOutcomeCode(outcome);
+}
 
 // ─── Verdict integrity (CHE-42) ──────────────────────────────────────────────
 // Two rules the synthesis prompt asks for and this code then enforces, because

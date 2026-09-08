@@ -84,15 +84,72 @@ export function isOwnRun(run: { ownerId: string | null; watchId: string | null }
   return run.ownerId !== null || run.watchId !== null;
 }
 
+// ─── What happened to the mail, as a value (CHE-224) ─────────────────────────
+//
+// Until now this function returned void and swallowed a provider failure into a
+// console.warn. In production that meant: 30 watch runs between 2026-08-29 and
+// 2026-09-08 reached the send with every gate passed — the Workflow step history
+// shows `notify-1` ran for runs #146, #156 and #158 — and not one of them
+// arrived. Every message the owner did receive was addressed to
+// hello@joblander.app; every silent one to sorokinvj@gmail.com. Nothing in the
+// database, the run feed or our own board said so, and by the time anyone
+// looked the Worker log had expired.
+//
+// So the decision is now a value: every run that carries an address ends with
+// one of these recorded on the row, and a failure additionally lands in the run
+// feed and on our own board. "We could not tell whether the customer got their
+// verdict" is our defect (CLAUDE.md rules 2 and 8), and it may not be silent.
+export type NotifyOutcome =
+  | { kind: "sent"; providerMessageId: string | null }
+  // Deliberately not sent, and why — in words stable enough to group by.
+  | { kind: "skipped"; reason: string }
+  // The provider refused it, or the request never completed.
+  | { kind: "failed"; error: string };
+
+// The stored form of an outcome (Run.notifyOutcome). Prefix-coded so one query
+// reconciles a month: `LIKE 'failed:%'` is every refused send, `LIKE 'skipped:%'`
+// every deliberate silence with its reason, and NULL on a terminal run that had
+// an address is a run that never reached the decision at all.
+export function notifyOutcomeCode(outcome: NotifyOutcome): string {
+  switch (outcome.kind) {
+    case "sent":
+      return outcome.providerMessageId ? `sent:${outcome.providerMessageId}` : "sent";
+    case "skipped":
+      return `skipped: ${outcome.reason}`;
+    case "failed":
+      return `failed: ${outcome.error}`.slice(0, 500);
+  }
+}
+
+// The reasons a send is deliberately not made, as constants, so the feed line,
+// the stored code and any query over them cannot drift apart.
+export const SKIP_NO_ADDRESS = "no address on the run";
+export const SKIP_UNCHANGED = "the verdict has not changed since the last check";
+export const SKIP_BUDGET_TICK = "a budget tick carries no news about the product";
+
+// Write the outcome onto the run. Separate from the decision so the workflow can
+// record the budget tick's silence too, at a point that never reaches the send.
+export async function recordNotifyOutcome(
+  env: AgentEnv,
+  publicId: string,
+  outcome: NotifyOutcome,
+): Promise<void> {
+  await env.db.run.update({
+    where: { publicId },
+    data: { notifyOutcome: notifyOutcomeCode(outcome) },
+  });
+}
+
 // Shared by the full run and the replay-first pass. Non-fatal by construction:
-// a notification failure must never fail a completed run.
+// a notification failure must never fail a completed run — but it is returned
+// rather than swallowed, and the caller records it.
 export async function notifyVerdictReady(
   env: AgentEnv,
   bindings: AgentBindings,
   run: NotifiableRun,
   verdict: Verdict | null,
-): Promise<void> {
-  if (!run.notifyEmail) return;
+): Promise<NotifyOutcome> {
+  if (!run.notifyEmail) return { kind: "skipped", reason: SKIP_NO_ADDRESS };
   // CHE-105/CHE-156: our own check of our own product is silent. It exists so
   // CheckMyApp can check itself; the person running the business must be able
   // to forget it exists. Its results live on the verdict page, where they can be
@@ -109,10 +166,10 @@ export async function notifyVerdictReady(
     console.log(
       `[notify] run ${run.publicId} — staying silent: ${silent} (self-check, CLAUDE.md §6)`,
     );
-    return;
+    return { kind: "skipped", reason: silent };
   }
   if (run.watchId && !(await watchWantsNotice(env, run.watchId, run.baselineRunId, verdict))) {
-    return;
+    return { kind: "skipped", reason: SKIP_UNCHANGED };
   }
   // CHE-96: carry the answer into the mail. Read back rather than threaded
   // through, because both callers (smoke shortcut and full run) reach here at
@@ -125,23 +182,31 @@ export async function notifyVerdictReady(
     },
   });
   const findings = written?.findings ?? [];
-  await sendVerdictReady({
-    to: run.notifyEmail,
-    appSlug: run.appSlug,
-    publicId: run.publicId,
-    verdict,
-    recurring: Boolean(run.watchId),
-    bottomLine: written?.bottomLine ?? null,
-    findingCounts: {
-      total: findings.length,
-      broken: findings.filter((f) => f.category === "broken" || f.category === "exposed").length,
-    },
-    apiKey: bindings.EMAIL_API_KEY,
-    from: bindings.EMAIL_FROM,
-    baseUrl: bindings.APP_URL,
-  }).catch((err) => {
-    console.warn(`[notify] verdict email failed: ${err instanceof Error ? err.message : err}`);
-  });
+  try {
+    const providerMessageId = await sendVerdictReady({
+      to: run.notifyEmail,
+      appSlug: run.appSlug,
+      publicId: run.publicId,
+      verdict,
+      recurring: Boolean(run.watchId),
+      bottomLine: written?.bottomLine ?? null,
+      findingCounts: {
+        total: findings.length,
+        broken: findings.filter((f) => f.category === "broken" || f.category === "exposed").length,
+      },
+      apiKey: bindings.EMAIL_API_KEY,
+      from: bindings.EMAIL_FROM,
+      baseUrl: bindings.APP_URL,
+    });
+    return { kind: "sent", providerMessageId };
+  } catch (err) {
+    // Still non-fatal — but no longer invisible. The message carries the
+    // provider's own words (`Resend send failed: 403 …`), which is the sentence
+    // that was missing for ten days.
+    const error = err instanceof Error ? err.message : String(err);
+    console.warn(`[notify] verdict email failed: ${error}`);
+    return { kind: "failed", error };
+  }
 }
 
 async function ownedByTestAccount(env: AgentEnv, publicId: string): Promise<boolean> {

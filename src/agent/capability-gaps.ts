@@ -247,6 +247,107 @@ export async function fileCapabilityGaps(
   return notes;
 }
 
+// ─── A verdict that never reached the owner (CHE-224) ───────────────────────
+//
+// The product's promise is one sentence: you find out the next morning that
+// your app broke overnight. A send the provider refuses breaks that promise
+// completely, and it used to break it silently — `notifyVerdictReady` swallowed
+// the error into a console.warn, which is the one place that expires.
+//
+// It is a capability gap in our own sense of the word: we could not tell whether
+// the customer got their verdict. So it files like every other one — one ticket
+// for the capability, counted across every app and every address that trips it,
+// with the provider's own words on it so the next occurrence names the cause
+// instead of restarting this investigation.
+
+const DELIVERY_GAP = {
+  label: "Verdict email does not reach the owner",
+  why:
+    "The morning email IS the product — everything else this codebase does serves it. " +
+    "A run that finds the app broken and cannot say so has produced nothing the owner " +
+    "can act on, and until 2026-09-08 it produced no trace either.",
+};
+
+// Never throws: a failure to file must not cost a run that is otherwise done.
+export async function fileDeliveryGap(
+  env: AgentEnv,
+  runId: string,
+  opts: { address: string; error: string },
+): Promise<CapabilityNote> {
+  const run = await env.db.run.findUnique({
+    where: { id: runId },
+    select: { runNumber: true, publicId: true, startedAt: true, appSlug: true },
+  });
+  if (!run) return { icon: "warn", text: `Couldn't file the delivery gap: run ${runId} is gone.` };
+
+  const board = await ourBoard(env);
+  if (!board) {
+    return {
+      icon: "warn",
+      text:
+        `The verdict email to ${opts.address} was not delivered — connect the CheckMyApp ` +
+        `app's own tracker so delivery failures get filed.`,
+    };
+  }
+  const { self, tracker, baseUrl } = board;
+
+  const finding: TicketFinding = {
+    runId,
+    number: 0,
+    title: DELIVERY_GAP.label,
+    category: "broken",
+    severity: "high",
+    detail: JSON.stringify({
+      // Fixed, so every refused send hashes to the same ticket: the address and
+      // the run number are occurrence facts and stay out of the dedup signature.
+      where: "CheckMyApp verdict notification",
+      whatWeTried: [
+        `We asked the mail provider to deliver a finished verdict to ${opts.address}.`,
+        `It answered: ${opts.error}`,
+        `On: ${run.appSlug} (run #${run.runNumber}).`,
+      ],
+      whatHappened:
+        "A run finished, wrote its verdict, and the owner was never told. Nothing about " +
+        "the run says it is undelivered except this ticket.",
+      whyItMatters: `${DELIVERY_GAP.why} This ticket counts every refused send; it closes when the sends land, not when the run is forgotten.`,
+    }),
+    evidence: [],
+  };
+
+  try {
+    const outcome = await fileFindingTicket({
+      db: env.db,
+      tracker,
+      appId: self.id,
+      finding,
+      run: {
+        runNumber: run.runNumber,
+        publicId: run.publicId,
+        startedAt: run.startedAt,
+        // Dedup identity on OUR app: one capability, one ticket, across every
+        // customer whose verdict fails to arrive.
+        appSlug: self.appSlug,
+      },
+      policy: selfPolicy(self, "[Checker gap] {verdict}"),
+      ownerId: self.ownerId,
+      verdictUrl: `${baseUrl}/verdict/${run.publicId}`,
+    });
+    return {
+      icon: "ok",
+      text:
+        outcome.kind === "created"
+          ? `Opened ${outcome.identifier} on our own board: ${DELIVERY_GAP.label}`
+          : outcome.kind === "commented"
+            ? `A verdict email failed to reach its owner again — ${outcome.identifier} now at ${outcome.occurrences} occurrence(s)`
+            : `Our undelivered-verdict gap is filed as ${outcome.identifier}`,
+    };
+  } catch (err) {
+    const text = err instanceof Error ? err.message : String(err);
+    console.warn(`[delivery-gap] filing failed: ${text}`);
+    return { icon: "warn", text: `Couldn't file our undelivered-verdict gap: ${text}` };
+  }
+}
+
 // ─── A rejected ticket is a defect report against us (CHE-99) ───────────────
 //
 // Owner rule, 2026-08-30: "is this our bug or theirs" must never be settled by

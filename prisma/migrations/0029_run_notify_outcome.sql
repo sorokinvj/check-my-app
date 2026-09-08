@@ -1,0 +1,25 @@
+-- CHE-224: what happened to the verdict email, recorded on the run.
+--
+-- Between 2026-08-29 and 2026-09-08 no Daily Watch email arrived, through
+-- eleven verdict changes including two `broken`. Every gate in our code had
+-- passed: the Workflow step history for runs #146, #156 and #158 shows the
+-- `notify` step ran, so the send was made and the provider did not deliver it.
+-- The failure went into a `console.warn` in a Worker whose logs had expired by
+-- the time anyone looked, and nothing else recorded it — not the run row, not
+-- the feed, not our own board.
+--
+-- The column is the reconciliation the ticket asks for. One query over a month:
+--
+--   SELECT runNumber, appSlug, verdict, notifyOutcome FROM Run
+--    WHERE notifyEmail IS NOT NULL AND status IN ('completed','partial')
+--      AND (notifyOutcome IS NULL OR notifyOutcome LIKE 'failed:%');
+--
+-- Values: "sent" / "sent:<provider message id>" (the id can be taken to the
+-- provider, because a 200 is acceptance and not delivery), "skipped: <reason>"
+-- for every deliberate silence, "failed: <the provider's own words>". NULL on a
+-- terminal run that carried an address means the decision was never reached.
+--
+-- Internal only: never rendered on the verdict page and never in an email.
+-- NULL for every row written before this column existed.
+
+ALTER TABLE "Run" ADD COLUMN "notifyOutcome" TEXT;
