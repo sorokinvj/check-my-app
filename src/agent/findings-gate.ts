@@ -257,17 +257,47 @@ const CLAUSE_JOINS =
   /\s+(?:but|though|although|however|yet|whereas|while)\s+|\s+[—–]+\s+|;\s+|,\s+(?=(?:but|though|although|however|yet|whereas|and|so|which|because|since)\b)/i;
 
 // A clause that says the interaction WORKED is not a claim that it produced
-// nothing, whatever else the sentence mentions on the way. Run #158 stored "The field
-// accepted the text (a CSS-selector fill first timed out during hydration, but
-// the placeholder-targeted fill succeeded)" — a success, narrated with the
-// stumble that preceded it, and the timeout pattern above fires on it. Scoped
-// to the same vocabulary the hands use, so "the button did nothing, though the
-// page loaded successfully" is still a claim.
-// Affirmative forms only, and never a bare infinitive: "accept" appears inside
-// "did not accept input", which is the claim itself, so only "accepted" and
-// "accepts" count. A negator immediately before still wins.
-const HAND_SUCCEEDED =
-  /\b(?:fill|click|type|typing|input|press|tap|drag|interaction|operation|field|button|form)\b[^.]{0,60}?\b(?:succeeded|worked fine|went through|landed)\b|(?<!\bnot\s)(?<!n't\s)(?<!\bnever\s)\b(?:accepted|accepts|took|received)\s+(?:the\s+)?(?:text|input|value|credentials?|password|characters?)\b/;
+// nothing. Run #158 stored "The field accepted the text (a CSS-selector fill
+// first timed out during hydration, but the placeholder-targeted fill
+// succeeded)" — a success narrated with the stumble that preceded it — and the
+// timeout phrasing fires on it.
+//
+// The first version of this exception was a hole wide enough to drive the
+// whole point through, and review found it by running these functions rather
+// than reading them:
+//
+//   "The button click landed on the wrong page and did nothing."
+//       any success word within sixty characters of any hand word counted, so
+//       "click … landed" excused "did nothing" — though "landed" says WHERE
+//       the click went, not that it worked.
+//   "The field never really accepted the input, nothing happened."
+//       negation was checked only in the token immediately before the verb, so
+//       a single adverb ("never really accepted") walked past it.
+//
+// Both are closed by being stricter about what counts as success: the verb must
+// govern the named hand, with at most two words between them, and "landed" is
+// gone because it is about direction rather than outcome; and the negation is
+// looked for across everything before the verb instead of the token before it.
+const HAND_SUCCESS: RegExp[] = [
+  // "the placeholder-targeted fill succeeded", "the click went through"
+  /\b(?:fill|click|type|typing|input|press|tap|drag|interaction|operation|submission)\b(?:\s+\S+){0,2}\s+(?:succeeded|succeeds|worked|works|went through|goes through)\b/,
+  // "the field accepted the text", "accepts the input". Affirmative forms only:
+  // the bare infinitive "accept" lives inside "did not accept input", which is
+  // the claim itself.
+  /\b(?:accepted|accepts|took|received)\s+(?:the\s+)?(?:text|input|value|credentials?|password|characters?)\b/,
+];
+
+const NEGATOR = /\b(?:not|never|no|none|nothing|failed|fails|failing|unable|without|n't)\b/;
+
+function handSucceeded(clause: string): boolean {
+  for (const re of HAND_SUCCESS) {
+    const m = re.exec(clause);
+    if (!m) continue;
+    if (NEGATOR.test(clause.slice(0, m.index))) continue;
+    return true;
+  }
+  return false;
+}
 
 // Read at clause level, because one sentence often carries both: run #159's
 // finding said "the input attempt did not take … whereas the sign-in email
@@ -278,7 +308,7 @@ export function handsInText(raw: string): ClaimedHand[] {
   const text = raw.toLowerCase().replace(/[‘’ʼ]/g, "'");
   const claiming = text
     .split(CLAUSE_JOINS)
-    .some((clause) => NULL_EFFECT_PHRASES.some((re) => re.test(clause)) && !HAND_SUCCEEDED.test(clause));
+    .some((clause) => NULL_EFFECT_PHRASES.some((re) => re.test(clause)) && !handSucceeded(clause));
   if (!claiming) return [];
   const hands: ClaimedHand[] = [];
   if (FILL_WORDS.test(text)) hands.push("fill");

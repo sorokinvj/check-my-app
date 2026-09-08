@@ -630,6 +630,29 @@ function main() {
       "The input attempt did not take — we could not enter text here, whereas the sign-in email field accepted input normally in the same run.";
     check("a claim contrasted with another control's success is still a claim", handsInText(contrast).includes("fill"));
     check("'did not accept input' is not read as a success", handsInText("The field did not accept input.").includes("fill"));
+
+    // The first version of that exception was a hole, found by running these
+    // two sentences rather than reading the regex. Both are verbatim.
+    const wrongPage = "The button click landed on the wrong page and did nothing.";
+    check(
+      "a success word that is about direction, not outcome, does not excuse a claim",
+      handsInText(wrongPage).includes("click"),
+      JSON.stringify(handsInText(wrongPage)),
+    );
+    check("…and the sentence is cut", cutNullEffectClauses(wrongPage).cut.length === 1);
+    const negatedSuccess = "The field never really accepted the input, nothing happened.";
+    check(
+      "a negation an adverb away from the verb still negates it",
+      handsInText(negatedSuccess).includes("fill"),
+      JSON.stringify(handsInText(negatedSuccess)),
+    );
+    check("…and that sentence is cut too", cutNullEffectClauses(negatedSuccess).cut.length === 1);
+    // The success verb must govern the hand it names, not merely share a
+    // sentence with it.
+    check(
+      "a success elsewhere in the clause does not reach across to another hand",
+      handsInText("The click did nothing after the upload succeeded.").includes("click"),
+    );
   }
 
   // 25 — a dependent clause cannot be promoted to a sentence. The first sweep
