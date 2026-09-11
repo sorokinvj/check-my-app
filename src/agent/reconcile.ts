@@ -386,7 +386,7 @@ async function markOriginal(
   mark: "fixed" | "false_positive",
 ): Promise<void> {
   if (!original || original.mark !== "none") return;
-  await env.db.finding.update({ where: { id: original.id }, data: { mark } });
+  await env.db.finding.update({ where: { id: original.id }, data: { mark, markedAt: new Date() } });
 }
 
 // Same normalization the dedup key uses, so title matching survives the same
