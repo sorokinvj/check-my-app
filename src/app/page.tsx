@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 
-// No landing page in MVP — go straight to the submit screen.
+// CHE-108: Home — point visitors at a real verdict so they can see
+// what a check produces without handing over their own URL.
 export default function Home() {
-  redirect("/check");
+  redirect("/verdict/demo-verdict");
 }
