@@ -13,7 +13,7 @@ export async function stopWithConfirmation({ stop, confirm, stopped, now = Date.
 }
 
 export class SessionLedger {
-  constructor(ownerRunId, now = Date.now, onSettled = () => {}) { this.ownerRunId = ownerRunId; this.now = now; this.onSettled = onSettled; this.entries = []; }
+  constructor(ownerRunId, now = Date.now, onSettled = () => {}) { this.ownerRunId = ownerRunId; this.now = now; this.onSettled = onSettled; this.entries = []; this.cleanupTail = Promise.resolve(); }
   register({ id, targetId, maxSeconds, stop }) {
     if (!id || !targetId || this.entries.some(e => e.entry.id === id)) throw new Error('Unique owned session identity required');
     if (!Number.isInteger(maxSeconds) || maxSeconds < 1 || maxSeconds > 600) throw new Error('Invalid session limit');
@@ -30,7 +30,9 @@ export class SessionLedger {
     if (!task) throw new Error('Session does not belong to this run');
     if (task.promise) return task.promise;
     clearTimeout(task.timer);
-    task.promise = (async () => {
+    // Two paid meters can share one tab. Their Stop dialogs must not race for
+    // focus, including when separate deadlines fire at the same instant.
+    task.promise = this.cleanupTail.then(async () => {
       task.entry.state = 'stopping';
       try {
         const result = await task.stop();
@@ -41,7 +43,8 @@ export class SessionLedger {
       }
       this.onSettled(this.snapshot());
       return task.entry;
-    })();
+    });
+    this.cleanupTail = task.promise.then(() => {}, () => {});
     return task.promise;
   }
   started(id) {

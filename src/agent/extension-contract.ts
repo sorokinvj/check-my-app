@@ -18,6 +18,8 @@ export interface ExtensionIdentity {
 }
 
 export interface ExtensionSession extends ExtensionIdentity {
+  scenario?: "interview" | "practice" | "practice-extension";
+  stimulus?: { mode?: "interview" | "tab-only" | "microphone-only" | "practice" };
   sessionId: string;
   ownerRunId: string;
   name: string;
@@ -37,28 +39,33 @@ export interface ExtensionSession extends ExtensionIdentity {
 }
 
 export interface ExtensionRunnerInput {
+  scenario?: "interview" | "practice" | "practice-extension";
   ownerRunId: string;
   extensionId: string;
   targetUrl: string;
   maxDurationSeconds: number;
   allowSessions: boolean;
   maxSessionSeconds: number;
-  stimulusMode?: "interview" | "tab-only" | "microphone-only";
+  stimulusMode?: "interview" | "tab-only" | "microphone-only" | "practice";
 }
 
 export function isExtensionTarget(run: Pick<ExtensionTarget, "targetKind" | "targetUrl">): boolean {
   return run.targetKind === "extension" || isChromeStoreUrl(run.targetUrl);
 }
 
-export function extensionInput(run: ExtensionTarget, phase: string): ExtensionRunnerInput | null {
+export function extensionInput(run: ExtensionTarget, phase: string, scenario: ExtensionRunnerInput["scenario"] = "interview"): ExtensionRunnerInput | null {
   const store = parseExtensionLink(run.targetUrl);
   if (!isExtensionTarget(run)) return null;
   if (!store || (run.extensionId && run.extensionId !== store.id)) throw new Error("Extension identity does not match its Store link");
   const options = readExtensionOptions(run.extensionConfig);
+  const practice = scenario === "practice" || scenario === "practice-extension";
+  if (practice && store.id !== "hafhjepjihcimcljkdphpinannbdmnhf") throw new Error("This practice scenario belongs to a different extension");
   return {
+    scenario,
     ownerRunId: `${run.id}_${phase}`,
     extensionId: store.id,
-    targetUrl: options.companionUrl || "fixture:interview",
+    targetUrl: practice ? "https://joblander.app/practice" : options.companionUrl || "fixture:interview",
+    ...(practice ? { stimulusMode: "practice" as const } : {}),
     maxDurationSeconds: 1200,
     allowSessions: phase.startsWith("walk-") && options.allowSessions === true && Boolean(run.testEmail && run.testPasswordEnc),
     maxSessionSeconds: options.maxSessionSeconds ?? 180,

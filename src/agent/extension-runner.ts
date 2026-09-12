@@ -1,10 +1,12 @@
 import { Container } from "@cloudflare/containers";
 import type { AgentBindings } from "./env";
 import type { ExtensionRunnerInput, ExtensionSession } from "./extension-contract";
+import { extensionArtifactEvidence } from "./extension-artifact";
 interface Lease {
   token: string;
   expiresAt: number;
   closed: boolean;
+  closing?: boolean;
   ownerRunId: string;
 }
 
@@ -13,6 +15,7 @@ interface Lease {
 export class ExtensionRunner extends Container<AgentBindings> {
   defaultPort = 9090;
   sleepAfter = "25m";
+  private cleanupPromise?: Promise<void>;
 
   async openSession(input: ExtensionRunnerInput): Promise<ExtensionSession> {
     const duration = Math.min(1200, Math.max(60, input.maxDurationSeconds));
@@ -28,7 +31,7 @@ export class ExtensionRunner extends Container<AgentBindings> {
       await this.startAndWaitForPorts({
         ports: 9090,
         startOptions: { envVars: { RUNNER_CONTROL_TOKEN: token } },
-        cancellationOptions: { portReadyTimeoutMS: 60_000 },
+        cancellationOptions: { instanceGetTimeoutMS: 60_000, portReadyTimeoutMS: 90_000 },
       });
       const response = await this.fetch(new Request("http://runner/session", {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -46,7 +49,7 @@ export class ExtensionRunner extends Container<AgentBindings> {
 
   override async fetch(request: Request): Promise<Response> {
     const lease = await this.ctx.storage.get<Lease>("lease");
-    if (!lease || lease.closed || Date.now() >= lease.expiresAt) {
+    if (!lease || lease.closed || lease.closing || Date.now() >= lease.expiresAt) {
       return Response.json({ error: "Extension attempt expired" }, { status: 410 });
     }
     const headers = new Headers(request.headers);
@@ -54,26 +57,51 @@ export class ExtensionRunner extends Container<AgentBindings> {
     return super.fetch(new Request(request, { headers }));
   }
 
-  async expire(): Promise<void> {
+  expire(): Promise<void> {
+    if (!this.cleanupPromise) {
+      this.cleanupPromise = this.cleanup().finally(() => { this.cleanupPromise = undefined; });
+      this.ctx.waitUntil(this.cleanupPromise);
+    }
+    return this.cleanupPromise;
+  }
+
+  private async cleanup(): Promise<void> {
     const lease = await this.ctx.storage.get<Lease>("lease");
-    if (!lease || lease.closed) return;
-    await this.ctx.storage.put("lease", { ...lease, closed: true });
-    let evidence: unknown = { disposed: false, applicationCleanup: "unverified" };
+    if (!lease || lease.closed) { this.deleteSchedules("expire"); return; }
+    // A disconnected caller must not turn an in-progress cleanup into a
+    // permanently closed lease with no result. A later alarm can resume it.
+    await this.ctx.storage.put("lease", { ...lease, closing: true });
+    const identity = await this.ctx.storage.get<ExtensionSession>("identity");
+    let evidence: unknown = await this.ctx.storage.get("finalEvidence");
+    const recovered = evidence !== undefined;
+    evidence ??= { disposed: false, ...(identity ? { session: { ...identity, applicationCleanup: "unverified" } } : {}), cleanupFailure: "Executor unreachable" };
     try {
-      const response = await super.fetch(new Request("http://runner/session", {
-        method: "DELETE", headers: { Authorization: `Bearer ${lease.token}` },
-        signal: AbortSignal.timeout(120_000),
-      }));
-      if (response.ok) evidence = await response.json();
-    } catch {
+      if (!recovered) {
+        const response = await super.fetch(new Request("http://runner/session", {
+          method: "DELETE", headers: { Authorization: `Bearer ${lease.token}` },
+          signal: AbortSignal.timeout(120_000),
+        }));
+        if (response.ok) evidence = await response.json();
+        else evidence = { ...(evidence as object), cleanupFailure: `Executor returned HTTP ${response.status}` };
+      }
+    } catch (error) {
+      evidence = { ...(evidence as object), cleanupFailure: error instanceof Error ? error.name : "Executor disconnected" };
       // An unreachable process says nothing about the application's paid state.
     } finally {
       // Persist before destroying the only browser that observed Stop. The
       // durable copy remains recoverable if the R2 write or Workflow fails.
+      let persisted = false;
       try {
         await this.ctx.storage.put("finalEvidence", evidence);
-        await this.env.EVIDENCE.put(`extensions/${lease.ownerRunId}/cleanup.json`, JSON.stringify(evidence));
-      } finally { await this.destroy(); }
+        persisted = true;
+        await this.env.EVIDENCE.put(`extensions/${lease.ownerRunId}/cleanup.json`, JSON.stringify(extensionArtifactEvidence(evidence)));
+      } finally {
+        await this.destroy();
+        if (persisted) {
+          await this.ctx.storage.put("lease", { ...lease, closed: true, closing: false });
+          this.deleteSchedules("expire");
+        }
+      }
     }
   }
 

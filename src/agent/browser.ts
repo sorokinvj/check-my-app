@@ -10,12 +10,12 @@ import { detectTech } from "@/lib/tech-signals";
 import { putScreenshot, type AgentBindings, type AgentEnv } from "./env";
 import { announceSelfCheckOn } from "./self-hosts";
 import { ExtensionBrowser, extensionBrowserFor } from "./extension-browser";
-import { extensionInput, type ExtensionIdentity, type ExtensionTarget } from "./extension-contract";
+import { extensionInput, type ExtensionIdentity, type ExtensionTarget, type ExtensionRunnerInput } from "./extension-contract";
 import { persistExtensionPhase } from "./extension-evidence";
 import { ExtensionRuntimeError } from "./extension-error";
 
-export async function launchAgentBrowser(env: AgentEnv, target?: { run: ExtensionTarget; phase: string; expected?: ExtensionIdentity }): Promise<Browser> {
-  const input = target ? extensionInput(target.run, target.phase) : null;
+export async function launchAgentBrowser(env: AgentEnv, target?: { run: ExtensionTarget; phase: string; expected?: ExtensionIdentity; scenario?: ExtensionRunnerInput["scenario"] }): Promise<Browser> {
+  const input = target ? extensionInput(target.run, target.phase, target.scenario) : null;
   if (input) {
     try { return (await ExtensionBrowser.open(env, input, target?.expected)).browser; }
     catch (error) { throw new ExtensionRuntimeError(error instanceof Error ? error.message : String(error)); }

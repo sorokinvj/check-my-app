@@ -46,3 +46,23 @@ const timed = new SessionLedger('deadline-run');
 timed.register({ id: 'deadline', targetId: 'tab', maxSeconds: 1, stop: async () => ({ applicationStopObserved: true }) });
 await new Promise(resolve => setTimeout(resolve, 1100));
 assert.equal(timed.snapshot()[0].state, 'stopped', 'Cleanup runs without a follow-up request');
+
+const paired = new SessionLedger('paired-meters');
+const order = [];
+let releaseFirst;
+paired.register({ id: 'extension', targetId: 'same-tab', maxSeconds: 600, stop: async () => {
+  order.push('extension-confirm');
+  await new Promise(resolve => { releaseFirst = resolve; });
+  order.push('extension-stopped');
+  return { applicationStopObserved: true };
+} });
+paired.register({ id: 'practice', targetId: 'same-tab', maxSeconds: 600, stop: async () => {
+  order.push('practice-stopped'); return { applicationStopObserved: true };
+} });
+const ending = paired.endAll();
+await new Promise(resolve => setTimeout(resolve, 0));
+assert.deepEqual(order, ['extension-confirm']);
+releaseFirst();
+await ending;
+assert.deepEqual(order, ['extension-confirm', 'extension-stopped', 'practice-stopped']);
+assert.equal(paired.clean, true);

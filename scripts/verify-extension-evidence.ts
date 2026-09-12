@@ -30,7 +30,12 @@ async function main() {
   const joblander = { id: "run-123", targetUrl: "https://chromewebstore.google.com/detail/hafhjepjihcimcljkdphpinannbdmnhf", extensionConfig: JSON.stringify({ allowSessions: true }), testEmail: "fixture@example.test", testPasswordEnc: "encrypted-fixture" };
   assert.equal(extensionCoverageGap(joblander, stored), "our_capability", "Install/discovery/login alone cannot establish interview assistance");
   assert.equal(extensionCoverageGap({ ...joblander, testEmail: null }, stored), "missing_access");
-  const complete = { phases: { "walk-0": { ...scan, phase: "walk-0", ownedSessions: 1, productResultConfirmed: true, cleanupComplete: true } } };
+  const complete = { phases: {
+    "walk-0": { ...scan, phase: "walk-0", scenario: "interview", ownedSessions: 1, productResultConfirmed: true, cleanupComplete: true },
+    "walk-1": { ...scan, phase: "walk-1", scenario: "practice", ownedSessions: 1, productResultConfirmed: true, cleanupComplete: true },
+    "walk-2": { ...scan, phase: "walk-2", scenario: "practice-extension", ownedSessions: 2, productResultConfirmed: true, cleanupComplete: true },
+  } };
+  assert.equal(extensionCoverageGap(joblander, JSON.stringify({ phases: { "walk-0": complete.phases["walk-0"] } })), "our_capability", "Interview alone does not cover the two discovered practice scenarios");
   assert.equal(extensionCoverageGap(joblander, JSON.stringify(complete)), null);
   complete.phases["walk-0"].cleanupComplete = false;
   assert.equal(extensionCoverageGap(joblander, JSON.stringify(complete)), "our_capability");

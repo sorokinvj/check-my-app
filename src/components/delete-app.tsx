@@ -9,19 +9,19 @@ import { Input } from "@/components/ui/input";
 // than a modal: nothing here can fire from a stray click, and the server
 // re-checks the typed value, so the UI is not the only thing standing between
 // an owner and losing their watch.
-export function DeleteAppSection({ appId, appSlug }: { appId: string; appSlug: string }) {
+export function DeleteAppSection({ appId, appSlug, isExtension = false }: { appId: string; appSlug: string; isExtension?: boolean }) {
   const [state, formAction] = useActionState(deleteApp.bind(null, appId), null);
 
   return (
     <section className="mt-12">
-      <p className="section-label">stop watching</p>
+      <p className="section-label">{isExtension ? "remove extension" : "stop watching"}</p>
       <details className="card mt-3 p-5">
-        <summary className="cursor-pointer text-sm text-fg">Remove this app</summary>
+        <summary className="cursor-pointer text-sm text-fg">{isExtension ? "Remove this extension" : "Remove this app"}</summary>
         <div className="mt-4 space-y-3">
           <p className="text-xs text-fg-muted">
-            The daily check stops and the app stops counting against your plan. Verdicts already
-            published stay reachable at their links — they are the record of what your app looked
-            like on those days, and deleting them would break anything you shared.
+            {isExtension
+              ? "The extension is removed from your dashboard. Published verdicts stay available at their existing links."
+              : "The daily check stops and the app stops counting against your plan. Verdicts already published stay reachable at their links — they are the record of what your app looked like on those days, and deleting them would break anything you shared."}
           </p>
           <form action={formAction} className="flex flex-wrap items-center gap-2">
             <Input
@@ -30,7 +30,7 @@ export function DeleteAppSection({ appId, appSlug }: { appId: string; appSlug: s
               aria-label={`Type ${appSlug} to confirm`}
               className="max-w-xs"
             />
-            <RemoveButton />
+            <RemoveButton isExtension={isExtension} />
           </form>
           {state?.error && <p className="text-sm text-status-broken">{state.error}</p>}
         </div>
@@ -39,7 +39,7 @@ export function DeleteAppSection({ appId, appSlug }: { appId: string; appSlug: s
   );
 }
 
-function RemoveButton() {
+function RemoveButton({ isExtension }: { isExtension: boolean }) {
   const { pending } = useFormStatus();
   return (
     <button
@@ -47,7 +47,7 @@ function RemoveButton() {
       disabled={pending}
       className="rounded-lg border border-status-broken/50 px-3 py-2 text-sm text-status-broken transition-colors hover:bg-status-broken/10 disabled:opacity-60"
     >
-      {pending ? "Removing…" : "Remove app"}
+      {pending ? "Removing…" : isExtension ? "Remove extension" : "Remove app"}
     </button>
   );
 }

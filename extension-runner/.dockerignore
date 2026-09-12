@@ -13,6 +13,7 @@
 !build-stimuli.mjs
 !billing.mjs
 !joblander-account.mjs
+!joblander-practice.mjs
 !result.mjs
 !session-view.mjs
 !targets.mjs

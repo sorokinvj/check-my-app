@@ -1,0 +1,19 @@
+{
+  "name": "checkmyapp-extension-native-probe",
+  "main": "native-cloudflare.ts",
+  "compatibility_date": "2025-09-15",
+  "compatibility_flags": ["nodejs_compat"],
+  "containers": [{
+    "class_name": "ExtensionRunner",
+    "image": "../../extension-runner/Dockerfile",
+    "image_build_context": "../../extension-runner",
+    "instance_type": "standard-2",
+    "max_instances": 3
+  }],
+  "durable_objects": {
+    "bindings": [{ "name": "EXTENSION_RUNNER", "class_name": "ExtensionRunner" }]
+  },
+  "migrations": [{ "tag": "extension-native-probe-v1", "new_sqlite_classes": ["ExtensionRunner"] }],
+  "r2_buckets": [{ "binding": "EVIDENCE", "bucket_name": "checkmyapp-extension-probe-evidence" }],
+  "observability": { "enabled": true }
+}

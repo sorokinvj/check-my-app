@@ -450,6 +450,8 @@ const EXTENSION_TOOLS: Anthropic.Tool[] = [
     ["extension_audio_preflight", "Validate the synthetic microphone before a session. Run with the native popup closed."],
     ["extension_account_preflight", "Read the test account's visible minute balance and session history before a paid session. Uses the saved test credentials, with the native popup closed."],
     ["extension_start_session", "Start the extension session with an owned deadline and verified local Stop sequence. Requires explicit owner permission, a test account and audio preflight. Open the native popup first."],
+    ["extension_prepare_practice", "Prepare the practice page with the selected coach and language before any session. Requires account preflight and the native popup closed."],
+    ["extension_start_practice", "Start the prepared practice with its microphone on and an owned Stop deadline. In a combined scenario start the extension first, then start practice. Requires account and audio preflight and session permission."],
     ["extension_observe_session", "Wait up to 25 seconds for the owned session and read its new question/answer, Stop and minute accounting. Repeat until complete. The local deadline ends and confirms the session automatically, allowing the full allotted duration and post-Stop balance check."],
     ["extension_stop_sessions", "Stop every session owned by this attempt through its local confirmation sequence. Browser disposal is separate."],
   ].map(([name, description]): Anthropic.Tool => ({ name, description, input_schema: { type: "object", properties: {}, required: [] } })),

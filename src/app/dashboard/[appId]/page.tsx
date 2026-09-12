@@ -372,7 +372,7 @@ export default async function AppSettingsPage({
 
       {/* CHE-95: found by our own check — an app could be added and never
           removed, which also pinned a free plan at its one-watch cap. */}
-      <DeleteAppSection appId={app.id} appSlug={app.appSlug} />
+      <DeleteAppSection appId={app.id} appSlug={app.appSlug} isExtension={app.targetKind === "extension"} />
 
       {/* One Save for sections 1–2 + the ticket contract (form= association). */}
       <div className="sticky bottom-0 mt-10 border-t border-ink-700 bg-ink-950/90 py-4 backdrop-blur">

@@ -20,7 +20,7 @@ export function extensionPhaseEvidence(phase: string, identity: ExtensionSession
     if (final.session.ownerRunId !== identity.ownerRunId || final.session.sessionId !== identity.sessionId) throw new Error("Extension evidence belongs to another attempt");
   }
   return {
-    phase, ownerRunId: identity.ownerRunId, sessionId: identity.sessionId,
+    phase, scenario: identity.scenario ?? "interview", ownerRunId: identity.ownerRunId, sessionId: identity.sessionId,
     artifactUrl: `/api/evidence/extensions/${encodeURIComponent(identity.ownerRunId)}/cleanup.json`,
     disposed: final.disposed,
     cleanupComplete: Boolean(final.disposed && final.session && !final.session.runtimeFailure && extensionCleanupComplete(final.session)),
@@ -38,7 +38,8 @@ export function extensionCoverageGap(run: ExtensionTarget, raw: string | null | 
   if (!run.testEmail || !run.testPasswordEnc || !readExtensionOptions(run.extensionConfig).allowSessions) return "missing_access";
   try {
     const evidence = JSON.parse(raw ?? "{}") as { phases?: Record<string, ReturnType<typeof extensionPhaseEvidence>> };
-    if (Object.entries(evidence.phases ?? {}).some(([phase, result]) => phase.startsWith("walk-") && result.productResultConfirmed && result.cleanupComplete && (result.ownedSessions ?? 0) > 0)) return null;
+    const results = Object.entries(evidence.phases ?? {}).filter(([phase, result]) => phase.startsWith("walk-") && result.productResultConfirmed && result.cleanupComplete).map(([, result]) => result);
+    if (["interview", "practice", "practice-extension"].every(scenario => results.some(result => result.scenario === scenario && result.ownedSessions === (scenario === "practice-extension" ? 2 : 1)))) return null;
   } catch { /* Incomplete provenance cannot establish the core flow. */ }
   return "our_capability";
 }

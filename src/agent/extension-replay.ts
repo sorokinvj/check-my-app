@@ -3,7 +3,7 @@ import type { RecordedAction } from "./tools";
 
 export interface NativeReplayControl { role: string; name: string; editable: boolean; protected: boolean }
 export type ExtensionReplayAction =
-  | { kind: "open" | "close" | "audio" | "account" | "start" | "observe" | "stop" }
+  | { kind: "open" | "close" | "audio" | "account" | "start" | "observe" | "stop" | "practice-prepare" | "practice-start" }
   | { kind: "native-click"; control: NativeReplayControl }
   | { kind: "native-fill"; control: NativeReplayControl; value: string }
   | { kind: "native-expect"; names: string[] }
@@ -15,6 +15,7 @@ export function extensionReplaySpec(title: string, identity: ExtensionSession, a
     extensionId: identity.extensionId, packageVersion: identity.packageVersion,
     installedVersion: identity.installedVersion, artifactSha256: identity.artifactSha256,
   }, targetUrl: identity.targetUrl === "http://127.0.0.1:9091/" ? "fixture:interview" : identity.targetUrl,
+  scenario: identity.scenario ?? "interview", stimulusMode: identity.stimulus?.mode ?? "interview",
   maxSessionSeconds: identity.maxSessionSeconds ?? 180, coreResult, actions };
   return `// Replays the observed native extension surfaces in a fresh isolated executor.
 // Requires CMA_EXTENSION_RUNNER_URL and CMA_EXTENSION_RUNNER_TOKEN for the native
@@ -38,7 +39,7 @@ test(plan.title, async ({ request }) => {
   const base = process.env.CMA_EXTENSION_RUNNER_URL;
   const token = process.env.CMA_EXTENSION_RUNNER_TOKEN;
   if (!base || !token) throw new Error('A fresh native extension executor URL and token are required');
-  const paid = plan.actions.some(a => a.kind === 'start');
+  const paid = plan.actions.some(a => a.kind === 'start' || a.kind === 'practice-start');
   if (paid && process.env.CMA_ALLOW_SESSIONS !== '1') throw new Error('Explicit paid-session permission is required');
   let opened = false, browser: Browser | undefined, session: any;
   const disconnect = async () => { await browser?.close(); browser = undefined; };
@@ -82,7 +83,7 @@ test(plan.title, async ({ request }) => {
     // live session, and its finally path must ask the executor to clean it up.
     opened = true;
     session = await call('/session', { ownerRunId: 'replay-' + randomUUID(), ...plan.identity,
-      targetUrl: plan.targetUrl, maxDurationSeconds: 1200, maxSessionSeconds: plan.maxSessionSeconds, allowSessions: paid });
+      targetUrl: plan.targetUrl, scenario: plan.scenario, stimulusMode: plan.stimulusMode, maxDurationSeconds: 1200, maxSessionSeconds: plan.maxSessionSeconds, allowSessions: paid });
     for (const [key, value] of Object.entries(plan.identity)) expect(session[key], 'Installed extension identity changed').toBe(value);
     for (const step of plan.actions as any[]) {
       if (step.kind === 'open') { await disconnect(); await call('/popup', { targetId: session.targetTabId }); }
@@ -102,6 +103,10 @@ test(plan.title, async ({ request }) => {
         expect(result.historyObserved).toBe(true);
       } else if (step.kind === 'start') {
         await disconnect(); expect((await call('/session/start', {})).started).toBe(true);
+      } else if (step.kind === 'practice-prepare') {
+        expect((await call('/practice/preflight', {})).startAvailable).toBe(true);
+      } else if (step.kind === 'practice-start') {
+        expect((await call('/practice/start', {})).started).toBe(true);
       } else if (step.kind === 'observe') {
         let result;
         const deadline = Date.now() + (plan.maxSessionSeconds + 150) * 1000;

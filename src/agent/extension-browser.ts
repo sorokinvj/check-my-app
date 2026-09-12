@@ -157,6 +157,8 @@ export class ExtensionBrowser {
         if (!env.testEmail || !env.testPassword || env.credentials?.rejected) return this.missingAccess("Valid test-account access is required for the balance and session history.");
         result = await this.call("/account/preflight", { email: env.testEmail, password: env.testPassword });
         this.rememberProductRead(result);
+        const practice = (result as { practice?: unknown }).practice;
+        if (practice) this.rememberProductRead(practice);
         this.replayActions.push({ kind: "account" });
         result = { minutesAvailable: (result as { balance: number }).balance, sessionHistory: "visible" };
       } else if (name === "extension_screenshot") {
@@ -174,6 +176,17 @@ export class ExtensionBrowser {
         result = { started: true, session: "Interview assistance is active." };
         this.popup = false;
         await this.connectPage(env);
+      } else if (name === "extension_prepare_practice") {
+        if (this.popup) return "Close the extension popup before preparing the practice page.";
+        result = await this.call("/practice/preflight", {});
+        this.rememberProductRead(result);
+        this.replayActions.push({ kind: "practice-prepare" });
+      } else if (name === "extension_start_practice") {
+        if (!this.identity.allowSessions) return this.missingAccess("Session-start permission and a test account are required for practice.");
+        if (this.popup) return "Close the extension popup before starting practice.";
+        result = await this.call("/practice/start", {});
+        this.replayActions.push({ kind: "practice-start" });
+        result = { started: true, session: "Practice is active with the microphone on." };
       } else if (name === "extension_observe_session") {
         result = await this.call("/session/observe", {});
         if (this.replayActions.at(-1)?.kind !== "observe") this.replayActions.push({ kind: "observe" });
@@ -201,9 +214,10 @@ export class ExtensionBrowser {
 
   private sessionReading(raw: unknown) {
     const view = raw as { sessions: Array<{ name: string; state: string; elapsedSeconds?: number; applicationStopObserved: boolean }>;
-      questionAndAnswers: unknown[]; minuteAccounting: string; minutesUsed?: number; complete: boolean };
+      questionAndAnswers: unknown[]; practiceConversation?: unknown[]; minuteAccounting: string; minutesUsed?: number; complete: boolean };
     return { sessions: view.sessions.map(s => `${s.name}: ${s.applicationStopObserved ? "ended with confirmation" : s.state}${s.elapsedSeconds === undefined ? "" : ` after ${s.elapsedSeconds} seconds`}.`),
       answers: view.questionAndAnswers,
+      practiceConversation: view.practiceConversation ?? [],
       minutes: view.minuteAccounting === "confirmed" ? `${view.minutesUsed} minutes used. The balance remained unchanged after the session ended.` : "The account balance follow-up is still pending. Use extension_observe_session again.",
       complete: view.complete };
   }

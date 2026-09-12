@@ -42,6 +42,7 @@ export interface RunInput {
 export interface ProposedJourney {
   title: string;
   steps: string[];
+  extensionScenario?: "interview" | "practice" | "practice-extension";
 }
 
 // CHE-133: the map from the last full check of a watched app, and the two
@@ -158,6 +159,9 @@ export async function discoverApp(args: {
   await prepareAgentPage(toolEnv);
 
   try {
+    if (extension?.identity.extensionId === "hafhjepjihcimcljkdphpinannbdmnhf" && toolEnv.testEmail && toolEnv.testPassword && !toolEnv.credentials?.rejected) {
+      await extension.tool(toolEnv, "extension_account_preflight", {});
+    }
     const result = await runAgentLoop({
       system: discoverySystem(run, known, knowledge),
       task: extension

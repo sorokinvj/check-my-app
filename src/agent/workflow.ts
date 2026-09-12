@@ -613,7 +613,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
       let walkCost = 0;
       for (const { order, proposed } of walkList) {
         const jcost = await step.do(`walk-${order}`, async () => {
-          const browser = await launchAgentBrowser(env, { run, phase: `walk-${order}`, expected: scan.extensionIdentity ?? undefined }).catch(rethrowBudgetNonRetryable);
+          const browser = await launchAgentBrowser(env, { run, phase: `walk-${order}`, expected: scan.extensionIdentity ?? undefined, scenario: proposed.extensionScenario }).catch(rethrowBudgetNonRetryable);
           try {
             const r = await walkOneJourney({
               env,

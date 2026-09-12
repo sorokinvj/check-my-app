@@ -2,7 +2,74 @@
 
 Source: [Extension verification PRD](https://app.notion.com/p/3d97bac6430a81a1b09fdacc72d609c6).
 
-## Current state — 2026-09-12 20:25 UTC
+## Current state — 2026-09-12 21:17 UTC
+
+Branch `feat/chrome-extension-targets` has commits `98c0c9a`, `22e23ac` and
+`674bb45`. Further practice, cleanup and artifact changes are in progress.
+CheckMyApp production has not been migrated or deployed; no push, PR or merge.
+
+- The native executor is now deployed in an isolated Cloudflare Worker,
+  `checkmyapp-extension-native-probe`, with its own R2 bucket and no application
+  D1, scheduler, notification service or LLM credentials. It requires a secret
+  bearer token. Docker builds use the existing meeting-lab host over SSH.
+- The exact generated Playwright artifact passed against Cloudflare Containers
+  in 4.4 minutes. Session `b527bda2-1118-4fad-9d32-46a80debc3ed`, version
+  3.26.1 and original CRX digest unchanged. At 20:37–20:41 UTC it received a new
+  relevant answer, confirmed End in 226 ms, observed a 149-second history row,
+  balance 1599 → 1596, both live minute steps and unchanged balance 71.374 seconds
+  later. Browser disposal, UI Stop, accounting and product result all passed.
+  Evidence: `/tmp/checkmyapp-cloudflare-replay-cleanup.json` and
+  `/tmp/checkmyapp-extension-cloudflare-replay-2.log`.
+- The first Cloudflare allocation failed while provisioning. A later rollout
+  hit the probe's one-instance limit. The probe now uses the production limit
+  of three; instance acquisition is bounded at 60 seconds. These were executor
+  failures, with no product verdict or paid session started.
+- The 390px owner UI was checked again after entry animations settled. Adding
+  a Store link, saving, seeing the on-demand card and opening settings passed.
+  Removing an extension now uses extension-specific copy. Current disposable
+  local App: `cmtyuj4jq000pwc13ie4dd0kt`; no Watch and no Run check submitted.
+- Public cleanup artifacts now retain only this attempt's result, session
+  durations and minute assessment. Prior account history and private history
+  links stay out of the artifact. The original recovery record remains durable.
+- Practice probes exposed differences from the PRD's earlier UI: the unnamed
+  Stop button has a transparent hit area with a lucide-x icon; its dimensions
+  vary with layout. Stop first shows SESSION COMPLETE and a rating surface.
+  The practice microphone is an accessibility checkbox, not necessarily an
+  input element. The adapter changes are still being verified live.
+- Two early practice probes did not establish UI Stop. A fresh account audit
+  found one 61-second and one 62-second practice row, each charged two minutes,
+  and balances 1594 and 1592 respectively stayed unchanged for 84.847 and
+  83.313 seconds. Those probes remain failures, not successful practice tests.
+  The next probe reached SESSION COMPLETE after one second, but the microphone
+  operation failed and durable cleanup returned no confirmed final record.
+  Its subsequent account audit saw balance 1592, no new row and Start call.
+- The owner class now coalesces concurrent cleanup requests, marks a lease
+  closed only after durable evidence and disposal, preserves existing proof
+  across restarts and removes its completed expiry schedule. A self-contained
+  test exercises the actual class with a transport double. Live verification
+  of this update is still pending.
+- Discovery now reads practice's available controls through the account UI and
+  proposes separate interview, practice and simultaneous journeys. Scenario
+  metadata reaches each fresh executor; practice-only cannot start extension
+  capture, and the simultaneous case must start capture first. The native
+  exported spec includes these actions. Publication requires evidence for all
+  three JobLander scenarios. Practice output requires candidate text followed
+  by a relevant new coach response, not a greeting or timer alone.
+
+All five required validation groups now pass in order, including 52 acceptance
+scripts. Lint has only its three existing warnings. The current account audit
+kept balance 1592 unchanged for 79.045 seconds, with no new history row. The next
+practice attempt was explicitly refused by the product UI because a practice
+was already running in another tab. This is contaminated by our prior failed
+cleanup, not a customer finding. Its complete internal final record was retained
+and the browser was disposed; product cleanup/accounting remain unverified.
+Current Cloudflare probe version: `4ce981df-ecd3-45da-9d55-2675bc58de01`.
+A new read-only workerd discovery through the actual Cloudflare executor is
+running; no paid practice is active in that discovery. Remaining: successful practice-only
+and simultaneous runs, integrated discovery/walk replay with current changes,
+full submission and Workflow, review/CI, production release and outside check.
+
+### Previous checkpoint — 20:25 UTC
 
 New work since `22e23ac` adds bounded session observation for the agent,
 product-grounded extension discovery, native replay spec generation, readable

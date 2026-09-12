@@ -17,6 +17,7 @@ import { signInAccount, readAccountBalance, readAccountSnapshot } from './joblan
 import { BillingObservation } from './billing.mjs';
 import { assessExtensionOutput } from './result.mjs';
 import { sessionView } from './session-view.mjs';
+import { preparePractice, inspectPractice, startPractice, stopPractice, readPractice, practiceControls, enablePracticeMicrophone } from './joblander-practice.mjs';
 
 const exec = promisify(execFile);
 const token = process.env.RUNNER_CONTROL_TOKEN;
@@ -28,6 +29,7 @@ await mkdir(process.env.HOME, { recursive: true });
 let session = null, ledger = null, initializing = false, closed = false, closing = null, chrome = null, cdp = null, upstream = null;
 let observation = null, observationBrowser = null;
 let billing = null, billingFinal = null;
+let practiceObservation = null;
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const wss = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 * 1024 });
 const native = new NativeSurface(input => new Promise((resolve, reject) => {
@@ -98,7 +100,7 @@ async function start(input) {
     const identity = await installFromStore(input.extensionId, `${root}/extension`);
     if (closed) throw new Error('Session expired during installation');
     session = { sessionId: randomUUID(), ownerRunId: input.ownerRunId, ...identity, installedVersion: null,
-      startedAt: new Date().toISOString(), expiresAt: new Date(expiresAt).toISOString(), targetUrl,
+      startedAt: new Date().toISOString(), expiresAt: new Date(expiresAt).toISOString(), targetUrl, scenario: input.scenario ?? 'interview',
       profileId: input.ownerRunId, stimulus, targetTabId: null, popupTargetId: null, allowSessions: input.allowSessions === true, maxSessionSeconds: Math.min(600, Math.max(60, Number(input.maxSessionSeconds) || 180)), closedAt: null, applicationCleanup: 'unverified' };
     spawn('openbox', [], { stdio: 'ignore' });
     chrome = spawn(chromium.executablePath(), [
@@ -218,6 +220,7 @@ async function closePopup() {
 
 async function startExtensionSession() {
   if (!session || closed || closing || !session.allowSessions) throw new Error('Session-start permission is required');
+  if (session.scenario === 'practice') throw new Error('The practice-only scenario does not authorize extension capture');
   if (!session.audioPreflight?.passed) throw new Error('Audio fixture preflight must pass before starting a session');
   if (!session.accountBaseline) throw new Error('A fresh account balance and history are required before a paid session');
   if (Date.now() + session.maxSessionSeconds * 1000 + 120_000 > Date.parse(session.expiresAt)) throw new Error('The browser lease has insufficient time for this session, Stop and the balance recheck');
@@ -291,8 +294,59 @@ async function finalizeBilling() {
   return billingFinal;
 }
 
+async function practicePreflight() {
+  if (!session || closed || closing || session.popupTargetId || ledger.snapshot().length || !session.accountBaseline) throw new Error('Practice preparation requires a fresh account and no active session');
+  if (session.extensionId !== 'hafhjepjihcimcljkdphpinannbdmnhf' || new URL(session.targetUrl).origin !== 'https://joblander.app') throw new Error('Practice requires its own product tab');
+  const browser = await chromium.connectOverCDP(upstream);
+  try {
+    const page = await pageForTarget(browser.contexts()[0], cdp, session.targetTabId);
+    session.practicePreflight = await preparePractice(page);
+    return session.practicePreflight;
+  } finally { await browser.close(); await cdp.send('Target.activateTarget', { targetId: session.targetTabId }); }
+}
+
+async function startPracticeSession() {
+  if (!session?.allowSessions || closed || closing || !session.practicePreflight || !session.audioPreflight?.passed || !session.accountBaseline || session.popupTargetId) throw new Error('Practice requires session permission, account, audio and page preparation');
+  if (!['practice', 'practice-extension'].includes(session.scenario)) throw new Error('This scenario does not authorize practice');
+  if (session.scenario === 'practice-extension' && !ledger.snapshot().some(s => s.id === 'extension-capture' && s.state === 'active')) throw new Error('Start the extension before its simultaneous practice');
+  if (Date.now() + session.maxSessionSeconds * 1000 + 120_000 > Date.parse(session.expiresAt)) throw new Error('The practice lease has insufficient time for Stop and minute accounting');
+  const stop = async () => {
+    const browser = await chromium.connectOverCDP(upstream);
+    try {
+      const page = await pageForTarget(browser.contexts()[0], cdp, session.targetTabId);
+      return await stopPractice(page);
+    } finally {
+      if (practiceObservation) session.practiceObservation = await practiceObservation.finish();
+      await browser.close();
+    }
+  };
+  ledger.register({ id: 'ai-practice', targetId: session.targetTabId, maxSeconds: session.maxSessionSeconds, stop });
+  observationBrowser ??= await chromium.connectOverCDP(upstream);
+  const page = await pageForTarget(observationBrowser.contexts()[0], cdp, session.targetTabId);
+  try {
+    await cdp.send('Target.activateTarget', { targetId: session.targetTabId });
+    if (!billing) {
+      const accountPage = await pageForTarget(observationBrowser.contexts()[0], cdp, session.accountTabId);
+      billing = new BillingObservation({ baseline: session.accountBaseline,
+        readBalance: () => readAccountBalance(accountPage), readSnapshot: () => readAccountSnapshot(accountPage) });
+      billing.start();
+    }
+    session.practiceStart = await startPractice(page);
+    ledger.started('ai-practice');
+    practiceObservation = new SessionObservation({ ownerRunId: session.ownerRunId, targetId: session.targetTabId,
+      baseline: session.practicePreflight.text, read: async () => native.redact(await readPractice(page)) });
+    practiceObservation.start();
+    session.practiceMicrophone = await enablePracticeMicrophone(page);
+    return { started: true, session: 'Practice', sessions: ledger.snapshot() };
+  } catch (error) {
+    session.practiceFailure = { message: error.message, controls: await practiceControls(page).catch(() => []), page: await readPractice(page).catch(() => null) };
+    await ledger.endAll(); throw error;
+  }
+}
+
 async function accountPreflight(input) {
-  if (!session || closed || closing || ledger.snapshot().length || session.popupTargetId || session.accountTabId) throw new Error('Account preflight requires a fresh attempt with its popup closed');
+  if (!session || closed || closing || ledger.snapshot().length || session.popupTargetId) throw new Error('Account preflight requires a fresh attempt with its popup closed');
+  if (session.accountTabId && session.accountBaseline) return { balance: session.accountBaseline.balance, source: 'account-ui', historyObserved: true, practice: session.practiceDiscovery };
   if (session.extensionId !== 'hafhjepjihcimcljkdphpinannbdmnhf') throw new Error('Account verification is unavailable for this extension');
   if (typeof input.email !== 'string' || typeof input.password !== 'string' || !input.email || !input.password) throw new Error('Test-account access is required');
   native.secrets.set(input.email, '{{TEST_EMAIL}}'); native.secrets.set(input.password, '{{TEST_PASSWORD}}');
@@ -304,7 +358,10 @@ async function accountPreflight(input) {
     await channel.detach();
     await signInAccount(page, input.email, input.password);
     session.accountBaseline = await readAccountSnapshot(page);
-    return { balance: session.accountBaseline.balance, source: 'account-ui', historyObserved: true };
+    const practicePage = await browser.contexts()[0].newPage();
+    try { session.practiceDiscovery = await inspectPractice(practicePage); }
+    finally { await practicePage.close(); }
+    return { balance: session.accountBaseline.balance, source: 'account-ui', historyObserved: true, practice: session.practiceDiscovery };
   } finally { await browser.close(); await cdp.send('Target.activateTarget', { targetId: session.targetTabId }); }
 }
 
@@ -381,19 +438,21 @@ const server = http.createServer(async (req, res) => {
     }
     let result;
     if (req.method === 'POST' && path === '/session') result = await start(await body(req));
-    else if (req.method === 'GET' && path === '/state') result = { session: session ? { ...session, observation: observation?.snapshot() ?? null, sessions: ledger?.snapshot() ?? [] } : null, running: childIsRunning(chrome) && !closed };
+    else if (req.method === 'GET' && path === '/state') result = { session: session ? { ...session, observation: observation?.snapshot() ?? null, practiceObservation: practiceObservation?.snapshot() ?? null, sessions: ledger?.snapshot() ?? [] } : null, running: childIsRunning(chrome) && !closed };
     else if (req.method === 'POST' && path === '/fixture/preflight') result = await audioPreflight();
     else if (req.method === 'POST' && path === '/account/preflight') result = await accountPreflight(await body(req));
+    else if (req.method === 'POST' && path === '/practice/preflight') result = await practicePreflight();
+    else if (req.method === 'POST' && path === '/practice/start') result = await startPracticeSession();
     else if (req.method === 'POST' && path === '/session/start') result = await startExtensionSession();
     else if (req.method === 'POST' && path === '/session/observe') {
       if (!ledger?.snapshot().length) throw new Error('No session owned by this attempt has started');
-      const view = () => sessionView({ session, sessions: ledger.snapshot(), observation: observation?.snapshot(), billing: session.billing });
+      const view = () => sessionView({ session, sessions: ledger.snapshot(), observation: observation?.snapshot(), practiceObservation: practiceObservation?.snapshot(), billing: session.billing });
       for (let i = 0; i < 25 && !view().complete && !closed; i++) await delay(1000);
       result = view();
     }
     else if (req.method === 'POST' && path === '/session/stop') {
       await ledger?.endAll(); await finalizeBilling();
-      result = sessionView({ session, sessions: ledger?.snapshot() ?? [], observation: observation?.snapshot(), billing: session.billing });
+      result = sessionView({ session, sessions: ledger?.snapshot() ?? [], observation: observation?.snapshot(), practiceObservation: practiceObservation?.snapshot(), billing: session.billing });
     }
     else if (req.method === 'POST' && path === '/popup') result = await openPopup(await body(req));
     else if (req.method === 'GET' && path === '/popup/read') { const popup = await currentPopup(); result = await native.read(popup.url, popup.targetId); }
