@@ -2,7 +2,50 @@
 
 Source: [Extension verification PRD](https://app.notion.com/p/3d97bac6430a81a1b09fdacc72d609c6).
 
-## Current state — 2026-09-12 21:17 UTC
+## Current state — 2026-09-12 21:44 UTC
+
+Feature branch `feat/chrome-extension-targets` is pushed through `026e3ca`.
+Draft [PR #81](https://github.com/sorokinvj/check-my-app/pull/81) is open.
+CheckMyApp production has not been migrated or deployed; no merge. The user’s
+repository instruction prohibits merging and pushing to main.
+
+- The native Cloudflare generated-spec replay described below passed. Actual
+  workerd discovery through the Cloudflare executor also completed: 154.643
+  seconds, 33 calls, session `95cdda9d-2496-4407-a9ef-79b35c65abf0`, five
+  journeys including interview, practice and simultaneous scenarios. No paid
+  session started; disposal and not-started cleanup were confirmed. Evidence:
+  `/tmp/checkmyapp-cloudflare-discovery-result.json` and
+  `/tmp/checkmyapp-cloudflare-discovery-cleanup.json`.
+- Practice probe 6 reached its own Stop and SESSION COMPLETE, then disposed
+  the browser. Session `de593cd7-b9db-47e9-a5ff-78d39d6c0b6e` lasted only a
+  fraction of a second before its microphone operation failed. Its billing
+  observation was inconclusive; it is not a passing practice test. The Linux
+  microphone was an unnamed button with a muted microphone glyph, not the
+  checkbox expected from the earlier UI. Call controls appeared before dialogue.
+- The adapter now waits for the coach’s transcript control, then supports both
+  the checkbox and the observed muted microphone button. Stop controls are
+  restricted to the owned document, excluding extension shadow controls.
+  Probe 7 was explicitly refused because another practice was still active.
+  It retained that refusal, recorded zero owned sessions and disposed cleanly;
+  it did not attempt to Stop another tab. Stable balance or Start call alone
+  do not establish that the account’s active-practice lock has cleared.
+- Durable cleanup now snapshots the matching owned session before disposal so
+  an interrupted cleanup response retains the available lifecycle evidence.
+  The public artifact keeps scenario and sanitized practice result only.
+- Required generate, web and agent typechecks, lint and all 52 acceptance
+  scripts passed again after these changes. Lint has three existing warnings.
+- PR CI passed on `026e3ca`. The Claude review action failed before inference
+  (one turn, no model usage or cost, no review comments); its log exposes no
+  more specific cause. This is not a clean review. A current-head review and
+  final CI remain required. No workflow files have been edited.
+
+Current isolated Cloudflare version: `651cde1f-0b07-45cd-9efb-1e6665db221a`.
+A fresh integrated workerd walk through that Cloudflare executor is running.
+Remaining: successful practice-only and simultaneous runs, current integrated
+walk and exported replay, full submission and Workflow, review/CI, authorized
+production release and outside verification.
+
+### Previous checkpoint — 21:17 UTC
 
 Branch `feat/chrome-extension-targets` has commits `98c0c9a`, `22e23ac` and
 `674bb45`. Further practice, cleanup and artifact changes are in progress.

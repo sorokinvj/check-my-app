@@ -15,12 +15,14 @@ export function extensionArtifactEvidence(value: unknown) {
   return {
     disposed: final.disposed === true,
     session: {
-      ...pick(session, ["extensionId", "name", "packageVersion", "installedVersion", "artifactSha256", "sessionId", "ownerRunId", "startedAt", "closedAt", "applicationCleanup", "billingCleanup"]),
+      ...pick(session, ["extensionId", "name", "packageVersion", "installedVersion", "artifactSha256", "sessionId", "ownerRunId", "scenario", "startedAt", "closedAt", "applicationCleanup", "billingCleanup"]),
       sessions: (Array.isArray(session.sessions) ? session.sessions : []).map(entry => ({
         ...pick(entry, ["id", "state", "startedAt"]),
         cleanup: pick(record(entry).cleanup, ["applicationStopObserved", "stopClickedAt", "confirmClickedAt", "stoppedAt"]),
       })),
-      productResult: pick(session.productResult, ["confirmed", "observedAt", "question", "answer"]),
+      productResult: { ...pick(session.productResult, ["confirmed", "observedAt", "question", "answer"]),
+        ...(record(session.productResult).practice ? { practice: pick(record(session.productResult).practice, ["confirmed", "observedAt", "answer"]) } : {}),
+      },
       billing: { assessment: {
         ...pick(assessment, ["status", "cleanupConfirmed", "expectedMinutes", "observedMinutes", "twoMinuteSteps", "cessationMs"]),
         sessions: (Array.isArray(assessment.sessions) ? assessment.sessions : []).map(row => pick(row, ["kind", "dateUtc", "durationSeconds"])),

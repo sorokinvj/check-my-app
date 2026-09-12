@@ -9,9 +9,10 @@ export function sessionView({ session, sessions, observation, practiceObservatio
     questionAndAnswers: latest?.results ?? [],
     practiceConversation: [...(practiceObservation?.samples ?? [])].reverse().find(s => s.surface === 'practice-page' && s.callActive && s.at >= startedAt && s.utterances?.length)?.utterances ?? [],
     ...(latest ? { observedAt: latest.at } : {}),
-    minuteAccounting: billing?.assessment?.status ?? (sessions.length ? 'pending' : 'not-started'),
+    minuteAccounting: billing?.assessment?.status ?? (sessions.some(s => s.state !== 'not-started') ? 'pending' : 'not-started'),
     ...(billing?.assessment?.status === 'confirmed' ? { minutesUsed: billing.assessment.observedMinutes, balanceUnchangedAfterStop: true } : {}),
-    complete: sessions.length > 0 && sessions.every(s => ['stopped', 'unverified'].includes(s.state)) && Boolean(billing?.assessment),
+    complete: sessions.length > 0 && sessions.every(s => ['stopped', 'unverified', 'not-started'].includes(s.state))
+      && (Boolean(billing?.assessment) || sessions.every(s => s.state === 'not-started')),
     runtimeFailed: Boolean(session?.runtimeFailure),
   };
 }

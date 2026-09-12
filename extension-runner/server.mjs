@@ -17,7 +17,7 @@ import { signInAccount, readAccountBalance, readAccountSnapshot } from './joblan
 import { BillingObservation } from './billing.mjs';
 import { assessExtensionOutput } from './result.mjs';
 import { sessionView } from './session-view.mjs';
-import { preparePractice, inspectPractice, startPractice, stopPractice, readPractice, practiceControls, enablePracticeMicrophone } from './joblander-practice.mjs';
+import { preparePractice, inspectPractice, startPractice, stopPractice, readPractice, practiceControls, enablePracticeMicrophone, observePracticeRequests, PracticeStartRejected } from './joblander-practice.mjs';
 
 const exec = promisify(execFile);
 const token = process.env.RUNNER_CONTROL_TOKEN;
@@ -30,6 +30,7 @@ let session = null, ledger = null, initializing = false, closed = false, closing
 let observation = null, observationBrowser = null;
 let billing = null, billingFinal = null;
 let practiceObservation = null;
+let detachPracticeRequests = null;
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const wss = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 * 1024 });
 const native = new NativeSurface(input => new Promise((resolve, reject) => {
@@ -65,7 +66,8 @@ async function dispose(reason) {
     await ledger.endAll();
     await finalizeBilling();
     if (session) {
-      session.sessions = ledger.snapshot();
+      session.startRejections = ledger.snapshot().filter(s => s.state === 'not-started');
+      session.sessions = ledger.snapshot().filter(s => s.state !== 'not-started');
       session.applicationCleanup = !session.sessions.length ? 'not-started' : ledger.clean ? 'ui-stop-observed' : 'unverified';
       session.billingCleanup = session.sessions.length ? session.billing?.assessment.cleanupConfirmed ? 'confirmed' : 'unverified' : 'not-started';
       if (session.sessions.length) session.productResult = assessExtensionOutput(session);
@@ -91,7 +93,7 @@ async function start(input) {
   const stimulus = stimulusFor(input.stimulusMode);
   initializing = true;
   ledger = new SessionLedger(input.ownerRunId, Date.now, entries => {
-    if (entries.length && entries.every(e => ['stopped', 'unverified'].includes(e.state))) void finalizeBilling().catch(() => {});
+    if (entries.length && entries.every(e => ['stopped', 'unverified', 'not-started'].includes(e.state))) void finalizeBilling().catch(() => {});
   });
   const deadlineMs = Math.min(1200, Math.max(60, Number(input.maxDurationSeconds) || 600)) * 1000;
   const expiresAt = Date.now() + deadlineMs;
@@ -286,11 +288,11 @@ async function startExtensionSession() {
 
 async function finalizeBilling() {
   if (!billing) return null;
-  billingFinal ??= billing.finish(ledger.snapshot()).then(result => {
+  billingFinal ??= billing.finish(ledger.snapshot().filter(s => s.state !== 'not-started')).then(result => {
     session.billing = result;
     session.billingCleanup = result.assessment.cleanupConfirmed ? 'confirmed' : 'unverified';
     return result;
-  }).finally(async () => { await observationBrowser?.close().catch(() => {}); observationBrowser = null; });
+  }).finally(async () => { detachPracticeRequests?.(); await observationBrowser?.close().catch(() => {}); observationBrowser = null; });
   return billingFinal;
 }
 
@@ -324,15 +326,17 @@ async function startPracticeSession() {
   observationBrowser ??= await chromium.connectOverCDP(upstream);
   const page = await pageForTarget(observationBrowser.contexts()[0], cdp, session.targetTabId);
   try {
+    session.practiceRequests = [];
+    detachPracticeRequests = observePracticeRequests(page, session.practiceRequests);
     await cdp.send('Target.activateTarget', { targetId: session.targetTabId });
+    session.practiceStart = await startPractice(page);
+    ledger.started('ai-practice');
     if (!billing) {
       const accountPage = await pageForTarget(observationBrowser.contexts()[0], cdp, session.accountTabId);
       billing = new BillingObservation({ baseline: session.accountBaseline,
         readBalance: () => readAccountBalance(accountPage), readSnapshot: () => readAccountSnapshot(accountPage) });
       billing.start();
     }
-    session.practiceStart = await startPractice(page);
-    ledger.started('ai-practice');
     practiceObservation = new SessionObservation({ ownerRunId: session.ownerRunId, targetId: session.targetTabId,
       baseline: session.practicePreflight.text, read: async () => native.redact(await readPractice(page)) });
     practiceObservation.start();
@@ -340,6 +344,7 @@ async function startPracticeSession() {
     return { started: true, session: 'Practice', sessions: ledger.snapshot() };
   } catch (error) {
     session.practiceFailure = { message: error.message, controls: await practiceControls(page).catch(() => []), page: await readPractice(page).catch(() => null) };
+    if (error instanceof PracticeStartRejected) ledger.rejected('ai-practice', 'The product explicitly refused Start because another practice is active');
     await ledger.endAll(); throw error;
   }
 }

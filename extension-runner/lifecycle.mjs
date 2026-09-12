@@ -28,6 +28,7 @@ export class SessionLedger {
   async end(id) {
     const task = this.entries.find(t => t.entry.id === id);
     if (!task) throw new Error('Session does not belong to this run');
+    if (task.entry.state === 'not-started') return task.entry;
     if (task.promise) return task.promise;
     clearTimeout(task.timer);
     // Two paid meters can share one tab. Their Stop dialogs must not race for
@@ -52,7 +53,13 @@ export class SessionLedger {
     if (!task || task.entry.state !== 'pending') throw new Error('Session cannot start outside its pending lease');
     task.entry.state = 'active'; task.entry.startedAt = this.now();
   }
+  rejected(id, reason) {
+    const task = this.entries.find(t => t.entry.id === id);
+    if (!task || task.entry.state !== 'pending') throw new Error('Only an explicitly rejected pending Start can be released');
+    clearTimeout(task.timer);
+    task.entry.state = 'not-started'; task.entry.rejection = reason;
+  }
   async endAll() { return Promise.all(this.entries.map(t => this.end(t.entry.id))); }
   snapshot() { return this.entries.map(t => ({ ...t.entry })); }
-  get clean() { return this.entries.every(t => t.entry.state === 'stopped'); }
+  get clean() { return this.entries.every(t => ['stopped', 'not-started'].includes(t.entry.state)); }
 }

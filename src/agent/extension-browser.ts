@@ -276,13 +276,16 @@ export class ExtensionBrowser {
     if (fixtureRefusal) return fixtureRefusal;
     // Resolve the actual DOM control, including labels and nested icons, so a
     // CSS selector cannot bypass the session ledger by omitting its name.
-    const label = await target.evaluate(el => {
+    const { label, practiceControl } = await target.evaluate(el => {
       const control = el.closest("button,label,[role=button],[role=checkbox]") ?? el;
-      return [control.textContent, control.getAttribute("aria-label"), control.getAttribute("title")].filter(Boolean).join(" ");
+      return { label: [control.textContent, control.getAttribute("aria-label"), control.getAttribute("title")].filter(Boolean).join(" "),
+        practiceControl: control.getRootNode() === document && (control.getAttribute("role") === "checkbox" || Boolean(control.querySelector("svg.lucide-x"))),
+      };
     });
-    if (/\b(start|begin|record|capture|insights|practice|end session|stop session)\b/i.test(label)) {
+    const onPractice = this.identity.targetUrl.startsWith("https://joblander.app/") && /\/practice\/?$/.test(new URL(this.identity.targetUrl).pathname);
+    if (onPractice && practiceControl || /\b(start|begin|record|capture|insights|practice|end session|stop session)\b/i.test(label)) {
       this.pendingReason = this.identity.allowSessions ? "our_capability" : "missing_access";
-      return "Session controls require extension_start_session / extension_stop_sessions and their owned Stop sequence.";
+      return "Session controls require extension_start_session / extension_start_practice / extension_stop_sessions and their owned Stop sequence.";
     }
     return null;
   }

@@ -77,6 +77,19 @@ export class ExtensionRunner extends Container<AgentBindings> {
     evidence ??= { disposed: false, ...(identity ? { session: { ...identity, applicationCleanup: "unverified" } } : {}), cleanupFailure: "Executor unreachable" };
     try {
       if (!recovered) {
+        if (identity) {
+          try {
+            const snapshot = await super.fetch(new Request("http://runner/state", {
+              headers: { Authorization: `Bearer ${lease.token}` }, signal: AbortSignal.timeout(5_000),
+            }));
+            if (snapshot.ok) {
+              const latest = await snapshot.json<{ session?: ExtensionSession }>();
+              if (latest.session?.ownerRunId === identity.ownerRunId && latest.session.sessionId === identity.sessionId) {
+                evidence = { ...(evidence as object), session: latest.session };
+              }
+            }
+          } catch { /* Preserve the installation identity when observation is unavailable. */ }
+        }
         const response = await super.fetch(new Request("http://runner/session", {
           method: "DELETE", headers: { Authorization: `Bearer ${lease.token}` },
           signal: AbortSignal.timeout(120_000),
