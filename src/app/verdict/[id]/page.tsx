@@ -18,6 +18,7 @@ import { fullRechecksRemaining } from "@/lib/plans";
 import type { UserPlan } from "@/lib/enums";
 import type { AppLens, RunEvent } from "@/lib/types";
 import { OG_IMAGE } from "@/lib/site-metadata";
+import { extensionDisplayName } from "@/lib/extension-target";
 
 export const dynamic = "force-dynamic";
 
@@ -39,7 +40,7 @@ export async function generateMetadata({ params }: { params: Promise<{ id: strin
   const prisma = await getDbFromContext();
   const run = await prisma.run.findUnique({
     where: { publicId: (await params).id },
-    select: { appSlug: true, verdict: true, _count: { select: { findings: true } } },
+    select: { appSlug: true, targetKind: true, targetUrl: true, extensionEvidence: true, verdict: true, _count: { select: { findings: true } } },
   });
   if (!run) return {};
 
@@ -50,8 +51,9 @@ export async function generateMetadata({ params }: { params: Promise<{ id: strin
       ? "Nothing to fix was found."
       : `${n} thing${n === 1 ? "" : "s"} to fix ${n === 1 ? "was" : "were"} found.`;
 
-  const title = label ? `${run.appSlug} — ${label}` : run.appSlug;
-  const description = `${found} Open the check to see what a visitor to ${run.appSlug} runs into, and where.`;
+  const name = run.targetKind === "extension" ? extensionDisplayName(run.targetUrl, run.extensionEvidence) : run.appSlug;
+  const title = label ? `${name} — ${label}` : name;
+  const description = `${found} Open the check to see what someone using ${name} runs into, and where.`;
   // The image travels with the page: Next replaces the layout's openGraph
   // object wholesale, so leaving `images` out here meant no og:image at all.
   return {
@@ -254,7 +256,7 @@ export default async function VerdictPage({
         <header className="space-y-4">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div className="min-w-0">
-              <h1 className="mono text-xl text-fg">{run.appSlug}</h1>
+              <h1 className="mono text-xl text-fg">{run.targetKind === "extension" ? extensionDisplayName(run.targetUrl, run.extensionEvidence) : run.appSlug}</h1>
               <p className="mt-1 font-mono text-xs text-fg-faint">
                 Checked{" "}
                 {run.completedAt?.toLocaleString([], {

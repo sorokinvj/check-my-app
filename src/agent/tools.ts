@@ -17,6 +17,7 @@ import {
   NOT_DEFECT_FALLBACK,
   PROBLEM_FALLBACK,
   productProse,
+  productStepLabel,
   splitSentences,
   UNVERIFIABLE_FALLBACK,
 } from "@/lib/verdict-language";
@@ -177,6 +178,7 @@ export type RecordedAction =
 
 function recordAction(env: ToolEnv, action: RecordedAction): void {
   env.actionTrail?.push(action);
+  env.extension?.recordPageAction(action);
 }
 
 // ─── CHE-214: a control our own hands could not drive ────────────────────────
@@ -448,6 +450,7 @@ const EXTENSION_TOOLS: Anthropic.Tool[] = [
     ["extension_audio_preflight", "Validate the synthetic microphone before a session. Run with the native popup closed."],
     ["extension_account_preflight", "Read the test account's visible minute balance and session history before a paid session. Uses the saved test credentials, with the native popup closed."],
     ["extension_start_session", "Start the extension session with an owned deadline and verified local Stop sequence. Requires explicit owner permission, a test account and audio preflight. Open the native popup first."],
+    ["extension_observe_session", "Wait up to 25 seconds for the owned session and read its new question/answer, Stop and minute accounting. Repeat until complete. The local deadline ends and confirms the session automatically, allowing the full allotted duration and post-Stop balance check."],
     ["extension_stop_sessions", "Stop every session owned by this attempt through its local confirmation sequence. Browser disposal is separate."],
   ].map(([name, description]): Anthropic.Tool => ({ name, description, input_schema: { type: "object", properties: {}, required: [] } })),
   { name: "extension_click", description: "Click a fresh native popup control by its observed reference. Session and purchase controls are guarded.", input_schema: { type: "object", properties: { ref: { type: "string" } }, required: ["ref"] } },
@@ -1254,7 +1257,7 @@ export function classifyUnverified(step: ReportedStep): void {
 // product-facing substitute, so a label made only of machinery words (never
 // seen in a run) stays as written.
 export function productizeStep(step: ReportedStep): void {
-  step.label = productProse(step.label, 0) ?? step.label;
+  step.label = productStepLabel(step.label);
   step.attempted = productProse(step.attempted) ?? step.label;
   step.observed = productProse(step.observed) ?? observedFallback(step);
 }

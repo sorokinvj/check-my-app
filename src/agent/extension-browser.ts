@@ -6,6 +6,8 @@ import { assertExtensionIdentity, extensionCleanupComplete, gateExtensionStep, t
 import type { ExtensionRunner } from "./extension-runner";
 import { ExtensionRuntimeError } from "./extension-error";
 import type { ExtensionFinalEvidence } from "./extension-evidence";
+import { extensionReplaySpec, type ExtensionReplayAction, type NativeReplayControl } from "./extension-replay";
+import type { RecordedAction } from "./tools";
 
 const sessions = new WeakMap<Browser, ExtensionBrowser>();
 export const extensionBrowserFor = (browser: Browser) => sessions.get(browser);
@@ -24,6 +26,7 @@ export class ExtensionBrowser {
   private pendingReason?: "missing_access" | "our_capability";
   private finishPromise?: Promise<void>;
   private productReads = new Set<string>();
+  private replayActions: ExtensionReplayAction[] = [];
   private constructor(private runner: DurableObjectStub<ExtensionRunner>, readonly identity: ExtensionSession) {}
 
   static async open(env: AgentEnv, input: ExtensionRunnerInput, expected?: ExtensionIdentity): Promise<ExtensionBrowser> {
@@ -82,7 +85,7 @@ export class ExtensionBrowser {
       this.pendingReason = undefined;
     }
     if (!name.startsWith("extension_")) {
-      if (!this.popup && !this.browser.isConnected()) throw new ExtensionRuntimeError("The owned extension browser disconnected");
+      if (!this.popup && !this.browser.isConnected()) await this.restorePage(env);
       if (this.popup && ["navigate", "read_page", "click", "fill", "screenshot"].includes(name)) return "The native popup is active. Use extension_read / extension_click / extension_fill, or extension_close to return to its target tab.";
       if (name === "verify_links" && (input.urls as string[] | undefined)?.some(url => !env.knownUrls?.has(url))) return "These URLs were not observed in the extension. No product observation was made.";
       if (this.syntheticCompanion && ["read_page", "screenshot", "navigate"].includes(name)) {
@@ -100,16 +103,24 @@ export class ExtensionBrowser {
       let result: unknown;
       if (name === "extension_open") {
         if (!this.popup) {
+          const state = await this.call<{ running: boolean; session: { sessions: Array<{ state: string }>; billing?: { assessment?: unknown } } }>("/state");
+          if (state.session.sessions.some(s => s.state !== "stopped") || state.session.sessions.length > 0 && !state.session.billing?.assessment) {
+            return "The owned session or its minute accounting is still active. Use extension_observe_session until complete before reopening the popup.";
+          }
           await this.browser.close();
           result = await this.call("/popup", { targetId: this.identity.targetTabId });
           this.popup = true;
+          this.replayActions.push({ kind: "open" });
         }
         result = await this.read(env);
       } else if (name === "extension_close") {
-        await this.call("/popup/close", {});
-        this.popup = false;
-        this.nodes = [];
-        await this.connectPage(env);
+        if (this.popup) {
+          await this.call("/popup/close", {});
+          this.popup = false;
+          this.nodes = [];
+          this.replayActions.push({ kind: "close" });
+          await this.connectPage(env);
+        } else if (!this.browser.isConnected()) await this.restorePage(env);
         result = { surface: "target-tab", url: this.page.url() };
       } else if (name === "extension_read") result = await this.read(env);
       else if (name === "extension_click" || name === "extension_fill") {
@@ -129,6 +140,8 @@ export class ExtensionBrowser {
         }
         this.nodes = this.nodes.filter(n => n.ref !== node.ref);
         result = await this.call("/popup/action", { ref: input.ref, operation: name === "extension_fill" ? "fill" : "click", ...(name === "extension_fill" ? { value, credential } : {}) });
+        const control: NativeReplayControl = { role: node.role, name: node.name, editable: Boolean(node.editable), protected: Boolean(node.protected) };
+        this.replayActions.push(name === "extension_fill" ? { kind: "native-fill", control, value: recordedValue } : { kind: "native-click", control });
         const surface = { kind: "native_popup" as const, extensionId: this.identity.extensionId, targetId: this.identity.targetTabId };
         const urlAfter = `chrome-extension://${this.identity.extensionId}/${this.identity.popupPath}`;
         env.actionTrail?.push(name === "extension_fill"
@@ -138,11 +151,14 @@ export class ExtensionBrowser {
         if (this.popup) return "Close the native popup before checking the audio fixture.";
         const preflight = await this.call<{ passed: boolean }>("/fixture/preflight", {});
         result = { ready: preflight.passed, evidenceType: "test-input-only" };
+        if (preflight.passed) this.replayActions.push({ kind: "audio" });
       } else if (name === "extension_account_preflight") {
         if (this.popup) return "Close the native popup before opening the account balance.";
         if (!env.testEmail || !env.testPassword || env.credentials?.rejected) return this.missingAccess("Valid test-account access is required for the balance and session history.");
         result = await this.call("/account/preflight", { email: env.testEmail, password: env.testPassword });
         this.rememberProductRead(result);
+        this.replayActions.push({ kind: "account" });
+        result = { minutesAvailable: (result as { balance: number }).balance, sessionHistory: "visible" };
       } else if (name === "extension_screenshot") {
         if (!this.popup) return "Use screenshot for the target tab, or open the native popup first.";
         const response = await this.runner.fetch(new Request("http://runner/desktop.png"));
@@ -154,23 +170,48 @@ export class ExtensionBrowser {
         if (!this.identity.allowSessions) return this.missingAccess("Session-start permission and a test account are required for this step. It remains skipped with missing_access.");
         if (!this.popup) return "Open the native popup on the target tab before starting its session.";
         result = await this.call("/session/start", {});
+        this.replayActions.push({ kind: "start" });
+        result = { started: true, session: "Interview assistance is active." };
         this.popup = false;
         await this.connectPage(env);
+      } else if (name === "extension_observe_session") {
+        result = await this.call("/session/observe", {});
+        if (this.replayActions.at(-1)?.kind !== "observe") this.replayActions.push({ kind: "observe" });
+        this.rememberProductRead({ surface: "extension-panel", ...result as object });
+        result = this.sessionReading(result);
       } else if (name === "extension_stop_sessions") {
         await this.browser.close();
         await this.call("/popup/close", {});
         this.popup = false;
         result = await this.call("/session/stop", {});
+        this.replayActions.push({ kind: "stop" });
+        result = this.sessionReading(result);
         await this.connectPage(env);
       } else return "Unknown extension tool";
       return scrubSecrets(env, JSON.stringify(result));
     } catch (error) {
       if (error instanceof ExtensionRuntimeError) throw error;
+      if (!this.popup && !this.browser.isConnected()) await this.restorePage(env);
       const reason = error instanceof Error ? error.message : String(error);
       this.pendingReason = "our_capability";
       env.undrivenControls?.push({ hand: name === "extension_fill" ? "fill" : "click", target: "extension control", reason });
       return scrubSecrets(env, `${reason}. The extension control ${UNDRIVEN_INSTRUCTION}`);
     }
+  }
+
+  private sessionReading(raw: unknown) {
+    const view = raw as { sessions: Array<{ name: string; state: string; elapsedSeconds?: number; applicationStopObserved: boolean }>;
+      questionAndAnswers: unknown[]; minuteAccounting: string; minutesUsed?: number; complete: boolean };
+    return { sessions: view.sessions.map(s => `${s.name}: ${s.applicationStopObserved ? "ended with confirmation" : s.state}${s.elapsedSeconds === undefined ? "" : ` after ${s.elapsedSeconds} seconds`}.`),
+      answers: view.questionAndAnswers,
+      minutes: view.minuteAccounting === "confirmed" ? `${view.minutesUsed} minutes used. The balance remained unchanged after the session ended.` : "The account balance follow-up is still pending. Use extension_observe_session again.",
+      complete: view.complete };
+  }
+
+  private async restorePage(env: ToolEnv): Promise<void> {
+    const state = await this.call<{ running: boolean; session?: { popupTargetId?: string | null } }>("/state");
+    if (!state.running || state.session?.popupTargetId) throw new ExtensionRuntimeError("The owned extension page connection cannot be restored");
+    await this.connectPage(env).catch(() => { throw new ExtensionRuntimeError("The owned extension page connection could not be restored"); });
   }
 
   private missingAccess(message: string): string {
@@ -181,6 +222,9 @@ export class ExtensionBrowser {
   private async read(env: ToolEnv) {
     const result = await this.call<{ nodes: NativeNode[] }>("/popup/read");
     this.nodes = result.nodes;
+    const names = [...new Set(this.nodes.filter(n => !n.editable && !n.protected && /button|check box|combo box/.test(n.role))
+      .map(n => scrubSecrets(env, n.name)).filter(name => name && !name.includes("{{") && !name.includes("[existing document]")))];
+    if (names.length) this.replayActions.push({ kind: "native-expect", names });
     if (this.credentialFilled && this.nodes.some(n => /invalid (?:login|credentials|password|email)|incorrect (?:email|password)|wrong password|too many (?:attempts|requests)|auth\/(?:invalid-credential|wrong-password|user-not-found)/i.test(n.name))) {
       if (env.credentials) env.credentials.rejected = true;
       await env.onCredentialRejected?.("native sign-in: explicit credential rejection");
@@ -203,6 +247,14 @@ export class ExtensionBrowser {
 
   discoveryObservations(): string {
     return [...this.productReads].join("\n");
+  }
+
+  recordPageAction(action: RecordedAction): void { this.replayActions.push({ kind: "page", action }); }
+
+  async exportSpec(title: string): Promise<string> {
+    await this.finish();
+    const final = await this.finalEvidence();
+    return extensionReplaySpec(title, this.identity, this.replayActions, final.session?.productResult?.confirmed === true);
   }
 
   async guardClick(target: Locator): Promise<string | null> {

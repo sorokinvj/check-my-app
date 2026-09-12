@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { RunSavedApp } from "@/components/run-saved-app";
-import { parseExtensionLink } from "@/lib/extension-target";
+import { extensionDisplayName } from "@/lib/extension-target";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { requireUser } from "@/lib/auth";
 import { fetchTeams } from "@/lib/tracker/linear-oauth";
@@ -126,8 +126,7 @@ export default async function DashboardPage({
           {apps.map((app) => {
             const latest = app.runs[0];
             const isExtension = app.targetKind === "extension";
-            const extensionLink = isExtension ? parseExtensionLink(app.targetUrl) : null;
-            const displayName = extensionLink && extensionLink.label !== extensionLink.id ? extensionLink.label.replaceAll("-", " ") : app.appSlug;
+            const displayName = isExtension ? extensionDisplayName(app.targetUrl, latest?.extensionEvidence) : app.appSlug;
             const labels = (JSON.parse(app.policy?.pickupLabels ?? "[]") as string[]).join(", ");
             // CHE-54: a free-plan watch runs on a 7-day trial. The scheduler
             // stops running an expired one, so the card must not keep claiming

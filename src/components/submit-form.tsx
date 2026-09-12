@@ -183,6 +183,11 @@ export function SubmitForm({ initialUrl = "" }: { initialUrl?: string }) {
       setAttempted(true);
       return;
     }
+    if (isExtension && extension.allowSessions && (!testEmail.trim() || !testPassword)) {
+      setExpanded(true);
+      setError({ message: "Add your test email and password to check sessions." });
+      return;
+    }
     setSubmitting(true);
     setError(null);
     try {
@@ -218,7 +223,7 @@ export function SubmitForm({ initialUrl = "" }: { initialUrl?: string }) {
         <h1 className="text-balance text-4xl font-semibold tracking-tight sm:text-[2.75rem] sm:leading-[1.1]">
           Paste a link.
           <br />
-          {variant === "B" ? (
+          {isExtension ? <>We&apos;ll show you <span className="text-accent">your extension</span>.</> : variant === "B" ? (
             <>
               We&apos;ll show you what a <span className="text-accent">first-time visitor</span> hits.
             </>
@@ -261,7 +266,7 @@ export function SubmitForm({ initialUrl = "" }: { initialUrl?: string }) {
         <p className="-mt-3 text-sm text-status-broken">Doesn&apos;t look like a working URL</p>
       )}
 
-      {isExtension && <ExtensionFields value={extension} onChange={setExtension} />}
+      {isExtension && <ExtensionFields value={extension} onChange={next => { setExtension(next); if (next.allowSessions) setExpanded(true); }} />}
 
       {lookup && (
         <div className="card animate-fade-up space-y-2 p-4">
@@ -322,7 +327,7 @@ export function SubmitForm({ initialUrl = "" }: { initialUrl?: string }) {
           <span className={`chevron mr-1 inline-block transition-transform ${expanded ? "rotate-90" : ""}`}>
             ›
           </span>
-          Add login &amp; notes (optional)
+          {isExtension && extension.allowSessions ? "Test login & notes" : "Add login & notes (optional)"}
         </button>
       </div>
 
@@ -331,12 +336,13 @@ export function SubmitForm({ initialUrl = "" }: { initialUrl?: string }) {
           <div className="space-y-2">
             <p className="text-sm font-medium text-fg">
               Test login{" "}
-              <span className="font-normal text-fg-faint">(optional but recommended)</span>
+              <span className="font-normal text-fg-faint">{isExtension && extension.allowSessions ? "(required for sessions)" : "(optional but recommended)"}</span>
             </p>
             {/* ph-no-capture: the customer's test login never rides on an
                 analytics event (src/lib/analytics.ts, guardEvent). */}
             <Input
               type="email"
+              aria-label="Test email"
               placeholder="test@example.com"
               value={testEmail}
               onChange={(e) => setTestEmail(e.target.value)}
@@ -345,6 +351,7 @@ export function SubmitForm({ initialUrl = "" }: { initialUrl?: string }) {
             />
             <Input
               type="password"
+              aria-label="Test password"
               placeholder="••••••••"
               value={testPassword}
               onChange={(e) => setTestPassword(e.target.value)}
@@ -428,7 +435,7 @@ export function SubmitForm({ initialUrl = "" }: { initialUrl?: string }) {
             Spinning up agents…
           </>
         ) : (
-          "Show me my app"
+          isExtension ? "Check my extension" : "Show me my app"
         )}
       </Button>
 

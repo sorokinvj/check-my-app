@@ -4,6 +4,16 @@ import { parseExtensionLink, readExtensionOptions } from "@/lib/extension-target
 
 export interface ExtensionFinalEvidence { disposed: boolean; session?: ExtensionSession }
 
+export function extensionAccountingStep(final: ExtensionFinalEvidence) {
+  const session = final.session;
+  const accounting = session?.billing?.assessment;
+  if (!final.disposed || !session || !extensionCleanupComplete(session) || accounting?.status !== "confirmed" || !Number.isSafeInteger(accounting.observedMinutes) || !accounting.sessions?.length) return null;
+  const durations = accounting.sessions.map(row => `${row.durationSeconds} seconds`).join(" and ");
+  return { label: "Session minutes", status: "ok" as const,
+    attempted: "End the session and check its minute usage.",
+    observed: `${accounting.observedMinutes} minutes were used for the session${accounting.sessions.length === 1 ? "" : "s"} lasting ${durations}. The balance stayed unchanged for at least one minute after Stop.` };
+}
+
 export function extensionPhaseEvidence(phase: string, identity: ExtensionSession, final: ExtensionFinalEvidence) {
   if (final.session) {
     assertExtensionIdentity(final.session, identity);
@@ -38,7 +48,7 @@ export async function persistExtensionPhase(env: AgentEnv, runId: string, phase:
   const previous = row?.extensionEvidence ? JSON.parse(row.extensionEvidence) as { identity?: ExtensionIdentity; phases?: Record<string, unknown> } : {};
   assertExtensionIdentity(identity, previous.identity);
   const evidence = {
-    identity: { extensionId: identity.extensionId, packageVersion: identity.packageVersion, installedVersion: identity.installedVersion, artifactSha256: identity.artifactSha256 },
+    identity: { name: identity.name, extensionId: identity.extensionId, packageVersion: identity.packageVersion, installedVersion: identity.installedVersion, artifactSha256: identity.artifactSha256 },
     phases: { ...previous.phases, [phase]: extensionPhaseEvidence(phase, identity, final) },
   };
   await env.db.run.update({ where: { id: runId }, data: { extensionEvidence: JSON.stringify(evidence) } });

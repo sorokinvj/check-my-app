@@ -2,10 +2,82 @@
 
 Source: [Extension verification PRD](https://app.notion.com/p/3d97bac6430a81a1b09fdacc72d609c6).
 
-## Current state — 2026-09-12 19:25 UTC
+## Current state — 2026-09-12 20:25 UTC
 
-Commit `98c0c9a` contains the native runner and Workflow routing. The following
-additional changes are still in the feature worktree and are not deployed:
+New work since `22e23ac` adds bounded session observation for the agent,
+product-grounded extension discovery, native replay spec generation, readable
+extension names and the home/dashboard UI path. These changes are not deployed.
+
+- Discovery #3 completed in 163 seconds / 38 calls, session
+  `71bb0be3-ea51-4cf8-9902-137bf3dad98d`, with no paid sessions and confirmed
+  disposal. Fixture content and guessed domains were absent, but extraction
+  still invented internal services and treated Insights as a harmless toggle.
+  The deterministic extension map now derives anatomy from observed controls
+  and includes the interview answer → Stop → minutes journey whenever the
+  observed JobLander start control exists. This is a proposed journey, not a
+  claim that discovery itself ran it.
+- Real workerd agent walk #1 reached a fresh answer and local Stop. Session
+  `fae92bae-8d2e-47ce-845b-79ddbf6b1e4b`, UI meeting
+  `fe1bf92a-7699-4028-9542-6ea908d5c267` at 19:55, 149 seconds, three minutes
+  used, two live minute steps, balance unchanged 69.808 seconds later. The
+  agent then failed on a disconnected inspection connection. No verdict was
+  published. `/tmp/checkmyapp-walk-cleanup-1.json` preserves the executor result.
+- Walk #2 completed with actual local D1 Steps and a GeneratedTest through
+  `walkOneJourney`, using the installed Cloudflare Playwright fork and production
+  JobLander. Run `worker-bridge-1789243551337`, session
+  `6e0842a3-6319-4ff4-8049-346805715508`, 43 tool calls. A new relevant answer
+  appeared. UI meeting `d052ffd4-aac5-40c6-ba24-dbde28daf772` at 20:07 lasted
+  149 seconds; balance 1605 → 1602, expected debit 3, two minute steps,
+  unchanged 71.044 seconds later. End/Confirm took 303 ms. Both cleanup gates
+  passed and the browser was disposed. This replaces the DO transport with
+  loopback and uses local D1; it is not a deployed CheckMyApp Workflow.
+- That walk still spent extra turns looking for accounting: Stop returned only
+  its ledger, and stale inspection transports blocked later popup invocation.
+  Stop now returns the settled account observation, duplicate popup-close calls
+  do not create extra connections, and the executor closes its own inspection
+  transports before opening another native popup. These corrections still need
+  a new integrated replay. Tool trace: `/tmp/checkmyapp-walk-tools-2.json`.
+- The final account observation is now persisted as its own product-facing
+  Step, even when the agent wraps up before accounting settles. Native tool
+  responses and the shared language gate remove internal lifecycle fields,
+  preflight and lease terminology from customer text.
+- The native test is generated from successful observed actions after cleanup,
+  pins the installed version/digest, requires explicit replay session permission,
+  and asserts application Stop plus minute accounting in `finally`. It uses a
+  fresh isolated native executor endpoint; popup.html never becomes a page tab.
+  The actual generated artifact passed in 4.4 minutes with no model. Fresh
+  session `9495c4cd-8411-4e60-9d56-3916dafe7b1e`, 3.26.1 and unchanged original
+  CRX digest: new relevant output, End/Confirm in 360 ms, UI history
+  `dae3cec4-74d0-4ac8-8886-90b9204acd95` at 20:20 with duration 149 seconds,
+  balance 1602 → 1599, two live minute steps, unchanged 72.407 seconds later.
+  Both cleanup gates and product result passed. Evidence:
+  `/tmp/checkmyapp-export-replay-cleanup.json` and
+  `/tmp/checkmyapp-extension-export-replay.log`.
+- Actual owner UI with the existing Clerk QA account: dashboard → Add extension
+  → Store link → save → on-demand card → settings passed locally. The App has
+  targetKind=extension and no Watch. Current disposable local App:
+  `cmtytirxc000ewc13gle3d2gz`. Desktop and 390px settings screenshots are in
+  `/tmp/checkmyapp-extension-{dashboard-desktop,settings-mobile}.png`.
+  The first assertion missed the existing labels suffix; it was a test selector
+  error, not a failed save. Its own earlier App was removed via the normal UI.
+- Home form matches the current production typography, cards and accent. A
+  Store link selects extension options; session permission reveals test-login
+  fields. Mobile settings had no horizontal overflow. Full-page screenshots
+  should disable entry animations before the final visual check.
+
+All five required validation groups pass in order, including all 49 acceptance
+scripts; lint has only its three existing warnings. Remaining: practice-only and
+practice+extension scenarios, final native replay/recovery acceptance, public
+submission through the complete Workflow, current-head review/CI and production
+release/verification. No push, PR, merge, production migration or deploy yet.
+The additive extension migration is now 0030; only the two disposable local
+D1 migration registries were renamed to match, after discovering main already
+contained other migrations numbered 0028 and 0029.
+
+### Previous checkpoint — 19:35 UTC
+
+Commit `98c0c9a` contains the native runner and Workflow routing; `22e23ac`
+adds the following validated changes, which are not deployed:
 local session observation, native screenshot/filename redaction, fatal runtime
 propagation, product-only discovery extraction, per-phase Run evidence links,
 independent audio stimuli, UI-based minute accounting, and a JobLander core-flow
@@ -55,8 +127,18 @@ Fresh live evidence:
   `~/checkmyapp-extension-preflight/` directory.
 - The DOM read in that capture identified the real `data-testid="question"`
   and its answer card. Subsequent code records these separately from the timer
-  and requires a fresh, relevant answer in the active interval. This new
-  machine result gate still needs its own live replay.
+  and requires a fresh, relevant answer in the active interval.
+- Capture `01a0965f-tab-billing-1`, session
+  `f7fdef8e-1718-410d-9dab-8ceee2d13500`: deliberately tab-only, microphone
+  RMS exactly 0, interviewer WAV playing. There were 146 local observations;
+  112 contained the actual question/answer card. The new machine result gate
+  confirmed the technical-challenge question and relevant prepared answer.
+  Native End/Confirm took 338 ms; history meeting
+  `ef6bf48d-45d9-4441-b4a8-8b4d0d0f2517` displays 19:31 UTC and 149 seconds.
+  Balance 1611 → 1608, both live minute steps observed, ceil(149/60)=3,
+  unchanged on a fresh read 71.456 seconds after Stop. Product result, UI Stop
+  and minute accounting all passed; browser disposed. Local evidence:
+  `/tmp/checkmyapp-tab-billing-1.json`.
 - A read-only account probe saw Start call on the practice page and no owned
   practice was started. The container's independent deadline disposed that
   browser with sessions=[] and cleanup=not-started.
@@ -130,9 +212,9 @@ Still required before shipping:
 1. Replay product-only LLM discovery and walk the core journeys through the
    integrated path. The first completed discovery still mixed fixture facts
    into its map; no Workflow-to-production result has been published.
-2. Complete the deliberately isolated tab-audio run with before/during/after
-   accounting, and replay the new structured question/answer gate. Microphone
-   output and two-minute UI accounting are now proven independently.
+2. Exercise the structured result and accounting gates through the full agent
+   path. Independent microphone and tab-audio production captures now both
+   have two-minute UI accounting; the tab run also exercised the new result gate.
 3. Implement and run the three PRD scenarios for at least two full minutes each,
    with user-visible balance/history, rounding, cessation and no active practice
    left behind. Billing cleanup intentionally remains unverified until measured.

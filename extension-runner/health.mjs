@@ -9,3 +9,17 @@ export function ownedProtocolAction(message, targetId) {
       (message.method === 'Target.closeTarget' && message.params?.targetId === targetId)) return 'refuse';
   return 'forward';
 }
+
+export async function disconnectInspectionClients(clients, graceMs = 250) {
+  const peers = [...clients];
+  const closed = peers.map(peer => peer.readyState === 3 ? Promise.resolve() : new Promise(resolve => peer.once('close', resolve)));
+  for (const peer of peers) peer.close();
+  let timer;
+  await Promise.race([Promise.all(closed), new Promise(resolve => { timer = setTimeout(resolve, graceMs); })]);
+  clearTimeout(timer);
+  for (const peer of peers) if (peer.readyState !== 3) peer.terminate();
+  let deadline;
+  try {
+    await Promise.race([Promise.all(closed), new Promise((_, reject) => { deadline = setTimeout(() => reject(new Error('Owned inspection clients did not disconnect')), 1000); })]);
+  } finally { clearTimeout(deadline); }
+}

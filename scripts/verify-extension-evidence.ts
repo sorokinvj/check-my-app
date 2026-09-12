@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { extensionPhaseEvidence, persistExtensionPhase, extensionCoverageGap } from "../src/agent/extension-evidence";
+import { extensionPhaseEvidence, persistExtensionPhase, extensionCoverageGap, extensionAccountingStep } from "../src/agent/extension-evidence";
+import { hasEnvironmentLeak, productStepLabel } from "../src/lib/verdict-language";
+import { productizeStep } from "../src/agent/tools";
 import type { ExtensionSession } from "../src/agent/extension-contract";
 import type { AgentEnv } from "../src/agent/env";
 
@@ -33,6 +35,16 @@ async function main() {
   complete.phases["walk-0"].cleanupComplete = false;
   assert.equal(extensionCoverageGap(joblander, JSON.stringify(complete)), "our_capability");
   assert.equal(extensionCoverageGap(joblander, "invalid evidence"), "our_capability");
+  const accountingFinal = { disposed: true, session: { ...identity, sessions: [{ id: "extension-capture", state: "stopped", cleanup: { applicationStopObserved: true } }], applicationCleanup: "ui-stop-observed", billingCleanup: "confirmed", billing: { assessment: { status: "confirmed", observedMinutes: 3, sessions: [{ id: "own-history-row", kind: "extension", dateUtc: "2026-09-12 20:07", durationSeconds: 149 }] } } } };
+  assert.match(extensionAccountingStep(accountingFinal)!.observed, /3 minutes.*149 seconds.*unchanged/);
+  assert.equal(extensionAccountingStep({ ...accountingFinal, disposed: false }), null);
+  assert.equal(extensionAccountingStep({ ...accountingFinal, session: { ...accountingFinal.session, billingCleanup: "unverified" } }), null);
+  const step = { label: "Pre-session account preflight", status: "ok" as const, attempted: "Read the account balance.", observed: "Balance: 1605 minutes. Audio preflight: ready. Session registered with owned expiry. applicationStopObserved: true confirmed." };
+  productizeStep(step);
+  assert.equal(step.label, "Session balance");
+  assert.equal(step.observed, "Balance: 1605 minutes.");
+  assert.equal(hasEnvironmentLeak(JSON.stringify(step)), false);
+  assert.equal(productStepLabel("Session Stop observed"), "Session Stop observed");
   console.log("Extension evidence: per-phase provenance, preserved artifacts and cross-attempt rejection pass");
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

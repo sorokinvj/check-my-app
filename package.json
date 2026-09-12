@@ -74,7 +74,10 @@
     "verify:extension-evidence": "tsx --tsconfig tsconfig.json scripts/verify-extension-evidence.ts",
     "verify:extension-stimulus": "node scripts/verify-extension-stimulus.mjs",
     "verify:extension-billing": "node scripts/verify-extension-billing.mjs",
-    "verify:extension-result": "node scripts/verify-extension-result.mjs"
+    "verify:extension-result": "node scripts/verify-extension-result.mjs",
+    "verify:extension-discovery": "tsx --tsconfig tsconfig.json scripts/verify-extension-discovery.ts",
+    "verify:extension-session-view": "node scripts/verify-extension-session-view.mjs",
+    "verify:extension-replay": "tsx --tsconfig tsconfig.json scripts/verify-extension-replay.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.104.1",

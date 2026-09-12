@@ -4,5 +4,6 @@
   "compatibility_date": "2025-09-15",
   "compatibility_flags": ["nodejs_compat"],
   "r2_buckets": [{ "binding": "EVIDENCE", "bucket_name": "extension-discovery-local" }],
+  "d1_databases": [{ "binding": "DB", "database_name": "extension-walk-local", "database_id": "local-only", "migrations_dir": "../../prisma/migrations" }],
   "dev": { "ip": "127.0.0.1", "port": 8898 }
 }

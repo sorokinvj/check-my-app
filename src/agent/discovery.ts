@@ -9,6 +9,7 @@ import { runAgentLoop, finalizeStructured, type TranscriptEntry } from "./core";
 import { knownUrlsFrom, prepareAgentPage, type ToolEnv } from "./tools";
 import { newAgentContext, newAgentPage, closeAgentContext } from "./browser";
 import { extensionBrowserFor } from "./extension-browser";
+import { shapeExtensionDiscovery } from "./extension-discovery";
 import {
   DISCOVERY_ITERATIONS,
   DISCOVERY_ITERATIONS_WITH_MEMORY,
@@ -246,7 +247,8 @@ export async function discoverApp(args: {
     if (!parsed?.journeys.length) {
       note("no journeys could be extracted — this run walks nothing and verifies nothing");
     }
-    return { ...(parsed ?? empty), transcript: result.transcript, costUsd, usage, notes };
+    const shaped = extension ? shapeExtensionDiscovery(extension.identity, extension.discoveryObservations(), parsed?.journeys ?? []) : parsed ?? empty;
+    return { ...shaped, transcript: result.transcript, costUsd, usage, notes };
   } finally {
     await closeAgentContext(browser, context);
   }

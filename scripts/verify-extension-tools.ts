@@ -21,8 +21,15 @@ assert.equal(extension.discoveryObservations(), "");
 assert.match(await executeTool(env, "verify_links", { urls: ["https://guessed.example.test"] }), /not observed/);
 assert.equal(await extension.tool(env, "verify_links", { urls: ["https://observed.example.test/help"] }), undefined);
 
-Object.assign(extension, { browser: { isConnected: () => false } });
+Object.assign(extension, { browser: { isConnected: () => false }, runner: { fetch: async () => Response.json({ running: false }) } });
 await assert.rejects(executeTool(env, "read_page", {}), ExtensionRuntimeError, "A disconnected owned browser aborts the loop instead of becoming a product result");
+let restored = false;
+Object.assign(extension, { runner: { fetch: async () => Response.json({ running: true, session: { popupTargetId: null } }) },
+  connectPage: async () => { restored = true; extension.browser = { isConnected: () => true } as typeof extension.browser; } });
+assert.match(await executeTool(env, "read_page", {}), /No extension-owned panel/);
+assert.equal(restored, true, "A live owned browser can recover an interrupted page connection");
+Object.assign(extension, { runner: { fetch: async () => Response.json({ running: true, session: { sessions: [{ state: "active" }] } }) } });
+assert.match(await executeTool(env, "extension_open", {}), /extension_observe_session until complete/);
 Object.assign(extension, { runner: { fetch: async () => new Response("gone", { status: 410 }) } });
 await assert.rejects(executeTool(env, "extension_read", {}), ExtensionRuntimeError);
 Object.assign(extension, { runner: { fetch: async () => { throw new Error("transport gone"); } } });

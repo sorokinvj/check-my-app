@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { ExtensionSettings } from "@/components/extension-fields";
 import { RunSavedApp } from "@/components/run-saved-app";
-import { readExtensionOptions } from "@/lib/extension-target";
+import { readExtensionOptions, extensionDisplayName } from "@/lib/extension-target";
 import { notFound } from "next/navigation";
 import { requireUser } from "@/lib/auth";
 import { Input } from "@/components/ui/input";
@@ -33,7 +33,7 @@ export default async function AppSettingsPage({
 
   const app = await db.app.findFirst({
     where: { id: appId, ownerId: user.id },
-    include: { watch: true, policy: true, tracker: true, repo: true },
+    include: { watch: true, policy: true, tracker: true, repo: true, runs: { orderBy: { createdAt: "desc" }, take: 1, select: { extensionEvidence: true } } },
   });
   if (!app) notFound();
 
@@ -77,7 +77,7 @@ export default async function AppSettingsPage({
           ← Dashboard
         </Link>
         <p className="section-label mt-3">{isExtension ? "extension settings" : "app settings"}</p>
-        <h1 className="text-3xl font-semibold tracking-tight">{app.appSlug}</h1>
+        <h1 className="text-3xl font-semibold tracking-tight">{isExtension ? extensionDisplayName(app.targetUrl, app.runs[0]?.extensionEvidence) : app.appSlug}</h1>
         <p className="break-all text-sm text-fg-muted">{app.targetUrl}</p>
         {isExtension && <div className="mt-4"><RunSavedApp appId={app.id} /></div>}
       </div>

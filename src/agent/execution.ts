@@ -32,6 +32,7 @@ import { cutUndrivenClaims, type GateStep } from "./findings-gate";
 import { summaryFallback } from "@/lib/verdict-language";
 import { summarizeWalk } from "./summary";
 import { ExtensionRuntimeError } from "./extension-error";
+import { extensionAccountingStep } from "./extension-evidence";
 
 export interface WalkRun extends RunInput {
   id: string;
@@ -264,6 +265,9 @@ export async function walkOneJourney(args: {
       },
       onWriteTest: async (test) => {
         testWritten = true;
+        // Native specs are built from successful operations only, after Stop
+        // and disposal; a model-authored website spec cannot replay the popup.
+        if (extension) return;
         await persistGeneratedTest(env, {
           appSlug: run.appSlug,
           journeyId: journey.id,
@@ -320,7 +324,7 @@ export async function walkOneJourney(args: {
       // it walked real steps but wrote no test, reuse the journey context to
       // force the spec out — the "worker authors its own e2e tests" guarantee
       // must hold per run, not depend on the model remembering to wrap up.
-      if (!testWritten && stepStatuses.length > 0) {
+      if (!extension && !testWritten && stepStatuses.length > 0) {
         const spec = await finalizeJson(
           llm,
           result.messages,
@@ -364,6 +368,17 @@ export async function walkOneJourney(args: {
         where: { id: journey.id },
         data: { status, summary },
       });
+      if (extension && stepStatuses.length > 0) {
+        await extension.finish();
+        const accounting = extensionAccountingStep(await extension.finalEvidence());
+        if (accounting) {
+          // The final balance settles after the agent's last visible Stop.
+          // Record that independent observation even if the loop wrapped up.
+          await env.db.step.create({ data: { journeyId: journey.id, order: stepOrder++, ...accounting } });
+        }
+        await persistGeneratedTest(env, { appSlug: run.appSlug, journeyId: journey.id, title: proposed.title,
+          content: await extension.exportSpec(proposed.title) });
+      }
     } catch (err) {
       // Per-journey isolation: one failure must not abort the rest of the run.
       // Our own LLM budget died (CHE-76) — not a fact about this journey or the

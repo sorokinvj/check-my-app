@@ -11,11 +11,12 @@ import { pageForTarget } from './targets.mjs';
 import { SessionLedger, stopWithConfirmation } from './lifecycle.mjs';
 import { NativeSurface } from './surface.mjs';
 import { SessionObservation, readExtensionPanel } from './observation.mjs';
-import { childIsRunning, ownedProtocolAction } from './health.mjs';
+import { childIsRunning, ownedProtocolAction, disconnectInspectionClients } from './health.mjs';
 import { stimulusFor, microphoneMatchesStimulus } from './stimulus.mjs';
 import { signInAccount, readAccountBalance, readAccountSnapshot } from './joblander-account.mjs';
 import { BillingObservation } from './billing.mjs';
 import { assessExtensionOutput } from './result.mjs';
+import { sessionView } from './session-view.mjs';
 
 const exec = promisify(execFile);
 const token = process.env.RUNNER_CONTROL_TOKEN;
@@ -151,9 +152,13 @@ async function start(input) {
 
 async function openPopup(input) {
   if (!session || closed) throw new Error('Session unavailable');
-  for (let i = 0; wss.clients.size && i < 40; i++) await delay(50);
-  if (wss.clients.size) throw new Error('Disconnect page inspection before opening the native popup');
   if (ledger?.snapshot().some(entry => entry.state !== 'stopped')) throw new Error('Stop the owned session before reopening its popup');
+  if (ledger?.snapshot().length && !session.billing?.assessment) throw new Error('Wait for session minute accounting before reopening the popup');
+  // A successful Browser.close can leave an inspection transport alive. Only
+  // this attempt's clients connect here; end them before a native invocation
+  // can create a popup target that an old inspector would auto-attach to.
+  await disconnectInspectionClients(wss.clients);
+  if (wss.clients.size) throw new Error('Owned page inspection is still connected');
   const targetId = input.targetId ?? session.targetTabId;
   const targets = (await cdp.send('Target.getTargets')).targetInfos;
   const popupUrl = `chrome-extension://${session.extensionId}/${session.popupPath}`;
@@ -380,7 +385,16 @@ const server = http.createServer(async (req, res) => {
     else if (req.method === 'POST' && path === '/fixture/preflight') result = await audioPreflight();
     else if (req.method === 'POST' && path === '/account/preflight') result = await accountPreflight(await body(req));
     else if (req.method === 'POST' && path === '/session/start') result = await startExtensionSession();
-    else if (req.method === 'POST' && path === '/session/stop') { result = await ledger?.endAll(); await finalizeBilling(); }
+    else if (req.method === 'POST' && path === '/session/observe') {
+      if (!ledger?.snapshot().length) throw new Error('No session owned by this attempt has started');
+      const view = () => sessionView({ session, sessions: ledger.snapshot(), observation: observation?.snapshot(), billing: session.billing });
+      for (let i = 0; i < 25 && !view().complete && !closed; i++) await delay(1000);
+      result = view();
+    }
+    else if (req.method === 'POST' && path === '/session/stop') {
+      await ledger?.endAll(); await finalizeBilling();
+      result = sessionView({ session, sessions: ledger?.snapshot() ?? [], observation: observation?.snapshot(), billing: session.billing });
+    }
     else if (req.method === 'POST' && path === '/popup') result = await openPopup(await body(req));
     else if (req.method === 'GET' && path === '/popup/read') { const popup = await currentPopup(); result = await native.read(popup.url, popup.targetId); }
     else if (req.method === 'POST' && path === '/popup/action') {

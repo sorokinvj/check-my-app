@@ -40,12 +40,14 @@ export function RunLive({
   runNumber,
   startedAt,
   notifyEmail,
+  isExtension = false,
 }: {
   publicId: string;
   appSlug: string;
   runNumber: number;
   startedAt: string;
   notifyEmail: string | null;
+  isExtension?: boolean;
 }) {
   const router = useRouter();
   const [snap, setSnap] = useState<Snapshot | null>(null);
@@ -123,7 +125,7 @@ export function RunLive({
       {/* Phase banner */}
       <div className="rounded-xl border border-accent/30 bg-accent/10 px-5 py-4">
         <p className="font-medium text-fg">
-          {PHASE_BLURB[phase] ?? "Starting up…"}
+          {isExtension && phase === "surface_scan" ? "Opening your extension…" : isExtension && phase === "discovery" ? "Mapping your extension's user journeys…" : PHASE_BLURB[phase] ?? "Starting up…"}
         </p>
         <p className="mt-0.5 font-mono text-xs text-fg-muted">
           Phase {phaseIndex + 1} of {PHASE_ORDER.length} — {PHASE_LABELS[phase] ?? "Connecting"}

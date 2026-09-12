@@ -28,6 +28,15 @@ export function isChromeStoreUrl(raw: string): boolean {
   } catch { return false; }
 }
 
+export function extensionDisplayName(targetUrl: string, evidence?: string | null): string {
+  try {
+    const name = (JSON.parse(evidence ?? "{}") as { identity?: { name?: unknown } }).identity?.name;
+    if (typeof name === "string" && name.trim() && name.length <= 160 && !/[\u0000-\u001f]/.test(name)) return name.trim();
+  } catch { /* The Store link remains usable before installation completes. */ }
+  const link = parseExtensionLink(targetUrl);
+  return link && link.label !== link.id ? link.label.replaceAll("-", " ") : "Chrome extension";
+}
+
 export interface ExtensionOptions {
   companionUrl?: string;
   expectedOutcome?: string;
