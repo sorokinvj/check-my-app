@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { RunSavedApp } from "@/components/run-saved-app";
+import { parseExtensionLink } from "@/lib/extension-target";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { requireUser } from "@/lib/auth";
 import { fetchTeams } from "@/lib/tracker/linear-oauth";
@@ -15,9 +17,9 @@ import type { UserPlan } from "@/lib/enums";
 export default async function DashboardPage({
   searchParams,
 }: {
-  searchParams: Promise<{ integration?: string; added?: string }>;
+  searchParams: Promise<{ integration?: string; added?: string; extensionAdded?: string }>;
 }) {
-  const { integration, added } = await searchParams;
+  const { integration, added, extensionAdded } = await searchParams;
   const { user, db } = await requireUser();
   const apps = await db.app.findMany({
     where: { ownerId: user.id },
@@ -77,6 +79,8 @@ export default async function DashboardPage({
         </div>
       )}
 
+      {extensionAdded && <div className="card mb-6 border-status-ok/40 bg-status-ok/5 p-4"><p className="text-sm text-status-ok">✓ Extension added. Start its first check below.</p></div>}
+
       {integrationNotice && (
         <div className="card mb-6 flex items-start justify-between gap-4 p-4">
           <div>
@@ -89,17 +93,18 @@ export default async function DashboardPage({
         </div>
       )}
 
-      <div className="mb-8 flex items-center justify-between">
+      <div className="mb-8 flex flex-wrap items-center justify-between gap-4">
         <div>
           <p className="section-label">your apps</p>
           <h1 className="text-3xl font-semibold tracking-tight">Dashboard</h1>
         </div>
-        <div className="flex items-center gap-4">
+        <div className="flex flex-wrap items-center gap-4">
           {/* CHE-99: our own error rate lives one click from the apps it is
               about, not in a private spreadsheet. */}
           <Link href="/dashboard/accuracy" className="text-xs text-fg-muted hover:text-fg">
             Accuracy
           </Link>
+          <Link href="/onboarding?type=extension" className="text-xs text-accent hover:underline">+ Add extension</Link>
           <Link
             href="/onboarding"
             className="rounded-md bg-accent px-4 py-2 font-mono text-[13px] font-semibold text-ink-950 transition-opacity hover:opacity-90"
@@ -120,20 +125,23 @@ export default async function DashboardPage({
         <ul className="space-y-3">
           {apps.map((app) => {
             const latest = app.runs[0];
+            const isExtension = app.targetKind === "extension";
+            const extensionLink = isExtension ? parseExtensionLink(app.targetUrl) : null;
+            const displayName = extensionLink && extensionLink.label !== extensionLink.id ? extensionLink.label.replaceAll("-", " ") : app.appSlug;
             const labels = (JSON.parse(app.policy?.pickupLabels ?? "[]") as string[]).join(", ");
             // CHE-54: a free-plan watch runs on a 7-day trial. The scheduler
             // stops running an expired one, so the card must not keep claiming
             // it's watching.
             const trial = watchTrialState(app.watch, user.plan as UserPlan);
             return (
-              <li key={app.id} className="card flex items-start justify-between p-5">
-                <div className="space-y-1">
+              <li key={app.id} className="card flex flex-wrap items-start justify-between gap-4 p-5">
+                <div className="min-w-0 space-y-1">
                   <div className="flex items-center gap-2">
                     <Link
                       href={`/dashboard/${app.id}`}
-                      className="font-mono text-sm text-fg hover:underline"
+                      className="break-all font-mono text-sm text-fg hover:underline"
                     >
-                      {app.appSlug}
+                      {displayName}
                     </Link>
                     <Link
                       href={`/dashboard/${app.id}`}
@@ -143,7 +151,7 @@ export default async function DashboardPage({
                     </Link>
                   </div>
                   <p className="text-xs text-fg-faint">
-                    {!app.watch?.active
+                    {isExtension ? "Chrome extension · on demand" : !app.watch?.active
                       ? "paused"
                       : trial.kind === "ended"
                         ? "paused"
@@ -234,6 +242,8 @@ export default async function DashboardPage({
                     </form>
                   </details>
                 </div>
+                <div className="flex shrink-0 flex-col items-end gap-3">
+                {isExtension && <RunSavedApp appId={app.id} />}
                 {latest ? (
                   <Link
                     href={`/${latest.status === "completed" ? "verdict" : "run"}/${latest.publicId}`}
@@ -244,6 +254,7 @@ export default async function DashboardPage({
                 ) : (
                   <span className="font-mono text-[13px] text-fg-faint">no runs yet</span>
                 )}
+                </div>
               </li>
             );
           })}

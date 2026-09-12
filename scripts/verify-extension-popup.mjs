@@ -1,0 +1,22 @@
+import assert from 'node:assert/strict';
+import { pageForTarget } from '../extension-runner/targets.mjs';
+const url='chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/popup.html';
+let attached=0,detached=0;
+const popup={url:()=>url};
+const page={url:()=> 'https://app.test'};
+const context={pages:()=>[popup,page],newCDPSession:async candidate=>{
+ attached++;
+ assert.notEqual(candidate,popup,'Inspecting a popup changes the active Chrome window');
+ return {send:async()=>({targetInfo:{targetId:'tab'}}),detach:async()=>{detached++;}};
+}};
+const infos=[{targetId:'popup',url},{targetId:'tab',url:'https://app.test'}];
+const cdp={send:async(method,params)=>method==='Target.getTargets'?{targetInfos:infos}:{targetInfo:infos.find(t=>t.targetId===params.targetId)}};
+assert.equal(await pageForTarget(context,cdp,'popup'),popup);
+assert.equal(attached,0);
+assert.equal(await pageForTarget(context,cdp,'tab'),page);
+assert.equal(attached,1);
+assert.equal(detached,1);
+infos.push({targetId:'unrelated-popup-tab',url});
+await assert.rejects(pageForTarget(context,cdp,'popup'),/ambiguous/);
+assert.equal(attached,1,'Ambiguity must not trigger an inspection or select a target by URL alone');
+console.log('Extension popup: exact target identity without changing the active Chrome window');

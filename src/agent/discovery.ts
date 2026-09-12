@@ -7,7 +7,8 @@ import { decryptSecret } from "@/lib/crypto";
 import type { AppAnatomy } from "@/lib/types";
 import { runAgentLoop, finalizeStructured, type TranscriptEntry } from "./core";
 import { knownUrlsFrom, prepareAgentPage, type ToolEnv } from "./tools";
-import { newAgentContext } from "./browser";
+import { newAgentContext, newAgentPage, closeAgentContext } from "./browser";
+import { extensionBrowserFor } from "./extension-browser";
 import {
   DISCOVERY_ITERATIONS,
   DISCOVERY_ITERATIONS_WITH_MEMORY,
@@ -124,11 +125,13 @@ export async function discoverApp(args: {
   // CHE-193: on our own hosts the context announces itself on the requests the
   // web half guards, and on nothing else (CHE-212; self-hosts.ts).
   const context = await newAgentContext(browser, run.targetUrl, env.bindings);
-  const page = await context.newPage();
+  const page = await newAgentPage(browser, context);
+  const extension = extensionBrowserFor(browser);
 
   const toolEnv: ToolEnv = {
     page,
-    targetOrigin: originOf(run.targetUrl),
+    extension,
+    targetOrigin: originOf(extension?.identity.targetUrl ?? run.targetUrl),
     // CHE-193: lets the click gate know which extra hosts are ours.
     selfCheckHosts: env.bindings.SELF_CHECK_HOSTS,
     visionScreenshots: mode.visionScreenshots,
@@ -156,7 +159,9 @@ export async function discoverApp(args: {
   try {
     const result = await runAgentLoop({
       system: discoverySystem(run, known, knowledge),
-      task: `Target app: ${run.targetUrl}\nStart by navigating there, read the page, then explore.`,
+      task: extension
+        ? `Target product: the installed extension ${extension.identity.name}. Begin with extension_open and explore its actual popup. The Store link is metadata. The target tab is ${extension.identity.targetUrl}; it may be a synthetic companion, whose content is not part of the product. Map both the extension controls and the behavior they add to its target page.`
+        : `Target app: ${run.targetUrl}\nStart by navigating there, read the page, then explore.`,
       env: toolEnv,
       llm,
       maxIterations: known ? DISCOVERY_ITERATIONS_WITH_MEMORY : DISCOVERY_ITERATIONS,
@@ -237,7 +242,7 @@ export async function discoverApp(args: {
     }
     return { ...(parsed ?? empty), transcript: result.transcript, costUsd, usage, notes };
   } finally {
-    await context.close();
+    await closeAgentContext(browser, context);
   }
 }
 

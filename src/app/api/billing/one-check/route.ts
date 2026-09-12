@@ -41,6 +41,7 @@ export async function POST(req: Request) {
   const pending = await db.pendingCheck.create({
     data: {
       targetUrl: input.url,
+      extensionConfig: input.extension ? JSON.stringify(input.extension) : null,
       testEmail: input.testEmail || null,
       testPasswordEnc: input.testPassword ? encryptSecret(input.testPassword) : null,
       userNotes: input.userNotes || null,

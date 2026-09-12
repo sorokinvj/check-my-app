@@ -9,9 +9,29 @@ import type { Browser, BrowserContext, Page } from "@cloudflare/playwright";
 import { detectTech } from "@/lib/tech-signals";
 import { putScreenshot, type AgentBindings, type AgentEnv } from "./env";
 import { announceSelfCheckOn } from "./self-hosts";
+import { ExtensionBrowser, extensionBrowserFor } from "./extension-browser";
+import { extensionInput, type ExtensionIdentity, type ExtensionTarget } from "./extension-contract";
 
-export async function launchAgentBrowser(env: AgentEnv): Promise<Browser> {
+export async function launchAgentBrowser(env: AgentEnv, target?: { run: ExtensionTarget; phase: string; expected?: ExtensionIdentity }): Promise<Browser> {
+  const input = target ? extensionInput(target.run, target.phase) : null;
+  if (input) return (await ExtensionBrowser.open(env, input, target?.expected)).browser;
   return launch(env.bindings.MYBROWSER);
+}
+
+export async function closeAgentBrowser(browser: Browser): Promise<void> {
+  const extension = extensionBrowserFor(browser);
+  if (extension) await extension.finish();
+  else await browser.close();
+}
+
+export async function newAgentPage(browser: Browser, context: BrowserContext): Promise<Page> {
+  return extensionBrowserFor(browser)?.page ?? context.newPage();
+}
+
+export async function closeAgentContext(browser: Browser, context: BrowserContext): Promise<void> {
+  // Closing the persistent profile before the runner's Stop sequence would
+  // destroy the only surface capable of ending its paid application session.
+  if (!extensionBrowserFor(browser)) await context.close();
 }
 
 // Context options for testing customers' OWN apps (they consented to the run).
@@ -51,6 +71,7 @@ export async function newAgentContext(
   targetUrl: string,
   bindings: Pick<AgentBindings, "SELF_CHECK_HOSTS">,
 ): Promise<BrowserContext> {
+  if (extensionBrowserFor(browser)) return browser.contexts()[0];
   const context = await browser.newContext(agentContextOptions(browser));
   // The routing itself lives in self-hosts.ts (pure, Playwright-free), so the
   // verify script drives the real handler on plain Node.

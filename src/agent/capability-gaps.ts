@@ -116,7 +116,7 @@ function selfPolicy(self: OurApp, titleFormat: string) {
 export async function fileCapabilityGaps(
   env: AgentEnv,
   runId: string,
-  opts: { board?: GapBoard } = {},
+  opts: { board?: GapBoard; extraGaps?: Array<{ label: string; attempted: string; observed: string; gapClass: GapClass }> } = {},
 ): Promise<CapabilityNote[]> {
   const run = await env.db.run.findUnique({
     where: { id: runId },
@@ -153,7 +153,7 @@ export async function fileCapabilityGaps(
         ]
       : [];
 
-  const allGaps = [...gaps, ...orphanGaps];
+  const allGaps = [...gaps, ...orphanGaps, ...(opts.extraGaps ?? []).map(gap => ({ ...gap, actions: null, journey: { title: "Extension verification" } }))];
   if (allGaps.length === 0) return [];
 
   const board = opts.board ?? (await ourBoard(env));

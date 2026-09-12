@@ -11,6 +11,7 @@ import { encryptSecret } from "@/lib/crypto";
 import { appSlugFromUrl } from "@/lib/utils";
 import { captureServer, serverDistinctId } from "@/lib/analytics-server";
 import type { CreateCheckInput } from "@/lib/validation";
+import { extensionColumns } from "@/lib/extension-target";
 
 export interface StartCheckOptions {
   // The validated submission (createCheckSchema output).
@@ -59,6 +60,7 @@ export async function startCheck(
     data: {
       runNumber: await nextRunNumber(db),
       targetUrl: input.url,
+      ...extensionColumns(input.url, input.extension),
       appSlug,
       testEmail: input.testEmail || null,
       testPasswordEnc: input.testPassword ? encryptSecret(input.testPassword) : null,

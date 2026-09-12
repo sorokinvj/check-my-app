@@ -1,5 +1,8 @@
 "use client";
 
+import { ExtensionFields } from "./extension-fields";
+import { parseExtensionLink, isChromeStoreUrl, type ExtensionOptions } from "@/lib/extension-target";
+
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
@@ -39,6 +42,9 @@ type LookupHit = {
 export function SubmitForm({ initialUrl = "" }: { initialUrl?: string }) {
   const router = useRouter();
   const [url, setUrl] = useState(initialUrl);
+  const [extension, setExtension] = useState<ExtensionOptions>({});
+  const [selectedKind, setSelectedKind] = useState<"website" | "extension">("website");
+  const isExtension = Boolean(parseExtensionLink(url)) || selectedKind === "extension";
   // The URL the hit was fetched for rides along so a stale card never renders.
   const [lookupState, setLookupState] = useState<{ forUrl: string; hit: LookupHit } | null>(null);
   const [expanded, setExpanded] = useState(false);
@@ -108,7 +114,7 @@ export function SubmitForm({ initialUrl = "" }: { initialUrl?: string }) {
 
   // Bare domains are fine — we assume https:// (mirrors normalizeTargetUrl on the server).
   const normalizedUrl = /^https?:\/\//i.test(url.trim()) ? url.trim() : `https://${url.trim()}`;
-  const valid = /^https?:\/\/.+\..+/.test(normalizedUrl);
+  const valid = /^https?:\/\/.+\..+/.test(normalizedUrl) && (!(isExtension || isChromeStoreUrl(normalizedUrl)) || Boolean(parseExtensionLink(normalizedUrl)));
 
   // Domain-keyed cache (CHE-39): once the URL looks real, ask if we've already
   // checked this domain and offer the existing verdict instead of a cold start.
@@ -139,7 +145,7 @@ export function SubmitForm({ initialUrl = "" }: { initialUrl?: string }) {
       const res = await fetch("/api/billing/one-check", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: normalizedUrl, testEmail, testPassword, userNotes, notifyEmail }),
+        body: JSON.stringify({ url: normalizedUrl, extension: isExtension ? extension : undefined, testEmail, testPassword, userNotes, notifyEmail }),
       });
       const body = (await res.json().catch(() => ({}))) as { url?: string; error?: string; code?: string };
       if (res.ok && body.url) {
@@ -183,7 +189,7 @@ export function SubmitForm({ initialUrl = "" }: { initialUrl?: string }) {
       const res = await fetch("/api/checks", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: normalizedUrl, testEmail, testPassword, userNotes, notifyEmail, turnstileToken }),
+        body: JSON.stringify({ url: normalizedUrl, extension: isExtension ? extension : undefined, testEmail, testPassword, userNotes, notifyEmail, turnstileToken }),
       });
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string; code?: string };
@@ -224,6 +230,16 @@ export function SubmitForm({ initialUrl = "" }: { initialUrl?: string }) {
         </h1>
       </div>
 
+      <div className="flex justify-center gap-1 font-mono text-xs" aria-label="Product type">
+        {(["website", "extension"] as const).map(kind => (
+          <button key={kind} type="button" aria-pressed={kind === (isExtension ? "extension" : "website")}
+            onClick={() => setSelectedKind(kind)}
+            className={`rounded-md px-4 py-2 transition-colors ${kind === (isExtension ? "extension" : "website") ? "bg-accent/10 text-accent" : "text-fg-muted hover:text-fg"}`}>
+            {kind === "extension" ? "Chrome extension" : "Website"}
+          </button>
+        ))}
+      </div>
+
       <div className="card p-1.5">
         <div className="flex items-center gap-2">
           <span className="pl-3 font-mono text-sm text-fg-faint">→</span>
@@ -231,7 +247,8 @@ export function SubmitForm({ initialUrl = "" }: { initialUrl?: string }) {
           <input
             type="text"
             inputMode="url"
-            placeholder="https://"
+            placeholder={isExtension ? "Chrome Web Store link" : "https://"}
+            aria-label={isExtension ? "Chrome Web Store link" : "App URL"}
             value={url}
             onChange={(e) => setUrl(e.target.value)}
             aria-invalid={url.length > 0 && !valid}
@@ -243,6 +260,8 @@ export function SubmitForm({ initialUrl = "" }: { initialUrl?: string }) {
       {(url.length > 0 || attempted) && !valid && (
         <p className="-mt-3 text-sm text-status-broken">Doesn&apos;t look like a working URL</p>
       )}
+
+      {isExtension && <ExtensionFields value={extension} onChange={setExtension} />}
 
       {lookup && (
         <div className="card animate-fade-up space-y-2 p-4">

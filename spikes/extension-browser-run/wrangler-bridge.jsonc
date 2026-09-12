@@ -1,0 +1,7 @@
+{
+  "name": "checkmyapp-extension-worker-bridge-probe",
+  "main": "bridge.ts",
+  "compatibility_date": "2025-09-15",
+  "compatibility_flags": ["nodejs_compat"],
+  "dev": { "ip": "127.0.0.1", "port": 8898 }
+}

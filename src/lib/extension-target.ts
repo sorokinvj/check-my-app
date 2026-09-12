@@ -1,0 +1,57 @@
+export interface ExtensionLink {
+  id: string;
+  storeUrl: string;
+  label: string;
+}
+
+// Store slugs are editable; the 32-character ID is the stable product identity.
+export function parseExtensionLink(raw: string): ExtensionLink | null {
+  try {
+    const url = new URL(/^https?:\/\//i.test(raw.trim()) ? raw.trim() : `https://${raw.trim()}`);
+    if (url.username || url.password || (url.port && url.port !== "443")) return null;
+    const prefix = url.hostname === "chromewebstore.google.com" ? "/detail/"
+      : url.hostname === "chrome.google.com" ? "/webstore/detail/" : null;
+    if (!prefix || !url.pathname.startsWith(prefix)) return null;
+    const parts = url.pathname.slice(prefix.length).replace(/\/$/, "").split("/");
+    if (parts.length < 1 || parts.length > 2) return null;
+    const id = parts.at(-1)!;
+    if (!/^[a-p]{32}$/.test(id)) return null;
+    const label = parts.length === 2 ? decodeURIComponent(parts[0]) : id;
+    return { id, label, storeUrl: `https://chromewebstore.google.com/detail/${id}` };
+  } catch { return null; }
+}
+
+export function isChromeStoreUrl(raw: string): boolean {
+  try {
+    const url = new URL(/^https?:\/\//i.test(raw.trim()) ? raw.trim() : `https://${raw.trim()}`);
+    return url.hostname === "chromewebstore.google.com" || url.hostname === "chrome.google.com" && url.pathname.startsWith("/webstore");
+  } catch { return false; }
+}
+
+export interface ExtensionOptions {
+  companionUrl?: string;
+  expectedOutcome?: string;
+  allowSessions?: boolean;
+  maxSessionSeconds?: number;
+}
+
+export function extensionColumns(url: string, options?: ExtensionOptions) {
+  const link = parseExtensionLink(url);
+  return link ? { targetKind: "extension", extensionId: link.id, extensionConfig: JSON.stringify(options ?? {}) } : {};
+}
+
+export function readExtensionOptions(raw: string | null | undefined): ExtensionOptions {
+  if (!raw) return {};
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+    const v = value as Record<string, unknown>;
+    return {
+      ...(typeof v.companionUrl === "string" ? { companionUrl: v.companionUrl } : {}),
+      ...(typeof v.expectedOutcome === "string" ? { expectedOutcome: v.expectedOutcome.slice(0, 1000) } : {}),
+      allowSessions: v.allowSessions === true,
+      maxSessionSeconds: typeof v.maxSessionSeconds === "number" && Number.isInteger(v.maxSessionSeconds)
+        ? Math.min(600, Math.max(60, v.maxSessionSeconds)) : 180,
+    };
+  } catch { return {}; }
+}

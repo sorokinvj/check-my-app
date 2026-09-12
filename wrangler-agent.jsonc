@@ -21,6 +21,17 @@
   "browser": {
     "binding": "MYBROWSER"
   },
+  "containers": [{
+    "class_name": "ExtensionRunner",
+    "image": "./extension-runner/Dockerfile",
+    "image_build_context": "./extension-runner",
+    "instance_type": "standard-2",
+    "max_instances": 3
+  }],
+  "durable_objects": {
+    "bindings": [{ "name": "EXTENSION_RUNNER", "class_name": "ExtensionRunner" }]
+  },
+  "migrations": [{ "tag": "extension-runner-v1", "new_sqlite_classes": ["ExtensionRunner"] }],
   "d1_databases": [
     {
       "binding": "DB",

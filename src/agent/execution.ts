@@ -16,7 +16,8 @@ import {
   type UndrivenControl,
   type ToolEnv,
 } from "./tools";
-import { newAgentContext } from "./browser";
+import { newAgentContext, newAgentPage, closeAgentContext } from "./browser";
+import { extensionBrowserFor } from "./extension-browser";
 import { walkingSystem } from "./instructions";
 import type { AppKnowledge } from "./knowledge";
 import { harnessMode, putScreenshot, putText, walkImageWindow, type AgentEnv } from "./env";
@@ -116,7 +117,8 @@ export async function walkOneJourney(args: {
     // CHE-193: on our own hosts the context announces itself on the requests
     // the web half guards, and on nothing else (CHE-212; self-hosts.ts).
     const context = await newAgentContext(browser, run.targetUrl, env.bindings);
-    const page = await context.newPage();
+    const page = await newAgentPage(browser, context);
+    const extension = extensionBrowserFor(browser);
 
     const journey = await env.db.journey.create({
       data: { runId: run.id, order: index, title: proposed.title, status: "ok" },
@@ -138,7 +140,8 @@ export async function walkOneJourney(args: {
 
     const toolEnv: ToolEnv = {
       page,
-      targetOrigin: originOf(run.targetUrl),
+      extension,
+      targetOrigin: originOf(extension?.identity.targetUrl ?? run.targetUrl),
       // CHE-193: lets the click gate know which extra hosts are ours.
       selfCheckHosts: env.bindings.SELF_CHECK_HOSTS,
       // CHE-168 decides whether the nav model sees at all (llm.navVision);
@@ -199,9 +202,9 @@ export async function walkOneJourney(args: {
         // With the judge off this returns the step untouched.
         const step = await adjudicateStep({
           llm,
-          enabled: harness.judge,
+          enabled: harness.judge && !extension?.popup,
           step: reported,
-          page,
+          page: toolEnv.page,
           networkLog: toolEnv.networkLog,
           scrub: (text) => scrubSecrets(toolEnv, text),
           usage: judgeUsage,
@@ -273,7 +276,9 @@ export async function walkOneJourney(args: {
     try {
       const result = await runAgentLoop({
         system: walkingSystem(run, proposed.title, proposed.steps, knowledge),
-        task: `Target app: ${run.targetUrl}\nWalk the journey now. Navigate to the target first.`,
+        task: extension
+          ? `Target product: installed extension ${extension.identity.name}. Walk this journey through extension_open and the companion tab ${extension.identity.targetUrl}. The Store listing and synthetic companion content are not the product. Session actions use the owned session tools; Stop must be observed before completing the journey.`
+          : `Target app: ${run.targetUrl}\nWalk the journey now. Navigate to the target first.`,
         env: toolEnv,
         llm,
         // CHE-134: sized to the journey. The cap was a flat 50 whatever the
@@ -373,7 +378,7 @@ export async function walkOneJourney(args: {
         },
       });
     } finally {
-      await context.close();
+      await closeAgentContext(browser, context);
     }
   }
 

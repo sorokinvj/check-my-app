@@ -1,5 +1,7 @@
 "use server";
 
+import { startSavedApp } from "@/lib/start-saved-app";
+import { extensionOptionsFromForm } from "@/lib/validation";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth";
@@ -118,7 +120,7 @@ export async function updateAppSettings(appId: string, formData: FormData) {
 
   // Cadence gate (CHE-34): editing an existing watch doesn't count against the
   // per-plan cap, but the tier still can't select a faster cadence than allowed.
-  const gate = await assertCanAddWatch(db, {
+  const gate = app.targetKind === "extension" ? { ok: true as const } : await assertCanAddWatch(db, {
     ownerId: user.id,
     plan: user.plan as UserPlan,
     frequency,
@@ -132,10 +134,15 @@ export async function updateAppSettings(appId: string, formData: FormData) {
     console.log(`[settings] test password saved for app ${app.id}: ${credentialFingerprint(testPassword)}`);
   }
 
+  const extension = extensionOptionsFromForm(formData);
+  if (app.targetKind === "extension" && !extension.success) throw new Error(extension.error.issues[0].message);
+  const extensionUpdate = app.targetKind === "extension" && extension.success
+    ? { extensionConfig: JSON.stringify(extension.data) } : {};
+
   // App — creds/scope/notes (source of record for test creds).
   await db.app.update({
     where: { id: app.id },
-    data: { testEmail, scopeHints, userNotes, focusAreas, writeMode, ...passwordUpdate },
+    data: { testEmail, scopeHints, userNotes, focusAreas, writeMode, ...passwordUpdate, ...extensionUpdate },
   });
 
   // Watch — cadence + notify email; test creds mirrored here exactly as
@@ -203,4 +210,11 @@ export async function deleteApp(
 
   revalidatePath("/dashboard");
   redirect(`/dashboard?removed=${encodeURIComponent(app.appSlug)}`);
+}
+
+export async function runSavedApp(appId: string, _previous: { error: string } | null) {
+  const { user, db } = await requireUser();
+  const result = await startSavedApp(db, { id: user.id, plan: user.plan as UserPlan }, appId);
+  if ("error" in result) return result;
+  redirect(`/run/${result.publicId}`);
 }

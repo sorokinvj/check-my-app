@@ -62,11 +62,17 @@
     "verify:review": "tsx --tsconfig tsconfig.json scripts/verify-review.ts",
     "verify:ephemeral": "tsx --tsconfig tsconfig.json scripts/verify-ephemeral.ts",
     "verify:mcp": "tsx --tsconfig tsconfig.json scripts/verify-mcp.ts",
-    "mcp:smoke": "tsx --tsconfig tsconfig.json scripts/mcp-smoke.ts"
+    "mcp:smoke": "tsx --tsconfig tsconfig.json scripts/mcp-smoke.ts",
+    "verify:extension-lifecycle": "node scripts/verify-extension-lifecycle.mjs",
+    "verify:extension-targets": "tsx --tsconfig tsconfig.json scripts/verify-extension-targets.ts",
+    "verify:extension-popup": "node scripts/verify-extension-popup.mjs",
+    "verify:extension-surfaces": "node scripts/verify-extension-surfaces.mjs",
+    "verify:extension-executor": "tsx scripts/verify-extension-executor.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.104.1",
     "@clerk/nextjs": "^7.5.9",
+    "@cloudflare/containers": "^0.3.7",
     "@cloudflare/playwright": "^1.3.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@prisma/adapter-d1": "^6.19.3",

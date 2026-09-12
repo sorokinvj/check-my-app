@@ -8,11 +8,13 @@
 
 import { getDb } from "@/lib/db";
 import { putObject } from "@/lib/storage";
+import type { ExtensionRunner } from "./extension-runner";
 
 export interface AgentBindings {
   DB: D1Database;
   EVIDENCE: R2Bucket;
   MYBROWSER: Fetcher;
+  EXTENSION_RUNNER?: DurableObjectNamespace<ExtensionRunner>;
   CHECK_RUN: Workflow;
   ANTHROPIC_API_KEY: string;
   ANTHROPIC_NAV_MODEL?: string;

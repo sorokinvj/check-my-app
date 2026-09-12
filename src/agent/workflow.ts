@@ -29,10 +29,13 @@ import type { Verdict } from "@/lib/enums";
 import { normalizeAnatomy } from "@/lib/anatomy";
 import { coverageSentence, pagePaths, unreachedPages } from "@/lib/coverage";
 import { parseJson } from "@/lib/json";
+import { readExtensionOptions } from "@/lib/extension-target";
 import type { RunEvent, RunPhase } from "@/lib/types";
 import { discoveryMemoryEnabled, makeAgentEnv, putText, type AgentBindings, type AgentEnv } from "./env";
 import { makeLlm, type UsageTotals } from "./llm";
-import { launchAgentBrowser, newAgentContext, surfaceScan } from "./browser";
+import { launchAgentBrowser, closeAgentBrowser, newAgentContext, surfaceScan } from "./browser";
+import { extensionBrowserFor } from "./extension-browser";
+import { isExtensionTarget } from "./extension-contract";
 import { LlmBudgetError } from "./core";
 import { dedupKeyForFinding } from "@/lib/tracker/file";
 import { discoverApp, type KnownMap, type ProposedJourney, type RunInput } from "./discovery";
@@ -109,6 +112,9 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
           publicId: true,
           runNumber: true,
           targetUrl: true,
+          targetKind: true,
+          extensionId: true,
+          extensionConfig: true,
           appSlug: true,
           testEmail: true,
           testPasswordEnc: true,
@@ -128,6 +134,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
       if (!r) throw new Error(`run ${runId} not found`);
       return r;
     });
+    const isExtension = isExtensionTarget(run);
 
     // Everything below is inside the failure handler: a run left in a
     // non-terminal status is worse than a failed one — the scheduler treats it
@@ -139,6 +146,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
       // other pre-flight rungs: a survey that could not run leaves the ladder
       // exactly as it was before this step existed, never a failed run.
       const survey = await step.do("survey", async (): Promise<SurveyOutcome> => {
+        if (isExtension) return NO_SURVEY;
         try {
           return await takeSnapshot(env, run);
         } catch (err) {
@@ -204,6 +212,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
       // the check are swallowed on purpose: a Browser Rendering hiccup during a
       // cheap pre-check must cost a full run, never the run itself.
       const smoke = await step.do("replay", async () => {
+        if (isExtension) return { taken: false as const, reason: "extension checks require the installed product" };
         // Full re-check (CHE-74): the owner explicitly asked to walk everything
         // — no shortcut may eat that request.
         if (run.forceFull) {
@@ -233,6 +242,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
       // swallow-and-fall-through contract as the smoke check — a planning error
       // costs a full run, never the run itself.
       const plan = await step.do("partial-plan", async (): Promise<PartialDecision> => {
+        if (isExtension) return { taken: false, reason: "extension checks require fresh native evidence" };
         if (run.forceFull) {
           return { taken: false, reason: "full re-check requested — walking everything" };
         }
@@ -277,7 +287,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
       // CHE-106: the budget is spent and the smoke pass could not carry the
       // verdict forward. Finish honestly rather than spend: the app was
       // checked for outages today, and the deep walk resumes tomorrow.
-      if (run.smokeOnly && mode.mode !== "smoke") {
+      if (run.smokeOnly && mode.mode !== "smoke" && !isExtension) {
         await step.do("budget-complete", async () => {
           await env.db.run.update({
             where: { id: runId },
@@ -410,7 +420,8 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
       // Reverse sync (CHE-61): fixes claimed Done in the tracker ride the same
       // priority channel, so the walker chases them specifically.
       const reverifyBlock = reverifyInstructions(reconciled.reverify);
-      const userNotes = [run.userNotes, reverifyBlock, watchNotes].filter(Boolean).join("\n\n") || null;
+      const expectedExtensionResult = isExtension ? readExtensionOptions(run.extensionConfig).expectedOutcome : null;
+      const userNotes = [run.userNotes, expectedExtensionResult ? `Expected extension result: ${expectedExtensionResult}` : null, reverifyBlock, watchNotes].filter(Boolean).join("\n\n") || null;
 
       // CHE-90: CRUD lifecycle checking is per-app and opt-in. The marker goes
       // into every record the agent creates so cleanup can only touch our own.
@@ -453,8 +464,14 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
       // Phase 2 — Surface scan (deterministic).
       const scan = await step.do("surface_scan", async () => {
         await transition(env, runId, "surface_scan", { icon: "info", text: `Loading ${run.targetUrl}` });
-        const browser = await launchAgentBrowser(env);
+        const browser = await launchAgentBrowser(env, { run, phase: "scan" });
         try {
+          const extension = extensionBrowserFor(browser);
+          if (extension) {
+            await env.db.run.update({ where: { id: runId }, data: { extensionEvidence: JSON.stringify({ identity: extension.identity }) } });
+            await appendEvent(env, runId, "surface_scan", { icon: "ok", text: `${extension.identity.name} is ready to explore` });
+            return { status: null, techSignals: [], internalLinkCount: 0, screenshotUrl: null, extensionIdentity: extension.identity };
+          }
           const r = await surfaceScan(env, browser, run.targetUrl);
           if (r.screenshotUrl) {
             await env.db.run.update({ where: { id: runId }, data: { liveScreenshotUrl: r.screenshotUrl } });
@@ -473,9 +490,9 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
             icon: "ok",
             text: `Found ${r.internalLinkCount} internal links`,
           });
-          return r;
+          return { ...r, extensionIdentity: null };
         } finally {
-          await browser.close();
+          await closeAgentBrowser(browser);
         }
       });
 
@@ -514,7 +531,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
           icon: "info",
           text: known ? `Confirming the map from Run #${known.runNumber}` : "Mapping your app",
         });
-        const browser = await launchAgentBrowser(env);
+        const browser = await launchAgentBrowser(env, { run, phase: "discovery", expected: scan.extensionIdentity ?? undefined });
         try {
           const d = await discoverApp({
             env,
@@ -545,7 +562,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
           await recordUsage(env, runId, "discovery", llm.navModel, d.usage);
           return d;
         } finally {
-          await browser.close();
+          await closeAgentBrowser(browser);
         }
       });
 
@@ -593,7 +610,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
       let walkCost = 0;
       for (const { order, proposed } of walkList) {
         const jcost = await step.do(`walk-${order}`, async () => {
-          const browser = await launchAgentBrowser(env);
+          const browser = await launchAgentBrowser(env, { run, phase: `walk-${order}`, expected: scan.extensionIdentity ?? undefined });
           try {
             const r = await walkOneJourney({
               env,
@@ -638,7 +655,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
             }
             return r.costUsd;
           } finally {
-            await browser.close();
+            await closeAgentBrowser(browser);
           }
         });
         walkCost += jcost;
@@ -905,7 +922,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
       // sign-in replay needs it. Only journeys walked THIS run are measured: a
       // carried journey has nothing new to reproduce. Every failure ends up in
       // replayStatus, never in the run.
-      for (const { order } of walkList) {
+      for (const { order } of isExtension ? [] : walkList) {
         await step.do(`replay-audit-${order}`, async () => {
           try {
             await auditJourneyReplay(env, walkRun, order);
@@ -944,6 +961,16 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
               : msg,
           },
         });
+        if (isExtension && !budget) {
+          try {
+            for (const note of await fileCapabilityGaps(env, runId, { extraGaps: [{
+              label: "Extension check did not complete",
+              attempted: "Check the installed extension through its native controls and owned target tab",
+              observed: msg.slice(0, 500),
+              gapClass: /cleanup|Stop|billing/i.test(msg) ? "extension_session_cleanup" : "extension_runtime",
+            }] })) console.warn(`[extension-gap] ${note.text}`);
+          } catch (error) { console.warn(`[extension-gap] filing failed: ${String(error)}`); }
+        }
         if (budget) {
           console.error(`[budget] run ${runId} aborted: LLM provider refused for credit state`);
           await appendEvent(env, runId, "connecting", {

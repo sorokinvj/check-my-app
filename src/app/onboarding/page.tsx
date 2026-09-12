@@ -9,10 +9,10 @@ import type { UserPlan } from "@/lib/enums";
 export default async function OnboardingPage({
   searchParams,
 }: {
-  searchParams: Promise<{ url?: string }>;
+  searchParams: Promise<{ url?: string; type?: string }>;
 }) {
   const { user, db } = await requireUser();
-  const { url } = await searchParams;
+  const { url, type } = await searchParams;
   // CHE-95 (found by our own check): the plan cap used to announce itself only
   // after the owner had filled the whole form and pressed Save. Say it first.
   const activeWatches = await db.watch.count({ where: { ownerId: user.id, active: true } });
@@ -20,7 +20,7 @@ export default async function OnboardingPage({
 
   return (
     <main className="mx-auto w-full max-w-2xl px-4 py-12">
-      {capReason && (
+      {capReason && type !== "extension" && (
         <div className="card mb-6 border-status-confusing/40 bg-status-confusing/5 p-4">
           <p className="text-sm text-status-confusing">{capReason}</p>
           <p className="mt-1 text-xs text-fg-muted">
@@ -32,7 +32,7 @@ export default async function OnboardingPage({
           </p>
         </div>
       )}
-      <OnboardingWizard prefillUrl={url ?? ""} defaultEmail={user.email ?? ""} />
+      <OnboardingWizard prefillUrl={url ?? ""} defaultEmail={user.email ?? ""} initialKind={type === "extension" ? "extension" : "website"} />
     </main>
   );
 }

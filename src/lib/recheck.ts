@@ -59,6 +59,9 @@ export async function createRecheckRun(
     select: {
       id: true,
       targetUrl: true,
+      targetKind: true,
+      extensionId: true,
+      extensionConfig: true,
       appSlug: true,
       testEmail: true,
       testPasswordEnc: true,
@@ -130,6 +133,9 @@ export async function createRecheckRun(
     data: {
       runNumber: await nextRunNumber(prisma),
       targetUrl: prev.targetUrl,
+      targetKind: prev.targetKind,
+      extensionId: prev.extensionId,
+      extensionConfig: prev.extensionConfig,
       appSlug: prev.appSlug,
       testEmail: prev.testEmail,
       testPasswordEnc: prev.testPasswordEnc,

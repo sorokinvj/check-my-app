@@ -1,4 +1,7 @@
 import Link from "next/link";
+import { ExtensionSettings } from "@/components/extension-fields";
+import { RunSavedApp } from "@/components/run-saved-app";
+import { readExtensionOptions } from "@/lib/extension-target";
 import { notFound } from "next/navigation";
 import { requireUser } from "@/lib/auth";
 import { Input } from "@/components/ui/input";
@@ -44,6 +47,7 @@ export default async function AppSettingsPage({
       return "";
     }
   })();
+  const isExtension = app.targetKind === "extension";
   const frequency = app.watch?.frequency ?? "daily";
 
   // CHE-137: full re-checks are an allowance per owner and UTC month (the
@@ -72,12 +76,14 @@ export default async function AppSettingsPage({
         <Link href="/dashboard" className="text-xs text-fg-faint hover:underline">
           ← Dashboard
         </Link>
-        <p className="section-label mt-3">app settings</p>
+        <p className="section-label mt-3">{isExtension ? "extension settings" : "app settings"}</p>
         <h1 className="text-3xl font-semibold tracking-tight">{app.appSlug}</h1>
-        <p className="text-sm text-fg-muted">{app.targetUrl}</p>
+        <p className="break-all text-sm text-fg-muted">{app.targetUrl}</p>
+        {isExtension && <div className="mt-4"><RunSavedApp appId={app.id} /></div>}
       </div>
 
       <form id="app-settings" action={updateAppSettings.bind(null, app.id)} className="space-y-12">
+        {isExtension && <ExtensionSettings initialValue={readExtensionOptions(app.extensionConfig)} />}
         {/* ── 1 · What we check ────────────────────────────────────────── */}
         <section className="space-y-4">
           <div>
@@ -173,7 +179,7 @@ export default async function AppSettingsPage({
         </section>
 
         {/* ── 2 · Schedule & alerts ───────────────────────────────────── */}
-        <section className="space-y-4">
+        {!isExtension && <section className="space-y-4">
           <div>
             <p className="section-label">2 · Schedule &amp; alerts</p>
             <p className="mt-1 text-sm text-fg-muted">When we check, and who hears about it.</p>
@@ -204,7 +210,7 @@ export default async function AppSettingsPage({
               {fullRechecksLine} · a regular re-check after a deploy is not limited.
             </p>
           </div>
-        </section>
+        </section>}
       </form>
 
       {/* ── 3 · Where results go ──────────────────────────────────────── */}
