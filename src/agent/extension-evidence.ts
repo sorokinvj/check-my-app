@@ -1,0 +1,45 @@
+import type { AgentEnv } from "./env";
+import { assertExtensionIdentity, extensionCleanupComplete, type ExtensionIdentity, type ExtensionSession, type ExtensionTarget } from "./extension-contract";
+import { parseExtensionLink, readExtensionOptions } from "@/lib/extension-target";
+
+export interface ExtensionFinalEvidence { disposed: boolean; session?: ExtensionSession }
+
+export function extensionPhaseEvidence(phase: string, identity: ExtensionSession, final: ExtensionFinalEvidence) {
+  if (final.session) {
+    assertExtensionIdentity(final.session, identity);
+    if (final.session.ownerRunId !== identity.ownerRunId || final.session.sessionId !== identity.sessionId) throw new Error("Extension evidence belongs to another attempt");
+  }
+  return {
+    phase, ownerRunId: identity.ownerRunId, sessionId: identity.sessionId,
+    artifactUrl: `/api/evidence/extensions/${encodeURIComponent(identity.ownerRunId)}/cleanup.json`,
+    disposed: final.disposed,
+    cleanupComplete: Boolean(final.disposed && final.session && !final.session.runtimeFailure && extensionCleanupComplete(final.session)),
+    applicationCleanup: final.session?.applicationCleanup ?? "unverified",
+    billingCleanup: final.session?.billingCleanup ?? "unverified",
+    ownedSessions: final.session?.sessions?.length ?? null,
+    runtimeFailure: final.session?.runtimeFailure?.kind ?? null,
+    productResultConfirmed: final.session?.productResult?.confirmed === true,
+    twoMinuteStepsObserved: final.session?.billing?.assessment?.twoMinuteSteps === true,
+  };
+}
+
+export function extensionCoverageGap(run: ExtensionTarget, raw: string | null | undefined): "missing_access" | "our_capability" | null {
+  if ((run.extensionId ?? parseExtensionLink(run.targetUrl)?.id) !== "hafhjepjihcimcljkdphpinannbdmnhf") return null;
+  if (!run.testEmail || !run.testPasswordEnc || !readExtensionOptions(run.extensionConfig).allowSessions) return "missing_access";
+  try {
+    const evidence = JSON.parse(raw ?? "{}") as { phases?: Record<string, ReturnType<typeof extensionPhaseEvidence>> };
+    if (Object.entries(evidence.phases ?? {}).some(([phase, result]) => phase.startsWith("walk-") && result.productResultConfirmed && result.cleanupComplete && (result.ownedSessions ?? 0) > 0)) return null;
+  } catch { /* Incomplete provenance cannot establish the core flow. */ }
+  return "our_capability";
+}
+
+export async function persistExtensionPhase(env: AgentEnv, runId: string, phase: string, identity: ExtensionSession, final: ExtensionFinalEvidence): Promise<void> {
+  const row = await env.db.run.findUnique({ where: { id: runId }, select: { extensionEvidence: true } });
+  const previous = row?.extensionEvidence ? JSON.parse(row.extensionEvidence) as { identity?: ExtensionIdentity; phases?: Record<string, unknown> } : {};
+  assertExtensionIdentity(identity, previous.identity);
+  const evidence = {
+    identity: { extensionId: identity.extensionId, packageVersion: identity.packageVersion, installedVersion: identity.installedVersion, artifactSha256: identity.artifactSha256 },
+    phases: { ...previous.phases, [phase]: extensionPhaseEvidence(phase, identity, final) },
+  };
+  await env.db.run.update({ where: { id: runId }, data: { extensionEvidence: JSON.stringify(evidence) } });
+}

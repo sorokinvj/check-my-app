@@ -1,14 +1,16 @@
-import { connect, type Browser, type Page, type Locator } from "@cloudflare/playwright";
+import type { Browser, Page, Locator } from "@cloudflare/playwright";
 import type { AgentEnv } from "./env";
 import type { ToolEnv } from "./tools";
 import { prepareAgentPage, scrubSecrets, normalizeFillValue, UNDRIVEN_INSTRUCTION } from "./tools";
 import { assertExtensionIdentity, extensionCleanupComplete, gateExtensionStep, type ExtensionIdentity, type ExtensionRunnerInput, type ExtensionSession } from "./extension-contract";
 import type { ExtensionRunner } from "./extension-runner";
+import { ExtensionRuntimeError } from "./extension-error";
+import type { ExtensionFinalEvidence } from "./extension-evidence";
 
 const sessions = new WeakMap<Browser, ExtensionBrowser>();
 export const extensionBrowserFor = (browser: Browser) => sessions.get(browser);
 
-interface NativeNode { ref: string; name: string; role: string; editable: boolean; protected: boolean }
+interface NativeNode { ref: string; name: string; role: string; editable: boolean; protected: boolean; enabled?: boolean; placeholder?: string }
 
 // The popup and page are two mutually exclusive connections. Opening another
 // inspector while Chrome's native popup is active changes lastFocusedWindow
@@ -21,6 +23,7 @@ export class ExtensionBrowser {
   private credentialFilled = false;
   private pendingReason?: "missing_access" | "our_capability";
   private finishPromise?: Promise<void>;
+  private productReads = new Set<string>();
   private constructor(private runner: DurableObjectStub<ExtensionRunner>, readonly identity: ExtensionSession) {}
 
   static async open(env: AgentEnv, input: ExtensionRunnerInput, expected?: ExtensionIdentity): Promise<ExtensionBrowser> {
@@ -39,12 +42,17 @@ export class ExtensionBrowser {
     const response = await this.runner.fetch(new Request(`http://runner${path}`, {
       method: input === undefined ? "GET" : "POST",
       ...(input === undefined ? {} : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) }),
-    }));
-    if (!response.ok) throw new Error(`Extension operation unavailable: ${(await response.text()).slice(0, 300)}`);
+    })).catch(() => { throw new ExtensionRuntimeError("The owned extension executor disconnected"); });
+    if (!response.ok) {
+      const message = `Extension operation unavailable: ${(await response.text()).slice(0, 300)}`;
+      if (response.status === 410 || response.status >= 500) throw new ExtensionRuntimeError(message);
+      throw new Error(message);
+    }
     return response.json<T>();
   }
 
   private async connectPage(env?: ToolEnv): Promise<void> {
+    const { connect } = await import("@cloudflare/playwright");
     const endpoint = { fetch: (input: RequestInfo | URL, init?: RequestInit) => this.runner.fetch(new Request(input, init)) };
     const options = { sessionId: this.identity.sessionId, persistent: true };
     this.browser = await connect(endpoint, options);
@@ -74,7 +82,18 @@ export class ExtensionBrowser {
       this.pendingReason = undefined;
     }
     if (!name.startsWith("extension_")) {
+      if (!this.popup && !this.browser.isConnected()) throw new ExtensionRuntimeError("The owned extension browser disconnected");
       if (this.popup && ["navigate", "read_page", "click", "fill", "screenshot"].includes(name)) return "The native popup is active. Use extension_read / extension_click / extension_fill, or extension_close to return to its target tab.";
+      if (name === "verify_links" && (input.urls as string[] | undefined)?.some(url => !env.knownUrls?.has(url))) return "These URLs were not observed in the extension. No product observation was made.";
+      if (this.syntheticCompanion && ["read_page", "screenshot", "navigate"].includes(name)) {
+        if (name === "navigate") return "The companion tab is already open. Its page is a test input, not a product surface.";
+        const panel = this.page.locator("#joblander-extension-host").locator("#joblander-extension-root");
+        if (this.identity.extensionId !== "hafhjepjihcimcljkdphpinannbdmnhf" || !await panel.count() || !await panel.isVisible()) return "No extension-owned panel is visible on the companion tab. Use extension_open to inspect the product controls.";
+        if (name === "screenshot") return JSON.stringify({ screenshotUrl: await env.onScreenshot?.(await panel.screenshot()) ?? null, surface: "extension-panel" });
+        const text = scrubSecrets(env, await panel.innerText());
+        this.rememberProductRead({ surface: "extension-panel", text });
+        return JSON.stringify({ surface: "extension-panel", text });
+      }
       return undefined;
     }
     try {
@@ -108,7 +127,7 @@ export class ExtensionBrowser {
           value = value.replaceAll("{{TEST_EMAIL}}", env.testEmail ?? "").replaceAll("{{TEST_PASSWORD}}", env.testPassword ?? "");
           this.credentialFilled = true;
         }
-        this.nodes = [];
+        this.nodes = this.nodes.filter(n => n.ref !== node.ref);
         result = await this.call("/popup/action", { ref: input.ref, operation: name === "extension_fill" ? "fill" : "click", ...(name === "extension_fill" ? { value, credential } : {}) });
         const surface = { kind: "native_popup" as const, extensionId: this.identity.extensionId, targetId: this.identity.targetTabId };
         const urlAfter = `chrome-extension://${this.identity.extensionId}/${this.identity.popupPath}`;
@@ -117,7 +136,20 @@ export class ExtensionBrowser {
           : { kind: "click", role: node.role, name: node.name, surface, outcome: { urlAfter, navigated: null, requests: null, mutations: null } });
       } else if (name === "extension_audio_preflight") {
         if (this.popup) return "Close the native popup before checking the audio fixture.";
-        result = await this.call("/fixture/preflight", {});
+        const preflight = await this.call<{ passed: boolean }>("/fixture/preflight", {});
+        result = { ready: preflight.passed, evidenceType: "test-input-only" };
+      } else if (name === "extension_account_preflight") {
+        if (this.popup) return "Close the native popup before opening the account balance.";
+        if (!env.testEmail || !env.testPassword || env.credentials?.rejected) return this.missingAccess("Valid test-account access is required for the balance and session history.");
+        result = await this.call("/account/preflight", { email: env.testEmail, password: env.testPassword });
+        this.rememberProductRead(result);
+      } else if (name === "extension_screenshot") {
+        if (!this.popup) return "Use screenshot for the target tab, or open the native popup first.";
+        const response = await this.runner.fetch(new Request("http://runner/desktop.png"));
+        if (!response.ok) throw new Error("A redacted native screenshot is unavailable");
+        const buffer = Buffer.from(await response.arrayBuffer());
+        const url = await env.onScreenshot?.(buffer);
+        result = { screenshotUrl: url ?? null };
       } else if (name === "extension_start_session") {
         if (!this.identity.allowSessions) return this.missingAccess("Session-start permission and a test account are required for this step. It remains skipped with missing_access.");
         if (!this.popup) return "Open the native popup on the target tab before starting its session.";
@@ -133,6 +165,7 @@ export class ExtensionBrowser {
       } else return "Unknown extension tool";
       return scrubSecrets(env, JSON.stringify(result));
     } catch (error) {
+      if (error instanceof ExtensionRuntimeError) throw error;
       const reason = error instanceof Error ? error.message : String(error);
       this.pendingReason = "our_capability";
       env.undrivenControls?.push({ hand: name === "extension_fill" ? "fill" : "click", target: "extension control", reason });
@@ -152,28 +185,67 @@ export class ExtensionBrowser {
       if (env.credentials) env.credentials.rejected = true;
       await env.onCredentialRejected?.("native sign-in: explicit credential rejection");
     }
-    return result;
+    this.rememberProductRead({ surface: "native-popup", controls: this.nodes.map(n => ({
+      role: n.role, name: scrubSecrets(env, n.name || n.placeholder || ""), editable: n.editable, protected: n.protected, enabled: n.enabled,
+    })) });
+    return {
+      surface: "native-popup",
+      url: `chrome-extension://${this.identity.extensionId}/${this.identity.popupPath}`,
+      controls: this.nodes.map(n => `${n.ref} ${n.role} ${JSON.stringify(n.name || n.placeholder || "")}${n.editable ? " [editable]" : ""}${n.protected ? " [password]" : ""}${n.enabled === false ? " [disabled]" : ""}`),
+    };
+  }
+
+  private get syntheticCompanion(): boolean { return this.identity.targetUrl === "http://127.0.0.1:9091/"; }
+
+  private rememberProductRead(read: unknown): void {
+    if (this.productReads.size < 60) this.productReads.add(JSON.stringify(read));
+  }
+
+  discoveryObservations(): string {
+    return [...this.productReads].join("\n");
   }
 
   async guardClick(target: Locator): Promise<string | null> {
+    const fixtureRefusal = await this.guardFixtureControl(target);
+    if (fixtureRefusal) return fixtureRefusal;
     // Resolve the actual DOM control, including labels and nested icons, so a
     // CSS selector cannot bypass the session ledger by omitting its name.
     const label = await target.evaluate(el => {
       const control = el.closest("button,label,[role=button],[role=checkbox]") ?? el;
       return [control.textContent, control.getAttribute("aria-label"), control.getAttribute("title")].filter(Boolean).join(" ");
     });
-    return /\b(start|begin|record|capture|insights|practice|end session|stop session)\b/i.test(label)
-      ? "Session controls require extension_start_session / extension_stop_sessions and their owned Stop sequence." : null;
+    if (/\b(start|begin|record|capture|insights|practice|end session|stop session)\b/i.test(label)) {
+      this.pendingReason = this.identity.allowSessions ? "our_capability" : "missing_access";
+      return "Session controls require extension_start_session / extension_stop_sessions and their owned Stop sequence.";
+    }
+    return null;
+  }
+
+  async guardFixtureControl(target: Locator): Promise<string | null> {
+    if (!this.syntheticCompanion) return null;
+    const owned = this.identity.extensionId === "hafhjepjihcimcljkdphpinannbdmnhf" && await target.evaluate(el => {
+      let root = el.getRootNode();
+      while (root instanceof ShadowRoot) {
+        if (root.host.id === "joblander-extension-host") return true;
+        root = root.host.getRootNode();
+      }
+      return false;
+    });
+    if (owned) return null;
+    this.pendingReason = "our_capability";
+    return "The selected control belongs to the test input, not to the extension.";
   }
 
   async finish(): Promise<void> {
     this.finishPromise ??= this.dispose();
     return this.finishPromise;
   }
+  async finalEvidence(): Promise<ExtensionFinalEvidence> { return this.runner.finalEvidence(); }
   private async dispose(): Promise<void> {
     await this.browser?.close().catch(() => {});
     await this.runner.expire();
     const final = await this.runner.finalEvidence();
     if (!final.disposed || !final.session || !extensionCleanupComplete(final.session)) throw new Error("internal: extension session cleanup is unverified; no verdict may be published");
+    if (final.session.runtimeFailure) throw new ExtensionRuntimeError("The owned extension browser ended before cleanup; no verdict may be published");
   }
 }

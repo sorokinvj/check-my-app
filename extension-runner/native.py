@@ -86,6 +86,26 @@ def surface(input):
     return {'acted': True, 'operation': input['operation'], 'via': 'native-input'}
 
 
+def redactions(secrets):
+    boxes = set()
+    for node in nodes(pyatspi.Registry.getDesktop(0), include_web=True):
+        if not visible(node):
+            continue
+        sensitive = node.getState().contains(pyatspi.STATE_EDITABLE) or node.getRoleName() == 'password text'
+        if not sensitive and secrets:
+            text = node.name or ''
+            try:
+                text += node.queryText().getText(0, -1)
+            except Exception:
+                pass
+            sensitive = any(secret and secret in text for secret in secrets)
+        if sensitive:
+            box = node.queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
+            if box.width > 0 and box.height > 0:
+                boxes.add((box.x - 8, box.y - 8, box.x + box.width + 8, box.y + box.height + 8))
+    return list(boxes)
+
+
 def click_named(name, include_web=False):
     names = name if isinstance(name, list) else [name]
     deadline = time.monotonic() + 5
@@ -110,6 +130,8 @@ def click_named(name, include_web=False):
 
 if sys.argv[1] == 'surface':
     print(json.dumps(surface(json.load(sys.stdin))))
+elif sys.argv[1] == 'redactions':
+    print(json.dumps(redactions(json.load(sys.stdin))))
 elif sys.argv[1] == 'tree':
     print(json.dumps([{'name': n.name, 'role': n.getRoleName()}
                       for n in nodes(pyatspi.Registry.getDesktop(0))

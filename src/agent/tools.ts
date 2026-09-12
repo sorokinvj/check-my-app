@@ -24,6 +24,7 @@ import { cutNullEffectClauses } from "./findings-gate";
 import { isSelfCheckRedirect, isSelfUrl, selfCheckRefusalIn } from "./self-hosts";
 import type { GapClass } from "./gap-classes";
 import type { ExtensionBrowser } from "./extension-browser";
+import { ExtensionRuntimeError } from "./extension-error";
 
 export interface ToolEnv {
   page: Page;
@@ -442,8 +443,10 @@ const EXTENSION_TOOLS: Anthropic.Tool[] = [
   ...[
     ["extension_open", "Open the installed extension through Chrome's native action on the owned target tab; returns its current controls."],
     ["extension_read", "Read the native popup and obtain fresh control references. References are consumed after one action."],
+    ["extension_screenshot", "Capture a redacted screenshot of the native extension popup."],
     ["extension_close", "Close the native popup and return to its exact target tab for page tools."],
     ["extension_audio_preflight", "Validate the synthetic microphone before a session. Run with the native popup closed."],
+    ["extension_account_preflight", "Read the test account's visible minute balance and session history before a paid session. Uses the saved test credentials, with the native popup closed."],
     ["extension_start_session", "Start the extension session with an owned deadline and verified local Stop sequence. Requires explicit owner permission, a test account and audio preflight. Open the native popup first."],
     ["extension_stop_sessions", "Stop every session owned by this attempt through its local confirmation sequence. Browser disposal is separate."],
   ].map(([name, description]): Anthropic.Tool => ({ name, description, input_schema: { type: "object", properties: {}, required: [] } })),
@@ -547,6 +550,7 @@ export async function executeTool(
         return `Unknown tool: ${name}`;
     }
   } catch (err) {
+    if (err instanceof ExtensionRuntimeError) throw err;
     return `Error: ${err instanceof Error ? err.message : String(err)}`;
   }
 }
@@ -1118,6 +1122,8 @@ async function fill(env: ToolEnv, input: Record<string, unknown>): Promise<strin
       : page.locator("input:visible");
 
   const field = locator.first();
+  const fixtureRefusal = await env.extension?.guardFixtureControl(field);
+  if (fixtureRefusal) return fixtureRefusal;
   // Same hydration gate as click: values typed before listeners attach are
   // silently dropped by controlled inputs.
   await waitForHydration(page, 1_000);

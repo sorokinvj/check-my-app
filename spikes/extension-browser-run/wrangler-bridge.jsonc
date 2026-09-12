@@ -3,5 +3,6 @@
   "main": "bridge.ts",
   "compatibility_date": "2025-09-15",
   "compatibility_flags": ["nodejs_compat"],
+  "r2_buckets": [{ "binding": "EVIDENCE", "bucket_name": "extension-discovery-local" }],
   "dev": { "ip": "127.0.0.1", "port": 8898 }
 }

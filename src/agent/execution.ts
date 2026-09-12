@@ -31,6 +31,7 @@ import { classifyGap, gapEvidenceText } from "./gap-classes";
 import { cutUndrivenClaims, type GateStep } from "./findings-gate";
 import { summaryFallback } from "@/lib/verdict-language";
 import { summarizeWalk } from "./summary";
+import { ExtensionRuntimeError } from "./extension-error";
 
 export interface WalkRun extends RunInput {
   id: string;
@@ -368,7 +369,7 @@ export async function walkOneJourney(args: {
       // Our own LLM budget died (CHE-76) — not a fact about this journey or the
       // app. Propagate so the workflow aborts the whole run unpublished instead
       // of burning through the remaining journeys and shipping a verdict.
-      if (err instanceof LlmBudgetError) throw err;
+      if (err instanceof LlmBudgetError || err instanceof ExtensionRuntimeError) throw err;
       console.error(`[walk] journey "${proposed.title}" failed:`, err);
       await env.db.journey.update({
         where: { id: journey.id },

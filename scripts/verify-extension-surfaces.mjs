@@ -21,7 +21,7 @@ now += 60_001;
 await assert.rejects(act(ref), /expired/);
 ref = await read();
 await act(ref);
-await assert.rejects(act(ref), /expired/);
+await assert.rejects(act(ref), /does not belong/);
 assert.equal(actions.length, 1, 'A reference is consumed before an action can be replayed');
 node.name = 'Show JobLander Insights'; node.role = 'static';
 ref = await read();
@@ -38,6 +38,10 @@ ref = await read();
 await act(ref, { operation: 'fill', value: '{{TEST_PASSWORD}}' });
 assert.equal(actions.at(-1).operation, 'fill');
 assert.equal(actions.at(-1).node.protected, true);
+const fixtureSecret = 'fixture-password-value';
+ref = await read();
+await act(ref, { operation: 'fill', value: fixtureSecret });
+assert.deepEqual(native.redact({ samples: [{ text: `An echo: ${fixtureSecret}` }] }), { samples: [{ text: 'An echo: {{TEST_PASSWORD}}' }] });
 ref = await read();
 await assert.rejects(act(ref, { operation: 'fill', value: 'text\n' }), /Invalid/, 'Typing Enter must not bypass the submit/session gate');
 node = { ...node, name: 'Sign in', role: 'push button', editable: false, protected: false };
@@ -45,4 +49,22 @@ ref = await read();
 await act(ref);
 ref = await read();
 await assert.rejects(act(ref), /already attempted/, 'A slow sign-in cannot produce repeated credential submissions');
+const form = [
+  { ...node, name: 'Email', role: 'text', editable: true, path: [0] },
+  { ...node, name: '', role: 'password text', editable: true, protected: true, path: [1] },
+];
+let fieldActions = 0;
+const fields = new NativeSurface(async input => {
+  if (input.operation === 'read') return { nodes: structuredClone(form) };
+  // The native adapter re-resolves the exact observed control immediately
+  // before input; preserving a sibling reference never bypasses that check.
+  assert.deepEqual(input.node, form[input.node.path[0]]);
+  fieldActions++;
+  return { acted: true };
+});
+const siblingRefs = (await fields.read(url, 'native-popup')).nodes;
+await fields.act({ url, targetId: 'native-popup', ref: siblingRefs[0].ref, operation: 'fill', value: 'fixture@example.test', credential: true });
+await fields.act({ url, targetId: 'native-popup', ref: siblingRefs[1].ref, operation: 'fill', value: 'fixture-only-password', credential: true });
+assert.equal(fieldActions, 2, 'One field input does not invalidate a still-current sibling field');
+await assert.rejects(fields.act({ url, targetId: 'native-popup', ref: siblingRefs[0].ref, operation: 'fill', value: 'again' }), /does not belong/);
 console.log('Native surfaces: document ownership, reference expiry, single-use input and paid action gates pass');

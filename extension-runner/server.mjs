@@ -10,6 +10,12 @@ import { Cdp } from './cdp.mjs';
 import { pageForTarget } from './targets.mjs';
 import { SessionLedger, stopWithConfirmation } from './lifecycle.mjs';
 import { NativeSurface } from './surface.mjs';
+import { SessionObservation, readExtensionPanel } from './observation.mjs';
+import { childIsRunning, ownedProtocolAction } from './health.mjs';
+import { stimulusFor, microphoneMatchesStimulus } from './stimulus.mjs';
+import { signInAccount, readAccountBalance, readAccountSnapshot } from './joblander-account.mjs';
+import { BillingObservation } from './billing.mjs';
+import { assessExtensionOutput } from './result.mjs';
 
 const exec = promisify(execFile);
 const token = process.env.RUNNER_CONTROL_TOKEN;
@@ -19,6 +25,8 @@ const root = '/tmp/extension-run';
 await mkdir(root, { recursive: true });
 await mkdir(process.env.HOME, { recursive: true });
 let session = null, ledger = null, initializing = false, closed = false, closing = null, chrome = null, cdp = null, upstream = null;
+let observation = null, observationBrowser = null;
+let billing = null, billingFinal = null;
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const wss = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 * 1024 });
 const native = new NativeSurface(input => new Promise((resolve, reject) => {
@@ -52,19 +60,21 @@ async function dispose(reason) {
   await closePopup().catch(() => {});
   if (ledger) {
     await ledger.endAll();
+    await finalizeBilling();
     if (session) {
       session.sessions = ledger.snapshot();
       session.applicationCleanup = !session.sessions.length ? 'not-started' : ledger.clean ? 'ui-stop-observed' : 'unverified';
-      session.billingCleanup = session.sessions.length ? 'unverified' : 'not-started';
+      session.billingCleanup = session.sessions.length ? session.billing?.assessment.cleanupConfirmed ? 'confirmed' : 'unverified' : 'not-started';
+      if (session.sessions.length) session.productResult = assessExtensionOutput(session);
     }
   }
   closed = true;
   if (session) { session.closedAt = new Date().toISOString(); session.closeReason = reason; }
   try { await cdp?.send('Browser.close'); } catch { /* The process may already have exited. */ }
-  if (chrome && chrome.exitCode === null) {
+  if (childIsRunning(chrome)) {
     chrome.kill('SIGTERM');
     await Promise.race([new Promise(resolve => chrome.once('exit', resolve)), delay(4000)]);
-    if (chrome.exitCode === null) chrome.kill('SIGKILL');
+    if (chrome.exitCode === null && chrome.signalCode === null) chrome.kill('SIGKILL');
   }
   cdp?.close();
   // Closing a browser proves only browser disposal. Application Stop must be
@@ -75,8 +85,11 @@ async function start(input) {
   if (session || initializing || closed) throw new Error('This container already belongs to a run');
   if (!/^[a-zA-Z0-9_-]{8,100}$/.test(input.ownerRunId)) throw new Error('Run identity required');
   const targetUrl = input.targetUrl === 'fixture:interview' ? 'http://127.0.0.1:9091/' : publicUrl(input.targetUrl);
+  const stimulus = stimulusFor(input.stimulusMode);
   initializing = true;
-  ledger = new SessionLedger(input.ownerRunId);
+  ledger = new SessionLedger(input.ownerRunId, Date.now, entries => {
+    if (entries.length && entries.every(e => ['stopped', 'unverified'].includes(e.state))) void finalizeBilling().catch(() => {});
+  });
   const deadlineMs = Math.min(1200, Math.max(60, Number(input.maxDurationSeconds) || 600)) * 1000;
   const expiresAt = Date.now() + deadlineMs;
   setTimeout(() => void closeBrowser('deadline'), deadlineMs).unref();
@@ -85,17 +98,23 @@ async function start(input) {
     if (closed) throw new Error('Session expired during installation');
     session = { sessionId: randomUUID(), ownerRunId: input.ownerRunId, ...identity, installedVersion: null,
       startedAt: new Date().toISOString(), expiresAt: new Date(expiresAt).toISOString(), targetUrl,
-      profileId: input.ownerRunId, targetTabId: null, popupTargetId: null, allowSessions: input.allowSessions === true, maxSessionSeconds: Math.min(600, Math.max(60, Number(input.maxSessionSeconds) || 180)), closedAt: null, applicationCleanup: 'unverified' };
+      profileId: input.ownerRunId, stimulus, targetTabId: null, popupTargetId: null, allowSessions: input.allowSessions === true, maxSessionSeconds: Math.min(600, Math.max(60, Number(input.maxSessionSeconds) || 180)), closedAt: null, applicationCleanup: 'unverified' };
     spawn('openbox', [], { stdio: 'ignore' });
     chrome = spawn(chromium.executablePath(), [
       '--no-sandbox', '--disable-dev-shm-usage', '--no-first-run', '--no-default-browser-check',
       '--remote-debugging-port=9222', '--remote-debugging-address=127.0.0.1',
       '--force-renderer-accessibility=complete', '--enable-automation', '--password-store=basic',
-      '--use-fake-device-for-media-stream', '--use-file-for-fake-audio-capture=/opt/runner/candidate.wav',
+      '--use-fake-device-for-media-stream', `--use-file-for-fake-audio-capture=/opt/runner/${stimulus.microphone.file}`,
       '--window-size=1366,1000', '--window-position=0,0',
       `--user-data-dir=${root}/profile`, `--disable-extensions-except=${root}/extension`, `--load-extension=${root}/extension`,
       'about:blank',
     ], { stdio: ['ignore', 'ignore', 'ignore'] });
+    chrome.once('exit', (code, signal) => {
+      if (!closed && !closing && session) {
+        session.runtimeFailure = { kind: 'browser-exited', code, signal, at: new Date().toISOString() };
+        void closeBrowser('browser-exited').catch(() => {});
+      }
+    });
     for (let i = 0; i < 120; i++) {
       try { const res = await fetch('http://127.0.0.1:9222/json/version'); upstream = (await res.json()).webSocketDebuggerUrl; break; } catch { await delay(100); }
     }
@@ -134,6 +153,7 @@ async function openPopup(input) {
   if (!session || closed) throw new Error('Session unavailable');
   for (let i = 0; wss.clients.size && i < 40; i++) await delay(50);
   if (wss.clients.size) throw new Error('Disconnect page inspection before opening the native popup');
+  if (ledger?.snapshot().some(entry => entry.state !== 'stopped')) throw new Error('Stop the owned session before reopening its popup');
   const targetId = input.targetId ?? session.targetTabId;
   const targets = (await cdp.send('Target.getTargets')).targetInfos;
   const popupUrl = `chrome-extension://${session.extensionId}/${session.popupPath}`;
@@ -194,6 +214,8 @@ async function closePopup() {
 async function startExtensionSession() {
   if (!session || closed || closing || !session.allowSessions) throw new Error('Session-start permission is required');
   if (!session.audioPreflight?.passed) throw new Error('Audio fixture preflight must pass before starting a session');
+  if (!session.accountBaseline) throw new Error('A fresh account balance and history are required before a paid session');
+  if (Date.now() + session.maxSessionSeconds * 1000 + 120_000 > Date.parse(session.expiresAt)) throw new Error('The browser lease has insufficient time for this session, Stop and the balance recheck');
   if (session.extensionId !== 'hafhjepjihcimcljkdphpinannbdmnhf') throw new Error('No verified Stop sequence for this extension');
   const targets = (await cdp.send('Target.getTargets')).targetInfos;
   const popup = targets.find(t => t.targetId === session.popupTargetId && t.url === `chrome-extension://${session.extensionId}/${session.popupPath}`);
@@ -210,7 +232,13 @@ async function startExtensionSession() {
         confirm: target.getByRole('button', { name: 'Confirm end session', exact: true }),
         stopped: target.getByRole('button', { name: /^(End session|Confirm end session)$/ }),
       });
-    } finally { await targetBrowser.close(); }
+    } finally {
+      // Stop runs before waiting on observation so a slow sample cannot consume
+      // the application's three-second confirmation window.
+      if (observation) session.observation = await observation.finish();
+      if (!billing) { await observationBrowser?.close().catch(() => {}); observationBrowser = null; }
+      await targetBrowser.close().catch(() => {});
+    }
   };
   ledger.register({ id: 'extension-capture', targetId: session.targetTabId, maxSeconds: session.maxSessionSeconds, stop });
   let browser;
@@ -233,9 +261,46 @@ async function startExtensionSession() {
     const page = await pageForTarget(browser.contexts()[0], cdp, session.targetTabId);
     if (!page) throw new Error('Owned session tab unavailable');
     await page.getByRole('button', { name: 'End session', exact: true }).waitFor({ state: 'visible', timeout: 12_000 });
+    ledger.started('extension-capture');
+    observation = new SessionObservation({ ownerRunId: session.ownerRunId, targetId: session.targetTabId,
+      baseline: session.audioPreflight.baselinePanel ?? '', read: async () => native.redact(await readExtensionPanel(page)) });
+    observationBrowser = browser; browser = null;
+    observation.start();
+    const accountPage = await pageForTarget(observationBrowser.contexts()[0], cdp, session.accountTabId);
+    if (!accountPage) throw new Error('The owned account tab is unavailable');
+    billing = new BillingObservation({ baseline: session.accountBaseline,
+      readBalance: () => readAccountBalance(accountPage), readSnapshot: () => readAccountSnapshot(accountPage) });
+    billing.start();
     return { started: true, at: new Date().toISOString(), sessions: ledger.snapshot() };
   } catch (error) { await ledger.endAll(); throw error; }
   finally { await browser?.close(); }
+}
+
+async function finalizeBilling() {
+  if (!billing) return null;
+  billingFinal ??= billing.finish(ledger.snapshot()).then(result => {
+    session.billing = result;
+    session.billingCleanup = result.assessment.cleanupConfirmed ? 'confirmed' : 'unverified';
+    return result;
+  }).finally(async () => { await observationBrowser?.close().catch(() => {}); observationBrowser = null; });
+  return billingFinal;
+}
+
+async function accountPreflight(input) {
+  if (!session || closed || closing || ledger.snapshot().length || session.popupTargetId || session.accountTabId) throw new Error('Account preflight requires a fresh attempt with its popup closed');
+  if (session.extensionId !== 'hafhjepjihcimcljkdphpinannbdmnhf') throw new Error('Account verification is unavailable for this extension');
+  if (typeof input.email !== 'string' || typeof input.password !== 'string' || !input.email || !input.password) throw new Error('Test-account access is required');
+  native.secrets.set(input.email, '{{TEST_EMAIL}}'); native.secrets.set(input.password, '{{TEST_PASSWORD}}');
+  const browser = await chromium.connectOverCDP(upstream);
+  try {
+    const page = await browser.contexts()[0].newPage();
+    const channel = await browser.contexts()[0].newCDPSession(page);
+    session.accountTabId = (await channel.send('Target.getTargetInfo')).targetInfo.targetId;
+    await channel.detach();
+    await signInAccount(page, input.email, input.password);
+    session.accountBaseline = await readAccountSnapshot(page);
+    return { balance: session.accountBaseline.balance, source: 'account-ui', historyObserved: true };
+  } finally { await browser.close(); await cdp.send('Target.activateTarget', { targetId: session.targetTabId }); }
 }
 
 async function audioPreflight() {
@@ -244,7 +309,10 @@ async function audioPreflight() {
   const context = browser.contexts()[0];
   const page = await context.newPage();
   try {
-    await context.grantPermissions(['microphone'], { origin: 'http://127.0.0.1:9091' });
+    const origins = ['http://127.0.0.1:9091'];
+    if (session.allowSessions) origins.push(new URL(session.targetUrl).origin, `chrome-extension://${session.extensionId}`);
+    for (const origin of new Set(origins)) await cdp.send('Browser.grantPermissions', { origin, permissions: ['audioCapture'] });
+    session.microphonePermissions = { origins: [...new Set(origins)], via: 'owned-profile-permission', at: new Date().toISOString() };
     await page.goto('http://127.0.0.1:9091/');
     const rms = await page.evaluate(async () => {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -264,10 +332,21 @@ async function audioPreflight() {
         return peakRms;
       } finally { stream.getTracks().forEach(t => t.stop()); await audio.close(); }
     });
-    const audio = await readFile('/opt/runner/candidate.wav');
-    const result = { kind: 'synthetic-microphone', language: 'en-US', role: 'candidate', phrase: 'In project Cedar, I improved the database queries and reduced response time by thirty percent. I measured the result before and after the change.', sha256: createHash('sha256').update(audio).digest('hex'), rms, passed: rms > 0.005, at: new Date().toISOString() };
+    const audio = await readFile(`/opt/runner/${session.stimulus.microphone.file}`);
+    const result = { kind: 'controlled-audio', mode: session.stimulus.mode, language: 'en-US', ...session.stimulus.microphone,
+      sha256: createHash('sha256').update(audio).digest('hex'), rms, passed: microphoneMatchesStimulus(session.stimulus, rms), at: new Date().toISOString() };
+    const target = await pageForTarget(context, cdp, session.targetTabId);
+    if (!target) throw new Error('Owned target tab unavailable for the audio preflight');
+    result.baselinePanel = (await readExtensionPanel(target)).text;
+    if (session.targetUrl === 'http://127.0.0.1:9091/') {
+      if (session.stimulus.tab.audible) await target.getByRole('button', { name: 'Play interviewer', exact: true }).click();
+      else await target.locator('audio').evaluate(audio => { audio.pause(); audio.currentTime = 0; });
+      result.tabStimulus = { language: 'en-US', ...session.stimulus.tab,
+        sha256: createHash('sha256').update(await readFile('/opt/runner/interviewer.wav')).digest('hex'), ...(await readExtensionPanel(target)).tabStimulus };
+      if (result.tabStimulus.playing !== session.stimulus.tab.audible) throw new Error('Tab audio does not match the selected stimulus');
+    }
     session.audioPreflight = result;
-    if (!result.passed) throw new Error('Synthetic microphone is silent');
+    if (!result.passed) throw new Error('Microphone does not match the selected stimulus');
     return result;
   } finally { await page.close(); await browser.close(); }
 }
@@ -278,16 +357,30 @@ async function body(req) {
   return JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
 }
 
+async function screenshotRedactions() {
+  return new Promise((resolve, reject) => {
+    const child = execFile('python3', ['native.py', 'redactions'], { timeout: 8000, maxBuffer: 1024 * 1024 }, (error, stdout) => {
+      if (error) { reject(new Error('Screenshot redaction unavailable')); return; }
+      try { resolve(JSON.parse(stdout)); } catch { reject(new Error('Screenshot redaction returned invalid data')); }
+    });
+    child.stdin.end(JSON.stringify([...native.secrets.keys()]));
+  });
+}
+
 const server = http.createServer(async (req, res) => {
   if (!authorized(req)) { res.writeHead(401).end(); return; }
   try {
     const path = new URL(req.url, 'http://runner').pathname;
+    if (session && !initializing && !childIsRunning(chrome) && path !== '/state' && !(req.method === 'DELETE' && path === '/session')) {
+      res.writeHead(410, { 'Content-Type': 'application/json' }).end(JSON.stringify({ error: 'The owned browser is no longer running' })); return;
+    }
     let result;
     if (req.method === 'POST' && path === '/session') result = await start(await body(req));
-    else if (req.method === 'GET' && path === '/state') result = { session: session ? { ...session, sessions: ledger?.snapshot() ?? [] } : null, running: Boolean(chrome && chrome.exitCode === null && !closed) };
+    else if (req.method === 'GET' && path === '/state') result = { session: session ? { ...session, observation: observation?.snapshot() ?? null, sessions: ledger?.snapshot() ?? [] } : null, running: childIsRunning(chrome) && !closed };
     else if (req.method === 'POST' && path === '/fixture/preflight') result = await audioPreflight();
+    else if (req.method === 'POST' && path === '/account/preflight') result = await accountPreflight(await body(req));
     else if (req.method === 'POST' && path === '/session/start') result = await startExtensionSession();
-    else if (req.method === 'POST' && path === '/session/stop') result = await ledger?.endAll();
+    else if (req.method === 'POST' && path === '/session/stop') { result = await ledger?.endAll(); await finalizeBilling(); }
     else if (req.method === 'POST' && path === '/popup') result = await openPopup(await body(req));
     else if (req.method === 'GET' && path === '/popup/read') { const popup = await currentPopup(); result = await native.read(popup.url, popup.targetId); }
     else if (req.method === 'POST' && path === '/popup/action') {
@@ -297,11 +390,19 @@ const server = http.createServer(async (req, res) => {
     else if (req.method === 'POST' && path === '/popup/close') result = await closePopup();
     else if (req.method === 'GET' && path === '/native-tree') result = JSON.parse((await exec('python3', ['native.py', 'tree'], { timeout: 10_000, maxBuffer: 1024 * 1024 })).stdout);
     else if (req.method === 'GET' && path === '/desktop.png') {
+      const before = await screenshotRedactions();
       await exec('import', ['-window', 'root', `${root}/desktop.png`]);
+      const after = await screenshotRedactions();
+      const masks = [...before, ...after].map(box => {
+        if (!Array.isArray(box) || box.length !== 4 || !box.every(Number.isFinite)) throw new Error('Screenshot redaction bounds are invalid');
+        const [x1, y1, x2, y2] = box.map(Math.round);
+        return `rectangle ${x1},${y1} ${x2},${y2}`;
+      });
+      if (masks.length) await exec('convert', [`${root}/desktop.png`, '-fill', '#111827', '-draw', masks.join(' '), `${root}/desktop.png`]);
       res.writeHead(200, { 'Content-Type': 'image/png' }).end(await readFile(`${root}/desktop.png`)); return;
     } else if (req.method === 'DELETE' && path === '/session') { await closeBrowser('requested'); result = { disposed: true, session }; }
     else { res.writeHead(404).end(); return; }
-    res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(result));
+    res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(native.redact(result)));
   } catch (error) { res.writeHead(422, { 'Content-Type': 'application/json' }).end(JSON.stringify({ error: error.message })); }
 });
 server.on('upgrade', (req, socket, head) => {
@@ -309,7 +410,20 @@ server.on('upgrade', (req, socket, head) => {
   const remote = new WebSocket(upstream, { maxPayload: 16 * 1024 * 1024 });
   remote.once('error', () => socket.destroy());
   remote.once('open', () => wss.handleUpgrade(req, socket, head, client => {
-    client.on('message', (data, binary) => { if (remote.readyState === WebSocket.OPEN) remote.send(data, { binary }); });
+    client.on('message', (data, binary) => {
+      const message = JSON.parse(data.toString());
+      const action = ownedProtocolAction(message, session.targetTabId);
+      // A connected client owns its transport, not the browser lease. Only the
+      // runner's cleanup may dispose the profile after application Stop.
+      if (action === 'disconnect') {
+        session.clientDisposals = (session.clientDisposals ?? 0) + 1;
+        client.send(JSON.stringify({ id: message.id, result: {} })); client.close(); return;
+      }
+      if (action === 'refuse') {
+        client.send(JSON.stringify({ id: message.id, error: { code: -32000, message: 'Owned browser disposal requires session cleanup' } })); return;
+      }
+      if (remote.readyState === WebSocket.OPEN) remote.send(data, { binary });
+    });
     remote.on('message', (data, binary) => { if (client.readyState === WebSocket.OPEN) client.send(data, { binary }); });
     client.on('close', () => remote.close()); remote.on('close', () => client.close());
     client.on('error', () => remote.close()); remote.on('error', () => client.close());

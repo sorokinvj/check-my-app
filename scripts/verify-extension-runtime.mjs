@@ -1,0 +1,12 @@
+import assert from 'node:assert/strict';
+import { childIsRunning, ownedProtocolAction } from '../extension-runner/health.mjs';
+assert.equal(childIsRunning({ pid: 123, exitCode: null, signalCode: null, killed: false }), true);
+assert.equal(childIsRunning({ pid: 123, exitCode: null, signalCode: 'SIGTERM', killed: false }), false, 'A signalled process has no numeric exit code but is terminal');
+assert.equal(childIsRunning({ pid: 123, exitCode: 0, signalCode: null, killed: false }), false);
+assert.equal(childIsRunning({ pid: 123, exitCode: null, signalCode: null, killed: true }), false);
+assert.equal(ownedProtocolAction({ method: 'Browser.close' }, 'owned-tab'), 'disconnect', 'A client may detach but cannot bypass owned application cleanup');
+assert.equal(ownedProtocolAction({ method: 'Target.closeTarget', params: { targetId: 'owned-tab' } }, 'owned-tab'), 'refuse');
+assert.equal(ownedProtocolAction({ method: 'Target.closeTarget', params: { targetId: 'temporary-tab' } }, 'owned-tab'), 'forward');
+assert.equal(ownedProtocolAction({ method: 'Browser.crash' }, 'owned-tab'), 'refuse');
+assert.equal(ownedProtocolAction({ method: 'Target.getTargets' }, 'owned-tab'), 'forward');
+console.log('Extension runtime: signalled exits, lease-owned disposal and protected target lifetime pass');

@@ -11,16 +11,28 @@ import { putScreenshot, type AgentBindings, type AgentEnv } from "./env";
 import { announceSelfCheckOn } from "./self-hosts";
 import { ExtensionBrowser, extensionBrowserFor } from "./extension-browser";
 import { extensionInput, type ExtensionIdentity, type ExtensionTarget } from "./extension-contract";
+import { persistExtensionPhase } from "./extension-evidence";
+import { ExtensionRuntimeError } from "./extension-error";
 
 export async function launchAgentBrowser(env: AgentEnv, target?: { run: ExtensionTarget; phase: string; expected?: ExtensionIdentity }): Promise<Browser> {
   const input = target ? extensionInput(target.run, target.phase) : null;
-  if (input) return (await ExtensionBrowser.open(env, input, target?.expected)).browser;
+  if (input) {
+    try { return (await ExtensionBrowser.open(env, input, target?.expected)).browser; }
+    catch (error) { throw new ExtensionRuntimeError(error instanceof Error ? error.message : String(error)); }
+  }
   return launch(env.bindings.MYBROWSER);
 }
 
-export async function closeAgentBrowser(browser: Browser): Promise<void> {
+export async function closeAgentBrowser(browser: Browser, evidence?: { env: AgentEnv; runId: string; phase: string }): Promise<void> {
   const extension = extensionBrowserFor(browser);
-  if (extension) await extension.finish();
+  if (extension) {
+    let failure: unknown;
+    try { await extension.finish(); } catch (error) { failure = error; }
+    try {
+      if (evidence) await persistExtensionPhase(evidence.env, evidence.runId, evidence.phase, extension.identity, await extension.finalEvidence());
+    } catch (error) { failure ??= error; }
+    if (failure) throw new ExtensionRuntimeError(failure instanceof Error ? failure.message : String(failure));
+  }
   else await browser.close();
 }
 

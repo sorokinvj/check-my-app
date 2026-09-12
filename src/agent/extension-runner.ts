@@ -23,7 +23,7 @@ export class ExtensionRunner extends Container<AgentBindings> {
       if (await storage.get("lease")) throw new Error("Extension attempt already has a lease");
       await storage.put("lease", lease);
     });
-    await this.schedule(new Date(lease.expiresAt + 30_000), "expire");
+    await this.schedule(new Date(lease.expiresAt + 120_000), "expire");
     try {
       await this.startAndWaitForPorts({
         ports: 9090,
@@ -62,7 +62,7 @@ export class ExtensionRunner extends Container<AgentBindings> {
     try {
       const response = await super.fetch(new Request("http://runner/session", {
         method: "DELETE", headers: { Authorization: `Bearer ${lease.token}` },
-        signal: AbortSignal.timeout(25_000),
+        signal: AbortSignal.timeout(120_000),
       }));
       if (response.ok) evidence = await response.json();
     } catch {

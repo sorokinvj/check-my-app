@@ -67,7 +67,14 @@
     "verify:extension-targets": "tsx --tsconfig tsconfig.json scripts/verify-extension-targets.ts",
     "verify:extension-popup": "node scripts/verify-extension-popup.mjs",
     "verify:extension-surfaces": "node scripts/verify-extension-surfaces.mjs",
-    "verify:extension-executor": "tsx scripts/verify-extension-executor.ts"
+    "verify:extension-executor": "tsx scripts/verify-extension-executor.ts",
+    "verify:extension-observation": "node scripts/verify-extension-observation.mjs",
+    "verify:extension-runtime": "node scripts/verify-extension-runtime.mjs",
+    "verify:extension-tools": "tsx --tsconfig tsconfig.json scripts/verify-extension-tools.ts",
+    "verify:extension-evidence": "tsx --tsconfig tsconfig.json scripts/verify-extension-evidence.ts",
+    "verify:extension-stimulus": "node scripts/verify-extension-stimulus.mjs",
+    "verify:extension-billing": "node scripts/verify-extension-billing.mjs",
+    "verify:extension-result": "node scripts/verify-extension-result.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.104.1",

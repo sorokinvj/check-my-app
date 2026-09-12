@@ -13,7 +13,7 @@ export async function stopWithConfirmation({ stop, confirm, stopped, now = Date.
 }
 
 export class SessionLedger {
-  constructor(ownerRunId, now = Date.now) { this.ownerRunId = ownerRunId; this.now = now; this.entries = []; }
+  constructor(ownerRunId, now = Date.now, onSettled = () => {}) { this.ownerRunId = ownerRunId; this.now = now; this.onSettled = onSettled; this.entries = []; }
   register({ id, targetId, maxSeconds, stop }) {
     if (!id || !targetId || this.entries.some(e => e.entry.id === id)) throw new Error('Unique owned session identity required');
     if (!Number.isInteger(maxSeconds) || maxSeconds < 1 || maxSeconds > 600) throw new Error('Invalid session limit');
@@ -39,9 +39,15 @@ export class SessionLedger {
       } catch (error) {
         task.entry.state = 'unverified'; task.entry.cleanup = { error: error.message, at: this.now() };
       }
+      this.onSettled(this.snapshot());
       return task.entry;
     })();
     return task.promise;
+  }
+  started(id) {
+    const task = this.entries.find(t => t.entry.id === id);
+    if (!task || task.entry.state !== 'pending') throw new Error('Session cannot start outside its pending lease');
+    task.entry.state = 'active'; task.entry.startedAt = this.now();
   }
   async endAll() { return Promise.all(this.entries.map(t => this.end(t.entry.id))); }
   snapshot() { return this.entries.map(t => ({ ...t.entry })); }

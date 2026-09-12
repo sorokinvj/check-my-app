@@ -1,0 +1,18 @@
+import assert from 'node:assert/strict';
+import { stimulusFor, microphoneMatchesStimulus } from '../extension-runner/stimulus.mjs';
+const tab = stimulusFor('tab-only'), microphone = stimulusFor('microphone-only'), combined = stimulusFor();
+assert.equal(tab.microphone.audible, false);
+assert.equal(tab.microphone.phrase, null);
+assert.equal(tab.tab.audible, true);
+assert.equal(microphone.tab.audible, false);
+assert.equal(microphone.tab.phrase, null);
+assert.equal(microphone.microphone.audible, true);
+assert.notEqual(microphone.microphone.phrase, tab.tab.phrase, 'The two audio branches must have distinguishable stimuli');
+assert.equal(combined.tab.audible && combined.microphone.audible, true);
+assert.equal(microphoneMatchesStimulus(tab, 0), true);
+assert.equal(microphoneMatchesStimulus(tab, 0.2), false, 'A supposedly isolated tab test refuses a leaking microphone');
+assert.equal(microphoneMatchesStimulus(microphone, 0), false);
+assert.equal(microphoneMatchesStimulus(microphone, 0.2), true);
+assert.equal(microphoneMatchesStimulus(combined, NaN), false);
+assert.throws(() => stimulusFor('unsupported'), /Unsupported/);
+console.log('Extension audio: independent branches, distinct phrases, silence and leakage gates pass');

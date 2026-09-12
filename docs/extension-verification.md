@@ -2,7 +2,81 @@
 
 Source: [Extension verification PRD](https://app.notion.com/p/3d97bac6430a81a1b09fdacc72d609c6).
 
-## Current state — 2026-09-12 18:03 UTC
+## Current state — 2026-09-12 19:25 UTC
+
+Commit `98c0c9a` contains the native runner and Workflow routing. The following
+additional changes are still in the feature worktree and are not deployed:
+local session observation, native screenshot/filename redaction, fatal runtime
+propagation, product-only discovery extraction, per-phase Run evidence links,
+independent audio stimuli, UI-based minute accounting, and a JobLander core-flow
+publication gate. The extension-aware exported spec and practice scenarios are
+still outstanding. No push, PR, merge, production migration or deploy has run.
+
+Fresh live evidence:
+
+- Real LLM discovery through workerd and the installed Cloudflare Playwright
+  fork completed in 177 seconds with 37 tool calls. Native email/password input
+  reached the signed-in popup. Session `95d89b7b-a13e-4c19-bf14-2d8167f8b8e9`,
+  Store/installed 3.26.1, original digest unchanged. Cleanup: not-started,
+  sessions=[], browser disposed. This still replaces only the DO transport.
+- That discovery incorrectly included the synthetic page/audio and guessed
+  domains in its anatomy. It was not published as a product result. Extraction
+  now receives only recorded product reads; fixture body/screenshots/actions and
+  unobserved links cannot enter that path. A new discovery must verify this
+  correction. Local transcript: `/tmp/checkmyapp-discovery-transcript-2.json`.
+- Earlier discovery lost Chrome and kept calling failed tools. The runner now
+  records signalled exits, rejects commands to a dead browser with 410, and the
+  loop propagates executor/transport failure without a verdict. CDP clients may
+  not dispose the owned browser or target before cleanup. The cause of that
+  earlier exit is not established; the successful replay recorded no
+  intercepted Browser.close commands. It is not evidence for that hypothesis.
+- Capture `01a0965f-capture-observation-1`, session
+  `b0977e8d-fe27-49b3-93c0-9968e21fa99a`: 148.112 seconds from visible Start to
+  End, Confirm after 427 ms, 148 locally collected panel samples. A fresh answer
+  addressed the interviewer audio's technical-challenge question. Chrome still
+  requested microphone permission, so this does not prove that microphone
+  branch. The account UI subsequently showed our 18:50 meeting with duration
+  2m 29s. No before-start balance was taken; billing remained unverified.
+- Capture `01a0965f-microphone-billing-1`, session
+  `a043ea47-d892-4ca7-8e12-aee5999ba105`: microphone-only, tab audio paused,
+  microphone RMS 0.3380207406. The distinct Maple/database-query question was
+  transcribed under You, Mirror mode appeared, and the answer listed query
+  profiling, indexing, caching, batching and performance monitoring. The
+  positive question and answer were observed in the actual extension panel.
+- That session ran 148.613 seconds before End; Confirm followed after 486 ms.
+  The independently refreshed dashboard showed 1614 → 1613 → 1612, then 1611
+  after Stop. Its new history row, meeting
+  `91ca8bfe-4d83-47d4-bd8c-f909e4f1bf18`, displays 19:18 UTC and 149 seconds.
+  The expected ceil(149/60)=3 equals the visible debit. A fresh read 73.087
+  seconds later remained 1611. Both live minute steps, UI Stop and billing
+  cessation passed. No customer database, logs or source were used.
+  Local evidence: `/tmp/checkmyapp-microphone-billing-1.json` and
+  `/tmp/checkmyapp-microphone-billing-1.png`; remote copy in the task-owned
+  `~/checkmyapp-extension-preflight/` directory.
+- The DOM read in that capture identified the real `data-testid="question"`
+  and its answer card. Subsequent code records these separately from the timer
+  and requires a fresh, relevant answer in the active interval. This new
+  machine result gate still needs its own live replay.
+- A read-only account probe saw Start call on the practice page and no owned
+  practice was started. The container's independent deadline disposed that
+  browser with sessions=[] and cleanup=not-started.
+
+The current accounting observer reads only the customer-visible dashboard and
+history. It requires a baseline before Start, independent rounding per new
+owned history row, and another fresh balance at least 65 seconds after Stop.
+Ambiguous rows, missing UI or changed balance stay inconclusive. Container
+cleanup now reserves 120 seconds for the bounded read-only accounting follow-up.
+Neither a clock, a silent microphone, an old answer nor successful login alone
+can establish the JobLander core result.
+
+Validation at this checkpoint: all five required groups passed in order,
+including all 46 acceptance scripts. Lint retains only its three existing
+warnings. An earlier full run exposed a workerd-only import in the shared
+browser utility; that import now lives at the Workflow boundary, and the final
+complete registry includes both previously affected scripts (ephemeral and
+survey), the new audio, billing and result checks.
+
+### Earlier implementation checkpoint — 18:03 UTC
 
 The feature branch now routes extension checks through the isolated native
 executor in surface scan, discovery and journey walking. Website checks retain
@@ -53,19 +127,18 @@ New live evidence in this checkpoint:
 
 Still required before shipping:
 
-1. Run actual LLM discovery and journeys through the integrated path; the bridge
-   probe above proves transport and surfaces, not a completed discovery.
-2. Sample stimulus, transcript and relevant output locally during capture; prove
-   microphone and tab-audio branches separately. The earlier 60-second capture
-   proved native activation/Stop but missed its result sample.
+1. Replay product-only LLM discovery and walk the core journeys through the
+   integrated path. The first completed discovery still mixed fixture facts
+   into its map; no Workflow-to-production result has been published.
+2. Complete the deliberately isolated tab-audio run with before/during/after
+   accounting, and replay the new structured question/answer gate. Microphone
+   output and two-minute UI accounting are now proven independently.
 3. Implement and run the three PRD scenarios for at least two full minutes each,
    with user-visible balance/history, rounding, cessation and no active practice
    left behind. Billing cleanup intentionally remains unverified until measured.
-4. Persist per-phase evidence references on the run and enforce the complete
-   core-flow evidence contract. Installation or a successful login alone cannot
-   count as a complete JobLander result. Add native screenshot redaction and an
-   extension-aware executable test export; the current generated-spec path is
-   still website-oriented.
+4. Exercise the new per-phase evidence, core-flow publication gate and redacted
+   native screenshots in the integrated path. Add an extension-aware executable
+   test export; the current generated-spec path is still website-oriented.
 5. Exercise lease expiry/retry/cancel recovery, native picker/permissions and
    unsupported surfaces. Verify UI appearance and both public/owner flows, run
    review/CI, then resolve the repository's no-merge boundary before release.

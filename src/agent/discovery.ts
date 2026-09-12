@@ -172,6 +172,12 @@ export async function discoverApp(args: {
 
     let costUsd = result.costUsd;
     const usage = result.usage;
+    // The first native discovery promoted the audio fixture and guessed web
+    // domains into product anatomy. Extraction receives only reads of product
+    // surfaces, excluding fixture diagnostics and the model's own speculation.
+    const extractionMessages = extension ? [{ role: "user" as const, content:
+      `Installed product: ${extension.identity.name}. Observed product surfaces:\n${extension.discoveryObservations()}`,
+    }] : result.messages;
 
     // Guaranteed structured extraction. The model frequently spends its whole
     // iteration budget exploring and never emits the closing JSON on its own —
@@ -186,7 +192,7 @@ export async function discoverApp(args: {
     try {
       const extracted = await finalizeStructured<RawDiscovery>(
         llm,
-        result.messages,
+        extractionMessages,
         "Based ONLY on what you actually explored above, output the discovery result: " +
           "3-5 concrete user journeys (each a title + ordered steps) covering the app's core " +
           "flows (e.g. sign up / log in, the primary value action, account/settings), plus the " +
@@ -203,7 +209,7 @@ export async function discoverApp(args: {
       note(`structured extraction failed: ${errText(err)}`);
     }
     if (!parsed) {
-      parsed = parseDiscoveryJson(result.finalText);
+      parsed = extension ? null : parseDiscoveryJson(result.finalText);
       note(
         parsed
           ? "fell back to the JSON in the model's free-text answer"
@@ -219,7 +225,7 @@ export async function discoverApp(args: {
       try {
         const j = await finalizeStructured<{ journeys?: RawDiscovery["journeys"] }>(
           llm,
-          result.messages,
+          extractionMessages,
           "You proposed no user journeys — that is wrong. Propose 3-5 user journeys a real " +
             "user would take, based only on what you saw. Each is a title plus ordered steps.",
           JOURNEYS_SCHEMA,

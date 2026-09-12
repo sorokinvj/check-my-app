@@ -36,6 +36,8 @@ import { makeLlm, type UsageTotals } from "./llm";
 import { launchAgentBrowser, closeAgentBrowser, newAgentContext, surfaceScan } from "./browser";
 import { extensionBrowserFor } from "./extension-browser";
 import { isExtensionTarget } from "./extension-contract";
+import { ExtensionRuntimeError } from "./extension-error";
+import { extensionCoverageGap } from "./extension-evidence";
 import { LlmBudgetError } from "./core";
 import { dedupKeyForFinding } from "@/lib/tracker/file";
 import { discoverApp, type KnownMap, type ProposedJourney, type RunInput } from "./discovery";
@@ -95,6 +97,7 @@ function rethrowBudgetNonRetryable(err: unknown): never {
   if (err instanceof LlmBudgetError) {
     throw new NonRetryableError(err.message, "LlmBudgetError");
   }
+  if (err instanceof ExtensionRuntimeError) throw new NonRetryableError(err.message, err.name);
   throw err as Error;
 }
 
@@ -464,7 +467,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
       // Phase 2 — Surface scan (deterministic).
       const scan = await step.do("surface_scan", async () => {
         await transition(env, runId, "surface_scan", { icon: "info", text: `Loading ${run.targetUrl}` });
-        const browser = await launchAgentBrowser(env, { run, phase: "scan" });
+        const browser = await launchAgentBrowser(env, { run, phase: "scan" }).catch(rethrowBudgetNonRetryable);
         try {
           const extension = extensionBrowserFor(browser);
           if (extension) {
@@ -492,7 +495,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
           });
           return { ...r, extensionIdentity: null };
         } finally {
-          await closeAgentBrowser(browser);
+          await closeAgentBrowser(browser, { env, runId, phase: "scan" }).catch(rethrowBudgetNonRetryable);
         }
       });
 
@@ -531,7 +534,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
           icon: "info",
           text: known ? `Confirming the map from Run #${known.runNumber}` : "Mapping your app",
         });
-        const browser = await launchAgentBrowser(env, { run, phase: "discovery", expected: scan.extensionIdentity ?? undefined });
+        const browser = await launchAgentBrowser(env, { run, phase: "discovery", expected: scan.extensionIdentity ?? undefined }).catch(rethrowBudgetNonRetryable);
         try {
           const d = await discoverApp({
             env,
@@ -562,7 +565,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
           await recordUsage(env, runId, "discovery", llm.navModel, d.usage);
           return d;
         } finally {
-          await closeAgentBrowser(browser);
+          await closeAgentBrowser(browser, { env, runId, phase: "discovery" }).catch(rethrowBudgetNonRetryable);
         }
       });
 
@@ -610,7 +613,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
       let walkCost = 0;
       for (const { order, proposed } of walkList) {
         const jcost = await step.do(`walk-${order}`, async () => {
-          const browser = await launchAgentBrowser(env, { run, phase: `walk-${order}`, expected: scan.extensionIdentity ?? undefined });
+          const browser = await launchAgentBrowser(env, { run, phase: `walk-${order}`, expected: scan.extensionIdentity ?? undefined }).catch(rethrowBudgetNonRetryable);
           try {
             const r = await walkOneJourney({
               env,
@@ -655,7 +658,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
             }
             return r.costUsd;
           } finally {
-            await closeAgentBrowser(browser);
+            await closeAgentBrowser(browser, { env, runId, phase: `walk-${order}` }).catch(rethrowBudgetNonRetryable);
           }
         });
         walkCost += jcost;
@@ -696,6 +699,12 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
 
       // Phase 6 — Writing (LLM synthesis + findings + verdict).
       const verdict = await step.do("writing", async () => {
+        if (isExtension) {
+          const evidence = await env.db.run.findUnique({ where: { id: runId }, select: { extensionEvidence: true } });
+          const gap = extensionCoverageGap(run, evidence?.extensionEvidence);
+          if (gap === "missing_access") throw new NonRetryableError("Add a test account and allow session checks to verify interview assistance.", "ExtensionAccessError");
+          if (gap) throw new NonRetryableError("internal: the extension's core result and cleanup were not established; no verdict may be published", "ExtensionRuntimeError");
+        }
         await transition(env, runId, "writing", { icon: "info", text: "Writing your verdict" });
         const synth = await synthesizeVerdict({ env, llm, runId, anatomy, knowledge }).catch(
           rethrowBudgetNonRetryable,
@@ -961,7 +970,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
               : msg,
           },
         });
-        if (isExtension && !budget) {
+        if (isExtension && !budget && !(err instanceof Error && err.name === "ExtensionAccessError")) {
           try {
             for (const note of await fileCapabilityGaps(env, runId, { extraGaps: [{
               label: "Extension check did not complete",

@@ -26,9 +26,12 @@ export interface ExtensionSession extends ExtensionIdentity {
   popupPath: string | null;
   browserVersion: string;
   allowSessions?: boolean;
+  runtimeFailure?: { kind: string; code?: number | null; signal?: string | null; at?: string };
   sessions?: Array<{ id: string; state: string; cleanup?: { applicationStopObserved?: boolean } | null }>;
   applicationCleanup?: string;
   billingCleanup?: string;
+  productResult?: { confirmed: boolean; observedAt?: number; mode?: string };
+  billing?: { assessment?: { twoMinuteSteps?: boolean } };
 }
 
 export interface ExtensionRunnerInput {
@@ -38,6 +41,7 @@ export interface ExtensionRunnerInput {
   maxDurationSeconds: number;
   allowSessions: boolean;
   maxSessionSeconds: number;
+  stimulusMode?: "interview" | "tab-only" | "microphone-only";
 }
 
 export function isExtensionTarget(run: Pick<ExtensionTarget, "targetKind" | "targetUrl">): boolean {
