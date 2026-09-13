@@ -5,6 +5,7 @@ COPY package*.json ./
 RUN npm ci --omit=dev
 COPY . .
 RUN node build-stimuli.mjs
+RUN python3 -m py_compile native.py redaction.py && python3 -c "import pyatspi, redaction"
 USER pwuser
 ENV ACCESSIBILITY_ENABLED=1 HOME=/tmp/home NO_AT_BRIDGE=0 GTK_MODULES=gail:atk-bridge RUNNER_ISOLATED=1
 EXPOSE 9090

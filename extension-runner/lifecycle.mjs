@@ -1,5 +1,11 @@
 // These are product controls, exercised locally so the short confirmation
 // window cannot be consumed by a network round trip to the planning agent.
+export function sessionStopDeferred(sessions, minimumSeconds, now = Date.now()) {
+  if (minimumSeconds === undefined) return false;
+  if (!Number.isInteger(minimumSeconds) || minimumSeconds < 0 || minimumSeconds > 120) throw new Error('Invalid minimum observation duration');
+  return sessions.some(session => session.state === 'active' && Number.isFinite(session.startedAt) && now - session.startedAt < minimumSeconds * 1000);
+}
+
 export async function stopWithConfirmation({ stop, confirm, stopped, now = Date.now, windowMs = 2800 }) {
   const startedAt = now();
   await stop.click({ timeout: 1500 });

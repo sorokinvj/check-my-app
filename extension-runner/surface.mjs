@@ -1,5 +1,12 @@
 import { randomUUID } from 'node:crypto';
 
+export function popupCrop(before, after, imageWidth, imageHeight) {
+  if (!Array.isArray(before) || before.length !== 4 || !before.every(Number.isSafeInteger) || JSON.stringify(before) !== JSON.stringify(after)) throw new Error('The popup moved during screenshot capture');
+  const [x, y, width, height] = before;
+  if (x < 0 || y < 0 || width <= 0 || height <= 0 || x + width > imageWidth || y + height > imageHeight) throw new Error('The popup is outside its screenshot');
+  return `${width}x${height}+${x}+${y}`;
+}
+
 // A reference names an observed control, never a model-supplied selector or
 // coordinate. Each reference is consumed before input. Sibling fields remain
 // usable only if the fresh native lookup still matches the observed control.

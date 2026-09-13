@@ -1,5 +1,14 @@
 import assert from 'node:assert/strict';
-import { SessionLedger, stopWithConfirmation } from '../extension-runner/lifecycle.mjs';
+import { SessionLedger, stopWithConfirmation, sessionStopDeferred } from '../extension-runner/lifecycle.mjs';
+
+const active = [{ state: 'active', startedAt: 0 }];
+assert.equal(sessionStopDeferred(active, 120, 94_000), true, 'Normal completion must preserve the two-minute observation window');
+assert.equal(sessionStopDeferred(active, 120, 120_000), false);
+assert.equal(sessionStopDeferred([...active, { state: 'active', startedAt: 20_000 }], 120, 120_000), true, 'Both meters need their own observation window');
+assert.equal(sessionStopDeferred(active, undefined, 94_000), false, 'Cancellation and disposal must not wait for acceptance duration');
+assert.equal(sessionStopDeferred([{ state: 'stopped', startedAt: 0 }], 120, 94_000), false);
+assert.throws(() => sessionStopDeferred(active, 121), /Invalid/);
+assert.throws(() => sessionStopDeferred(active, -1), /Invalid/);
 
 let time = 0;
 const calls = [];

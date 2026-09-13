@@ -37,7 +37,7 @@ import { launchAgentBrowser, closeAgentBrowser, newAgentContext, surfaceScan } f
 import { extensionBrowserFor } from "./extension-browser";
 import { extensionStepConfig, isExtensionTarget } from "./extension-contract";
 import { ExtensionRuntimeError } from "./extension-error";
-import { extensionCoverageGap } from "./extension-evidence";
+import { extensionCoverageGap, completeExtensionAccessCheck } from "./extension-evidence";
 import { LlmBudgetError } from "./core";
 import { dedupKeyForFinding } from "@/lib/tracker/file";
 import { discoverApp, type KnownMap, type ProposedJourney, type RunInput } from "./discovery";
@@ -700,9 +700,9 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
       // Phase 6 — Writing (LLM synthesis + findings + verdict).
       const verdict = await step.do("writing", async () => {
         if (isExtension) {
-          const evidence = await env.db.run.findUnique({ where: { id: runId }, select: { extensionEvidence: true } });
-          const gap = extensionCoverageGap(run, evidence?.extensionEvidence);
-          if (gap === "missing_access") throw new NonRetryableError("Add a test account and allow session checks to verify interview assistance.", "ExtensionAccessError");
+          const evidence = await env.db.run.findUnique({ where: { id: runId }, select: { extensionEvidence: true, credentialsRejected: true } });
+          const gap = evidence?.credentialsRejected ? "missing_access" : extensionCoverageGap(run, evidence?.extensionEvidence);
+          if (gap === "missing_access") return completeExtensionAccessCheck(env, runId, (discovery?.costUsd ?? 0) + walkCost);
           if (gap) throw new NonRetryableError("internal: the extension's core result and cleanup were not established; no verdict may be published", "ExtensionRuntimeError");
         }
         await transition(env, runId, "writing", { icon: "info", text: "Writing your verdict" });
@@ -970,7 +970,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
               : msg,
           },
         });
-        if (isExtension && !budget && !(err instanceof Error && err.name === "ExtensionAccessError")) {
+        if (isExtension && !budget) {
           try {
             for (const note of await fileCapabilityGaps(env, runId, { extraGaps: [{
               label: "Extension check did not complete",

@@ -1,11 +1,22 @@
 import assert from "node:assert/strict";
-import { extensionPhaseEvidence, persistExtensionPhase, extensionCoverageGap, extensionAccountingStep } from "../src/agent/extension-evidence";
+import { extensionPhaseEvidence, persistExtensionPhase, extensionCoverageGap, extensionAccountingStep, completeExtensionAccessCheck } from "../src/agent/extension-evidence";
 import { hasEnvironmentLeak, productStepLabel } from "../src/lib/verdict-language";
 import { productizeStep } from "../src/agent/tools";
 import { extensionStepConfig, type ExtensionSession } from "../src/agent/extension-contract";
 import type { AgentEnv } from "../src/agent/env";
 
 async function main() {
+  let accessOutcome: Record<string, unknown> = {};
+  const accessEnv = { db: { run: { update: async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => {
+    assert.equal(where.id, "missing-account"); accessOutcome = data;
+  } } } } as unknown as AgentEnv;
+  assert.equal(await completeExtensionAccessCheck(accessEnv, "missing-account", 0.5), "unverified");
+  assert.equal(accessOutcome.status, "partial", "Access gaps must not become internal outages or positive verdicts");
+  assert.equal(accessOutcome.errorMessage, null);
+  assert.equal(accessOutcome.currentAction, null);
+  assert.ok(accessOutcome.completedAt instanceof Date);
+  assert.match(String(accessOutcome.bottomLine), /test-account access and permission/);
+  assert.equal(hasEnvironmentLeak(String(accessOutcome.bottomLine)), false);
   const identity: ExtensionSession = {
     extensionId: "a".repeat(32), packageVersion: "1.2", installedVersion: "1.2", artifactSha256: "a".repeat(64),
     ownerRunId: "run-123_scan", sessionId: "session-123", name: "Fixture extension", targetUrl: "https://example.test", targetTabId: "tab-123", popupPath: "popup.html", browserVersion: "Chrome/145",

@@ -338,6 +338,11 @@ export default async function VerdictPage({
                   <span className="text-fg-muted">{run.bottomLine}</span>
                 </p>
               )}
+              {run.targetKind === "extension" && run.verdict === "unverified" && viewerApp && (
+                <Link href={`/dashboard/${viewerApp.id}`} className="mt-3 inline-flex text-sm text-accent hover:underline">
+                  Extension settings →
+                </Link>
+              )}
             </div>
           )}
         </header>

@@ -116,7 +116,16 @@ test(plan.title, async ({ request }) => {
           expect(result.complete).toBe(true);
           if (plan.accountingConfirmed) expect(result.minuteAccounting).toBe('confirmed');
         }
-      } else if (step.kind === 'stop') { await disconnect(); await call('/popup/close', {}); await call('/session/stop', {}); }
+      } else if (step.kind === 'stop') {
+        await disconnect(); await call('/popup/close', {});
+        let stop = await call('/session/stop', { minimumSeconds: 120 });
+        const deadline = Date.now() + 150_000;
+        while (stop.deferred && Date.now() < deadline) {
+          await call('/session/observe', {});
+          stop = await call('/session/stop', { minimumSeconds: 120 });
+        }
+        expect(stop.deferred).toBe(false);
+      }
       else if (step.kind === 'page') {
         const page = await targetPage(), action = step.action;
         if (action.surface?.kind === 'native_popup') throw new Error('Native popup cannot be replayed as a page');
@@ -131,8 +140,7 @@ test(plan.title, async ({ request }) => {
       }
     }
   } finally {
-    await disconnect();
-    if (opened) {
+    try { await disconnect(); } finally { if (opened) {
       const final = await call('/session', undefined, 'DELETE');
       expect(final.disposed).toBe(true);
       expect(final.session.runtimeFailure).toBeUndefined();
@@ -142,7 +150,7 @@ test(plan.title, async ({ request }) => {
         expect(final.session.billingCleanup).toBe('confirmed');
         if (plan.coreResult) expect(final.session.productResult.confirmed).toBe(true);
       } else { expect(final.session.sessions).toHaveLength(0); expect(final.session.applicationCleanup).toBe('not-started'); }
-    }
+    } }
   }
 });
 `;

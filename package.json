@@ -80,7 +80,8 @@
     "verify:extension-replay": "tsx --tsconfig tsconfig.json scripts/verify-extension-replay.ts",
     "verify:extension-artifact": "tsx scripts/verify-extension-artifact.ts",
     "verify:extension-practice": "node scripts/verify-extension-practice.mjs",
-    "verify:extension-runner": "tsx scripts/verify-extension-runner.ts"
+    "verify:extension-runner": "tsx scripts/verify-extension-runner.ts",
+    "verify:extension-screenshot": "node scripts/verify-extension-screenshot.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.104.1",

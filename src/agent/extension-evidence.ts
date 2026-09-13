@@ -4,6 +4,15 @@ import { parseExtensionLink, readExtensionOptions } from "@/lib/extension-target
 
 export interface ExtensionFinalEvidence { disposed: boolean; session?: ExtensionSession }
 
+export async function completeExtensionAccessCheck(env: AgentEnv, runId: string, costUsd: number): Promise<"unverified"> {
+  await env.db.run.update({ where: { id: runId }, data: {
+    status: "partial", verdict: "unverified", errorMessage: null,
+    bottomLine: "Session checks need test-account access and permission to start and stop sessions. Add these in your extension settings to check interview assistance, practice and their combined use.",
+    currentAction: null, completedAt: new Date(), costUsd,
+  } });
+  return "unverified";
+}
+
 export function extensionProductFailureStep(final: ExtensionFinalEvidence) {
   const failure = final.session?.productResult?.failure;
   if (!final.disposed || !final.session || final.session.runtimeFailure || !extensionCleanupComplete(final.session) || failure?.source !== "visible-product-alert") return null;

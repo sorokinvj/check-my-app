@@ -177,7 +177,7 @@ export class ExtensionBrowser {
         result = { minutesAvailable: (result as { balance: number }).balance, sessionHistory: "visible" };
       } else if (name === "extension_screenshot") {
         if (!this.popup) return "Use screenshot for the target tab, or open the native popup first.";
-        const response = await this.runner.fetch(new Request("http://runner/desktop.png"));
+        const response = await this.runner.fetch(new Request("http://runner/popup.png"));
         if (!response.ok) throw new Error("A redacted native screenshot is unavailable");
         const buffer = Buffer.from(await response.arrayBuffer());
         const url = await env.onScreenshot?.(buffer);
@@ -213,9 +213,10 @@ export class ExtensionBrowser {
         await this.browser.close();
         await this.call("/popup/close", {});
         this.popup = false;
-        result = await this.call("/session/stop", {});
-        this.replayActions.push({ kind: "stop" });
-        result = this.sessionReading(result);
+        result = await this.call("/session/stop", { minimumSeconds: 120 });
+        const deferred = (result as { deferred?: boolean }).deferred === true;
+        if (!deferred) this.replayActions.push({ kind: "stop" });
+        result = { ...this.sessionReading(result), ...(deferred ? { observation: "The two-minute observation window is still active. Use extension_observe_session before ending the session." } : {}) };
         await this.connectPage(env);
       } else return "Unknown extension tool";
       return scrubSecrets(env, JSON.stringify(result));

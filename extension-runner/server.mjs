@@ -8,8 +8,8 @@ import WebSocket, { WebSocketServer } from 'ws';
 import { installFromStore } from './store.mjs';
 import { Cdp } from './cdp.mjs';
 import { pageForTarget } from './targets.mjs';
-import { SessionLedger, stopWithConfirmation } from './lifecycle.mjs';
-import { NativeSurface } from './surface.mjs';
+import { SessionLedger, stopWithConfirmation, sessionStopDeferred } from './lifecycle.mjs';
+import { NativeSurface, popupCrop } from './surface.mjs';
 import { SessionObservation, readExtensionPanel } from './observation.mjs';
 import { childIsRunning, ownedProtocolAction, disconnectInspectionClients } from './health.mjs';
 import { stimulusFor, microphoneMatchesStimulus } from './stimulus.mjs';
@@ -462,8 +462,13 @@ const server = http.createServer(async (req, res) => {
       result = view();
     }
     else if (req.method === 'POST' && path === '/session/stop') {
-      await ledger?.endAll(); await finalizeBilling();
-      result = sessionView({ session, sessions: ledger?.snapshot() ?? [], observation: observation?.snapshot(), practiceObservation: practiceObservation?.snapshot(), billing: session.billing });
+      const { minimumSeconds } = await body(req);
+      const deferred = sessionStopDeferred(ledger?.snapshot() ?? [], minimumSeconds);
+      // The planner stopped a successful acceptance call at 94 seconds. Normal
+      // completion waits for the observation window; disposal and expiry still
+      // stop immediately, independently of this optional completion guard.
+      if (!deferred) { await ledger?.endAll(); await finalizeBilling(); }
+      result = { ...sessionView({ session, sessions: ledger?.snapshot() ?? [], observation: observation?.snapshot(), practiceObservation: practiceObservation?.snapshot(), billing: session.billing }), deferred };
     }
     else if (req.method === 'POST' && path === '/popup') result = await openPopup(await body(req));
     else if (req.method === 'GET' && path === '/popup/read') { const popup = await currentPopup(); result = await native.read(popup.url, popup.targetId); }
@@ -473,7 +478,9 @@ const server = http.createServer(async (req, res) => {
     }
     else if (req.method === 'POST' && path === '/popup/close') result = await closePopup();
     else if (req.method === 'GET' && path === '/native-tree') result = JSON.parse((await exec('python3', ['native.py', 'tree'], { timeout: 10_000, maxBuffer: 1024 * 1024 })).stdout);
-    else if (req.method === 'GET' && path === '/desktop.png') {
+    else if (req.method === 'GET' && ['/desktop.png', '/popup.png'].includes(path)) {
+      const popup = path === '/popup.png' ? await currentPopup() : null;
+      const popupBefore = popup ? await native.invoke({ operation: 'read', url: popup.url }) : null;
       const before = await screenshotRedactions();
       await exec('import', ['-window', 'root', `${root}/desktop.png`]);
       const after = await screenshotRedactions();
@@ -483,6 +490,14 @@ const server = http.createServer(async (req, res) => {
         return `rectangle ${x1},${y1} ${x2},${y2}`;
       });
       if (masks.length) await exec('convert', [`${root}/desktop.png`, '-fill', '#111827', '-draw', masks.join(' '), `${root}/desktop.png`]);
+      if (popup) {
+        const current = await currentPopup();
+        if (current.targetId !== popup.targetId || current.url !== popup.url) throw new Error('The popup changed during screenshot capture');
+        const popupAfter = await native.invoke({ operation: 'read', url: popup.url });
+        const size = (await exec('identify', ['-format', '%w %h', `${root}/desktop.png`])).stdout.trim().split(' ').map(Number);
+        const crop = popupCrop(popupBefore.bounds, popupAfter.bounds, size[0], size[1]);
+        await exec('convert', [`${root}/desktop.png`, '-crop', crop, '+repage', `${root}/desktop.png`]);
+      }
       res.writeHead(200, { 'Content-Type': 'image/png' }).end(await readFile(`${root}/desktop.png`)); return;
     } else if (req.method === 'DELETE' && path === '/session') { await closeBrowser('requested'); result = { disposed: true, session }; }
     else { res.writeHead(404).end(); return; }

@@ -4,6 +4,7 @@ import sys
 import time
 import subprocess
 import pyatspi
+from redaction import secret_boxes
 
 
 def nodes(root, depth=0, include_web=False):
@@ -65,7 +66,7 @@ def surface_rows(root, path=None, depth=0):
 def surface(input):
     root = document_for(input['url'])
     if input['operation'] == 'read':
-        return {'url': input['url'], 'nodes': list(surface_rows(root))[:400]}
+        return {'url': input['url'], 'bounds': describe(root, [])['bounds'], 'nodes': list(surface_rows(root))[:400]}
     expected = input['node']
     node = root
     for index in expected['path']:
@@ -91,18 +92,20 @@ def redactions(secrets):
     for node in nodes(pyatspi.Registry.getDesktop(0), include_web=True):
         if not visible(node):
             continue
-        sensitive = node.getState().contains(pyatspi.STATE_EDITABLE) or node.getRoleName() == 'password text'
-        if not sensitive and secrets:
-            text = node.name or ''
-            try:
-                text += node.queryText().getText(0, -1)
-            except Exception:
-                pass
-            sensitive = any(secret and secret in text for secret in secrets)
-        if sensitive:
-            box = node.queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
-            if box.width > 0 and box.height > 0:
-                boxes.add((box.x - 8, box.y - 8, box.x + box.width + 8, box.y + box.height + 8))
+        editable = node.getState().contains(pyatspi.STATE_EDITABLE) or node.getRoleName() == 'password text'
+        box = node.queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
+        if box.width <= 0 or box.height <= 0:
+            continue
+        text = ''
+        interface = None
+        try:
+            interface = node.queryText()
+            text = interface.getText(0, -1)
+        except Exception:
+            pass
+        boxes.update(secret_boxes(node.name or '', text,
+                                  lambda index: interface.getCharacterExtents(index, pyatspi.DESKTOP_COORDS),
+                                  (box.x, box.y, box.width, box.height), secrets, editable))
     return list(boxes)
 
 
