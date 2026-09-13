@@ -132,9 +132,8 @@ export function RunLive({
         </p>
       </div>
 
-      {/* Two columns: feed + agent's eyes */}
-      <div className="grid gap-4 lg:grid-cols-[1.2fr_1fr]">
-        <div className="card flex min-h-[320px] flex-col p-4">
+      <div className={`grid gap-4 ${isExtension ? "" : "lg:grid-cols-[1.2fr_1fr]"}`}>
+        <div className={`card flex min-h-[320px] flex-col p-4 ${isExtension ? "min-w-0" : ""}`}>
           <p className="section-label mb-3">What we&apos;re doing</p>
           <ul className="flex-1 space-y-0.5 overflow-y-auto">
             {events.length === 0 && (
@@ -144,7 +143,7 @@ export function RunLive({
               const icon = ICON[ev.icon];
               const last = i === events.length - 1;
               return (
-                <li key={i} className={`log-line ${last ? "text-fg" : ""}`}>
+                <li key={i} className={`log-line ${last ? "text-fg" : ""} ${isExtension ? "[overflow-wrap:anywhere]" : ""}`}>
                   <span className="mr-2 text-fg-faint">
                     {new Date(ev.at).toLocaleTimeString("en-GB", {
                       hour: "2-digit",
@@ -157,9 +156,14 @@ export function RunLive({
               );
             })}
           </ul>
+          {isExtension && snap?.currentAction && (
+            <p className="mt-3 rounded-lg bg-ink-900 p-3 text-sm text-fg-muted">
+              {snap.currentAction}
+            </p>
+          )}
         </div>
 
-        <div className="card flex flex-col p-4">
+        {!isExtension && <div className="card flex flex-col p-4">
           <p className="section-label mb-3">What the agent sees</p>
           <div className="relative aspect-[4/3] overflow-hidden rounded-lg border border-ink-700 bg-ink-900">
             {snap?.liveScreenshotUrl ? (
@@ -191,7 +195,7 @@ export function RunLive({
               </p>
             </div>
           )}
-        </div>
+        </div>}
       </div>
 
       <p className="text-center font-mono text-[13px] text-fg-faint">
