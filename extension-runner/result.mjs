@@ -28,6 +28,7 @@ export function assessVisibleSessionFailure(session) {
       for (const text of sample.alerts ?? []) {
         if (typeof text !== 'string' || text.length > 1000 || observation.baseline?.includes(text)) continue;
         if (!/\b(error|failed|unavailable|unable to|could not)\b/i.test(text)) continue;
+        if (/\b(?:no|zero|without)\s+(?:\w+\s+){0,2}(?:errors?|failures?)\b|\b(?:error|failure)[ -]free\b|\b(?:error|failure).{0,40}\b(?:resolved|cleared|recovered)\b/i.test(text)) continue;
         if (/credential|password|sign.?in|log.?in|permission|denied|microphone|insufficient|balance|minutes|payment|quota|too many|rate.?limit|429/i.test(text)) continue;
         return { source: 'visible-product-alert', text, observedAt: sample.at, surface };
       }

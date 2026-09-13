@@ -87,6 +87,12 @@ export async function createRecheckRun(
   // CHE-94. Everything below is about the ANONYMOUS path: the caller proved
   // nothing except that they have the link.
   const isAnonymous = !prev.ownerId;
+  if (prev.targetKind === "extension" && prev.ownerId && !opts.full) {
+    // Extension checks always open a fresh installed product. They cannot use
+    // the unmetered website survey path to bypass the on-demand allowance.
+    const gate = await assertCanStartRun(prisma, { id: prev.ownerId, plan: (prev.owner?.plan ?? "free") as UserPlan }, null, { siteCap: deps.siteCap() });
+    if (!gate.ok) return { kind: "quota", reason: gate.reason };
+  }
   if (isAnonymous) {
     // A full walk is the expensive mode and exists for owners who just shipped
     // something. Nobody holding a public link gets to spend that.

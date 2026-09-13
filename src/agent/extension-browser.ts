@@ -92,7 +92,7 @@ export class ExtensionBrowser {
         if (name === "navigate") return "The companion tab is already open. Its page is a test input, not a product surface.";
         const panel = this.page.locator("#joblander-extension-host").locator("#joblander-extension-root");
         if (this.identity.extensionId !== "hafhjepjihcimcljkdphpinannbdmnhf" || !await panel.count() || !await panel.isVisible()) return "No extension-owned panel is visible on the companion tab. Use extension_open to inspect the product controls.";
-        if (name === "screenshot") return JSON.stringify({ screenshotUrl: await env.onScreenshot?.(await panel.screenshot()) ?? null, surface: "extension-panel" });
+        if (name === "screenshot") return JSON.stringify({ ...await this.publishScreenshot(env, await panel.screenshot(), input), surface: "extension-panel" });
         const text = scrubSecrets(env, await panel.innerText());
         this.rememberProductRead({ surface: "extension-panel", text });
         return JSON.stringify({ surface: "extension-panel", text });
@@ -180,8 +180,7 @@ export class ExtensionBrowser {
         const response = await this.runner.fetch(new Request("http://runner/popup.png"));
         if (!response.ok) throw new Error("A redacted native screenshot is unavailable");
         const buffer = Buffer.from(await response.arrayBuffer());
-        const url = await env.onScreenshot?.(buffer);
-        result = { screenshotUrl: url ?? null };
+        result = await this.publishScreenshot(env, buffer, input);
       } else if (name === "extension_start_session") {
         if (!this.identity.allowSessions) return this.missingAccess("Session-start permission and a test account are required for this step. It remains skipped with missing_access.");
         if (!this.popup) return "Open the native popup on the target tab before starting its session.";
@@ -228,6 +227,12 @@ export class ExtensionBrowser {
       env.undrivenControls?.push({ hand: name === "extension_fill" ? "fill" : "click", target: "extension control", reason });
       return scrubSecrets(env, `${reason}. The extension control ${UNDRIVEN_INSTRUCTION}`);
     }
+  }
+
+  private async publishScreenshot(env: ToolEnv, buffer: Buffer, input: Record<string, unknown>) {
+    const wanted = env.visionScreenshots || (env.visionTriggers && input.look === true);
+    if (wanted) env.pendingScreenshotPngB64 = buffer.toString("base64");
+    return { screenshotUrl: await env.onScreenshot?.(buffer) ?? null, ...(wanted ? { imageAttached: true } : {}) };
   }
 
   private sessionReading(raw: unknown) {

@@ -64,3 +64,8 @@ export function readExtensionOptions(raw: string | null | undefined): ExtensionO
     };
   } catch { return {}; }
 }
+// Runtime diagnostics stay in the run record; a public progress response must
+// not expose native executor failures as descriptions of the extension.
+export function publicRunError(targetKind: string, internalMessage: string | null): string | null {
+  return targetKind === "extension" ? null : internalMessage;
+}

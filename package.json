@@ -2,7 +2,7 @@
   "name": "checkmyapp",
   "version": "0.1.0",
   "private": true,
-  "description": "Paste a link. We'll show you your app. — a product mirror with QA fallout.",
+  "description": "Paste a link. We'll show you your app. \u2014 a product mirror with QA fallout.",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -81,7 +81,8 @@
     "verify:extension-artifact": "tsx scripts/verify-extension-artifact.ts",
     "verify:extension-practice": "node scripts/verify-extension-practice.mjs",
     "verify:extension-runner": "tsx scripts/verify-extension-runner.ts",
-    "verify:extension-screenshot": "node scripts/verify-extension-screenshot.mjs"
+    "verify:extension-screenshot": "node scripts/verify-extension-screenshot.mjs",
+    "verify:extension-adoption": "tsx scripts/verify-extension-adoption.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.104.1",

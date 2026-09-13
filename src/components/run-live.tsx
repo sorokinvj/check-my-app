@@ -85,12 +85,12 @@ export function RunLive({
   if (snap?.status === "failed") {
     return (
       <div className="card mx-auto max-w-xl space-y-3 p-8 text-center">
-        <p className="text-2xl">🪦</p>
-        <p className="text-lg font-medium">Something broke on our side.</p>
+        <p className="text-2xl">{isExtension ? "◌" : "🪦"}</p>
+        <p className="text-lg font-medium">{isExtension ? "Check interrupted" : "Something broke on our side."}</p>
         <p className="text-sm text-fg-muted">
-          We&apos;re looking at it. You&apos;ll get an email with a retry link.
+          {isExtension ? "The check ended without a result." : "We're looking at it. You'll get an email with a retry link."}
         </p>
-        {snap.errorMessage && (
+        {!isExtension && snap.errorMessage && (
           <p className="mono rounded-lg bg-ink-900 p-3 text-left text-status-broken/80">
             {snap.errorMessage}
           </p>

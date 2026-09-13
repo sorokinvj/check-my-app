@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getDbFromContext } from "@/lib/db";
 import { parseJson } from "@/lib/json";
 import type { RunEvent } from "@/lib/types";
+import { publicRunError } from "@/lib/extension-target";
 
 // GET /api/runs/{publicId} — run status + live feed for the in-progress page.
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -12,6 +13,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
       publicId: true,
       appSlug: true,
       targetUrl: true,
+      targetKind: true,
       status: true,
       verdict: true,
       events: true,
@@ -25,5 +27,5 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     return NextResponse.json({ error: "Run not found" }, { status: 404 });
   }
 
-  return NextResponse.json({ ...run, events: parseJson<RunEvent[]>(run.events) });
+  return NextResponse.json({ ...run, errorMessage: publicRunError(run.targetKind, run.errorMessage), events: parseJson<RunEvent[]>(run.events) });
 }

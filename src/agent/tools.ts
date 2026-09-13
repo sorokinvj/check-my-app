@@ -47,6 +47,7 @@ export interface ToolEnv {
   // Off for text-only nav models — the image would be rejected.
   visionScreenshots?: boolean;
   pendingScreenshotJpegB64?: string;
+  pendingScreenshotPngB64?: string;
   // CHE-169: vision on demand. With this on (and visionScreenshots off) the
   // screenshot tool parks no JPEG by itself; the harness parks one only at a
   // moment of judgment — an inert click or one that needed a fallback, an
@@ -455,7 +456,7 @@ const EXTENSION_TOOLS: Anthropic.Tool[] = [
     ["extension_start_practice", "Start the prepared practice with its microphone on and an owned Stop deadline. In a combined scenario start the extension first, then start practice. Requires account and audio preflight and session permission."],
     ["extension_observe_session", "Wait up to 25 seconds for the owned session and read its new question/answer, Stop and minute accounting. Repeat until complete. The local deadline ends and confirms the session automatically, allowing the full allotted duration and post-Stop balance check."],
     ["extension_stop_sessions", "Stop every session owned by this attempt through its local confirmation sequence. Browser disposal is separate."],
-  ].map(([name, description]): Anthropic.Tool => ({ name, description, input_schema: { type: "object", properties: {}, required: [] } })),
+  ].map(([name, description]): Anthropic.Tool => ({ name, description, input_schema: { type: "object", properties: name === "extension_screenshot" ? { look: { type: "boolean", description: "Attach the redacted image for visual inspection when vision is available." } } : {}, required: [] } })),
   { name: "extension_click", description: "Click a fresh native popup control by its observed reference. Session and purchase controls are guarded.", input_schema: { type: "object", properties: { ref: { type: "string" } }, required: ["ref"] } },
   { name: "extension_fill", description: "Fill an observed native popup field. Use {{TEST_EMAIL}} / {{TEST_PASSWORD}} for credentials; substitution is confined to the installed extension.", input_schema: { type: "object", properties: { ref: { type: "string" }, value: { type: "string" } }, required: ["ref", "value"] } },
 ];

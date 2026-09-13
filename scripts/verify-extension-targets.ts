@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import type { PrismaClient } from "@/generated/prisma/client";
 import { appSlugFromUrl } from "@/lib/utils";
-import { parseExtensionLink, readExtensionOptions } from "@/lib/extension-target";
+import { parseExtensionLink, readExtensionOptions, publicRunError } from "@/lib/extension-target";
 import { createCheckSchema, extensionOptionsSchema } from "@/lib/validation";
 import { startCheck } from "@/lib/start-check";
 import { startPaidCheck } from "@/lib/one-check";
@@ -10,6 +10,8 @@ import { createRecheckRun } from "@/lib/recheck";
 import { enableWatchForRun } from "@/lib/watch-enable";
 
 async function main() {
+assert.equal(publicRunError('extension', 'The owned executor disconnected'), null);
+assert.equal(publicRunError('website', 'Existing website error'), 'Existing website error');
 const id = "hafhjepjihcimcljkdphpinannbdmnhf";
 const url = `https://chromewebstore.google.com/detail/joblander/${id}`;
 const alias = `https://chrome.google.com/webstore/detail/renamed/${id}?hl=en`;
@@ -60,6 +62,9 @@ assert.equal(triggered.length, 3);
 assert.equal(rows[2].appId, "app");
 assert.deepEqual(await startSavedApp(db,{id:"other-owner",plan:"business"},"app",{...deps,siteCap:()=>20}),{error:"App not found."});
 assert.equal(rows.length, 3, "A different owner must not start a run with saved credentials");
+db.run.findFirst = (async ({ where }: { where: { status: { notIn: string[] } } }) => where.status.notIn.includes('partial') ? null : { publicId: 'old-unverified' }) as typeof db.run.findFirst;
+assert.notDeepEqual(await startSavedApp(db, { id: 'owner', plan: 'business' }, 'app', { ...deps, siteCap: () => 20 }), { publicId: 'old-unverified' });
+assert.equal(rows.length, 4, 'Adding access after a partial check can start a fresh saved-app run');
 const watchDb = {run:{findUnique: async()=>({...app,ownerId:"owner",ephemeral:false})}} as unknown as PrismaClient;
 assert.equal((await enableWatchForRun(watchDb,{id:"owner",plan:"business",clerkOrgId:null},{runPublicId:"p",frequency:"daily",notifyOnChangeOnly:true})).kind,"gated");
 const rechecked: Record<string, unknown>[] = [];
@@ -80,6 +85,11 @@ assert.equal(rechecked[0].testEmail, 'saved@example.test');
 assert.equal(rechecked[0].userNotes, 'Saved permission');
 assert.equal((await createRecheckRun(recheckDb, 'old-public', {}, { ...recheckDeps, canMutate: async () => false })).kind, 'unauthorized');
 assert.equal(savedReads, 1, 'A stranger cannot even read saved extension credentials');
+previous.owner.plan = 'free';
+recheckDb.run.count = (async () => 1000) as typeof recheckDb.run.count;
+assert.equal((await createRecheckRun(recheckDb, 'old-public', {}, recheckDeps)).kind, 'quota', 'An installed-product recheck must respect the on-demand allowance');
+assert.equal(rechecked.length, 1);
+assert.equal(savedReads, 1, 'Quota refusal precedes reading credentials or creating a run');
 console.log("Extension targets: stable identity, validation, public/paid/dashboard starts and ownership verified");
 
 }

@@ -14,7 +14,7 @@ export async function startSavedApp(
   const app = await db.app.findFirst({ where: { id: appId, ownerId: owner.id } });
   if (!app) return { error: "App not found." };
   const active = await db.run.findFirst({
-    where: { appId, ownerId: owner.id, status: { notIn: ["completed", "failed"] } },
+    where: { appId, ownerId: owner.id, status: { notIn: ["completed", "partial", "failed"] } },
     select: { publicId: true },
   });
   if (active) return active;

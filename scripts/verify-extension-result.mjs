@@ -35,6 +35,9 @@ assert.equal(assessPracticeOutput({ ...practice, practiceObservation: { samples:
 
 const explicitFailure = { ...session, audioPreflight: { passed: true }, observation: { samples: [{ ...sample, results: [], alerts: ['The response service is unavailable.'] }] } };
 assert.equal(assessExtensionOutput(explicitFailure).failure?.source, 'visible-product-alert');
+for (const alert of ['No error occurred.', 'Connected without any error.', 'The earlier error was resolved.', 'Error-free session.']) {
+  assert.equal(assessExtensionOutput({ ...explicitFailure, observation: { samples: [{ ...sample, alerts: [alert] }] } }).failure, undefined, 'A negated or resolved error is not positive failure evidence');
+}
 assert.equal(assessExtensionOutput({ ...explicitFailure, audioPreflight: { passed: false } }).failure, undefined);
 assert.equal(assessExtensionOutput({ ...explicitFailure, runtimeFailure: { kind: 'browser-exited' } }).failure, undefined);
 assert.equal(assessExtensionOutput({ ...explicitFailure, observation: { samples: [{ ...sample, alerts: ['Too many requests: error 429'] }] } }).failure, undefined);

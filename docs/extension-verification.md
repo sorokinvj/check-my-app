@@ -2,59 +2,75 @@
 
 Source: [Extension verification PRD](https://app.notion.com/p/3d97bac6430a81a1b09fdacc72d609c6).
 
-## Current state — 2026-09-13 19:36 UTC
+## Current state — 2026-09-13 19:54 UTC
 
 [PR #81](https://github.com/sorokinvj/check-my-app/pull/81) is ready for review,
 branch `feat/chrome-extension-targets`. No CheckMyApp production migration,
 deployment or merge. The explicit repository instruction prohibits merging.
 
-The independent Codex review's nine findings were addressed in `a1d06f7`.
-Claude then found that missing session access appeared as an internal outage.
-That path now finishes with a neutral unverified result and an owner settings
-link; it does not synthesize a positive verdict. Credential rejection uses the
-same access outcome. Current-source Codex review is running again.
+The first Codex review's nine findings and both Claude findings have been
+addressed. A second Codex review found partial-run recovery, GitHub adoption
+metadata, and missing native vision images; those are addressed too. Recovery
+now starts a new run after a partial result, GitHub adoption preserves target
+identity/settings and links owned one-off runs, and the actual agent loop
+receives native PNG images with their correct media type. Extension rechecks
+also respect the on-demand allowance. Public progress APIs hide internal
+extension diagnostics; the failure screen makes no retry-email promise.
+A real HTTP response and rendered failure screen verified that boundary.
 
-Prisma generation, both typechecks, lint and all 53 acceptance scripts pass.
-Three pre-existing lint warnings remain. New checks cover a premature normal
-Stop, separate minimum durations for two meters, immediate cancellation,
-intermediate observations, cleanup after a replay disconnect exception,
-product-only screenshot bounds and conservative secret masking.
+Prisma generation, both typechecks, lint and all 54 acceptance scripts pass.
+Three pre-existing lint warnings remain. The new acceptance script exercises
+the actual GitHub adoption route with isolated external boundaries; existing
+harness checks exercise native popup and companion-panel images through the
+real agent loop in always-on, requested and text-only modes. Current-head
+review and CI will rerun after this checkpoint.
+
+The isolated native executor is version
+`30809ae0-f023-414c-8ee4-5f9a5dc08d11`, container application version 13;
+its rollout completed. Both native login and settings screenshots were
+verified live: cropped product controls remain visible, account inputs and
+existing document names are masked, and no paid session was started.
+Evidence: `/tmp/checkmyapp-popup-login.png`,
+`/tmp/checkmyapp-popup-settings.png`,
+`/tmp/checkmyapp-popup-screenshot-cleanup.json`.
+The additional negative/resolved-alert exclusion has passed acceptance and
+will be deployed after the currently active paid Run has finished.
+
+Full Run 3 was submitted from the owner UI at 19:37 UTC:
+`cmu07twfw00112u136r00vpkl`, public `cmu07twfw00122u13mjvi6rp6`.
+It uses a frozen Workflow bundle outside the watched repository, local
+CheckMyApp D1/R2 and actual Cloudflare sessions against production JobLander.
+Scan and discovery completed (45 discovery iterations). The public preview
+now shows the native product rather than the desktop or synthetic fixture.
+The interview journey completed: 178 seconds, a fresh relevant answer,
+application Stop, three charged minutes, both live minute steps, confirmed
+cessation and disposed=true. Evidence:
+`/tmp/checkmyapp-workflow-run3-interview-cleanup.json`.
+Practice is in progress; its session stopped at 121 seconds and the UI
+balance/history confirms three minutes and stable post-Stop balance, while
+both live minute transitions were not observed. Final practice result and
+combined journey are still pending. This is not a deployed CheckMyApp Run.
 
 Full Run 1 failed during discovery cleanup; no paid scenario or verdict.
 Run `cmtzwjnm0000h2u1399cdot4d`, public `cmtzwjnm0000i2u13pip5zpo8`.
-The initial HTTP 500 cause remains unknown. Native phases now explicitly use
-zero retries and 25-minute timeouts, independent of Miniflare's error naming.
+The original HTTP 500 cause remains unknown. Native phases now explicitly use
+zero retries and 25-minute timeouts.
+Full Run 2 (`cmu06woha000r2u13t8opj32h`) ended its only session at 94 local
+seconds / 96 history seconds, then a Wrangler reload interrupted the local
+controller. Explicit cleanup confirmed UI Stop, stable balance and disposal;
+its local QA row records failure. No verdict was published. The executor now
+refuses premature normal Stop until every active meter has run 120 seconds;
+expiry, cancellation and failure disposal remain immediate. Generated replays
+respect that minimum and clean up even if disconnect throws.
 
-Full Run 2 passed scan and discovery (40 iterations) and started interview
-assistance. Run `cmu06woha000r2u13t8opj32h`, public
-`cmu06woha000s2u130bcql632`. The agent requested Stop after 94 local seconds;
-UI history recorded 96 seconds, two minutes charged, balance stable for 73.887
-seconds, relevant answer and application Stop confirmed. It does not satisfy
-the two-minute duration. A subsequent local Wrangler reload interrupted the
-controller; no verdict was published. Explicit cleanup returned disposed=true,
-UI Stop and billing cessation confirmed. The local QA row records failure.
-Evidence: `/tmp/checkmyapp-workflow-run2-cleanup.json`.
-
-Normal Stop now waits until every active meter has reached 120 seconds.
-Cancellation, expiry and failure disposal still stop immediately. Exported
-replays enforce the same minimum and always request disposal even if their
-browser connection throws on disconnect. The next full Workflow uses a frozen
-bundle outside the watched repository, preventing code edits from interrupting
-it. This remains a local CheckMyApp Workflow against production JobLander.
-
-Native screenshot capture now validates the exact popup and unchanged bounds,
-redacts secrets before cropping, and excludes the desktop/companion fixture.
-A missing redaction module in the Docker allowlist was caught during live
-verification and corrected; the image build validates its Python imports.
-The probe rollout is targeting version `30809ae0-f023-414c-8ee4-5f9a5dc08d11`.
-Two unpaid screenshot probes still reached the older image (HTTP 404); both
-were disposed with zero paid sessions. Live framing verification remains.
 Cloudflare deploy success means a rollout started, not that the target image
 has replaced every instance: [rollout contract](https://developers.cloudflare.com/containers/configuration/rollouts/).
+Early unpaid screenshot probes reached the previous image or were interrupted
+by replacement; those remain unverified attempts, never paid-session passes.
 
-Remaining: verify current image and screenshot framing, finish the frozen full
-Run and its exported replay, verify active cancellation, address current-source
-review, then resolve release authorization and verify the deployed product.
+Remaining: finish the frozen full Run and generated replay, verify active
+cancellation against the final native image, obtain current-source review and
+CI, then resolve release authorization and verify the deployed product.
 
 ### Prior live evidence and billing policy — 14:25 UTC
 
