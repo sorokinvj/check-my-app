@@ -139,11 +139,11 @@ export function harnessMode(bindings: Pick<AgentBindings, "HARNESS_TIER">): Harn
 export async function putScreenshot(
   env: AgentEnv,
   buffer: Uint8Array,
-  visibility: "public" | { privateRunId: string } | { publicRunId: string } = "public",
+  visibility: "public" | { privateRunId: string } = "public",
 ): Promise<{ storageUrl: string; sha256: string }> {
   const hash = await crypto.subtle.digest("SHA-256", buffer as BufferSource);
   const sha256 = [...new Uint8Array(hash)].map((b) => b.toString(16).padStart(2, "0")).join("");
-  const prefix = visibility === "public" ? "" : "privateRunId" in visibility ? `private/runs/${visibility.privateRunId}/` : `extensions/${visibility.publicRunId}/`;
+  const prefix = visibility === "public" ? "" : `private/runs/${visibility.privateRunId}/`;
   const storageUrl = await putObject(env.bindings.EVIDENCE, `${prefix}screenshots/${sha256}.png`, buffer);
   return { storageUrl, sha256 };
 }

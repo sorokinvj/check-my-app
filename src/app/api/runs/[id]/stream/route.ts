@@ -39,6 +39,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
         const serialized = JSON.stringify({
           ...run,
           errorMessage: publicRunError(run.targetKind, run.errorMessage),
+          liveScreenshotUrl: run.targetKind === "extension" ? null : run.liveScreenshotUrl,
           events: parseJson<RunEvent[]>(run.events),
         });
         if (serialized !== lastSerialized) {

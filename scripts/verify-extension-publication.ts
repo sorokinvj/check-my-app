@@ -101,8 +101,6 @@ async function main() {
   assert.notEqual(privateImage.storageUrl, publicImage.storageUrl, "A content hash alone must not turn a private capture into a public one");
   assert.equal(objects.size, 2);
   assert.match(privateImage.storageUrl, /private\/runs\/fixture-run\/screenshots\//);
-  const nativeImage = await putScreenshot(storageEnv, screenshot, { publicRunId: "fixture-run" });
-  assert.match(nativeImage.storageUrl, /extensions\/fixture-run\/screenshots\//);
   const mocks: Record<string, string> = {
     "next/server": "export const NextResponse = { json: (value, init) => new Response(JSON.stringify(value), init) };",
     "@opennextjs/cloudflare": "export const getCloudflareContext = () => { fixture.contextCalls++; return { env: { EVIDENCE: fixture.bucket } }; };",
@@ -117,7 +115,7 @@ async function main() {
   const mod = { exports: {} as { GET(req: Request, args: { params: Promise<{ path: string[] }> }): Promise<Response> } };
   new Function("module", "exports", "fixture", bundle.outputFiles[0].text)(mod, mod.exports, fixture);
   const get = (path: string[]) => mod.exports.GET(new Request("https://example.test/api/evidence/" + path.join("/")), { params: Promise.resolve({ path }) });
-  for (const path of [["private", "transcripts", "run.json"], ["private", "extensions", "attempt", "cleanup.json"], ["private", "extensions", "attempt", "phase.json"], ["private", "screenshots", "hash.png"], ["extensions", "run_walk-0", "cleanup.json"]]) {
+  for (const path of [["private", "transcripts", "run.json"], ["private", "extensions", "attempt", "cleanup.json"], ["private", "extensions", "attempt", "phase.json"], ["private", "screenshots", "hash.png"], ["extensions", "run_walk-0", "cleanup.json"], ["extensions", "run", "screenshots", "hash.png"]]) {
     assert.equal((await get(path)).status, 404);
   }
   assert.equal(fixture.contextCalls, 0, "Private evidence is rejected before storage is consulted");
@@ -159,6 +157,20 @@ async function main() {
     assert.doesNotMatch(body, /PRIVATE_/, "The full coding-agent review API must enforce the same publication boundary");
     assert.equal(JSON.parse(body).findings.length, 0);
   }
+  const streamBundle = await build({ entryPoints: ["src/app/api/runs/[id]/stream/route.ts"], bundle: true, write: false, platform: "node", format: "cjs",
+    plugins: [{ name: "stream-boundaries", setup(build) {
+      build.onResolve({ filter: /.*/ }, args => verdictMocks[args.path] ? { path: args.path, namespace: "fixture" } : undefined);
+      build.onLoad({ filter: /.*/, namespace: "fixture" }, args => ({ contents: verdictMocks[args.path], loader: "js" }));
+    } }],
+  });
+  const streamMod = { exports: {} as typeof verdictMod.exports };
+  const streamFixture = { db: { run: { findUnique: async () => ({ targetKind: "extension", status: "failed", events: "[]", verdict: null,
+    errorMessage: null, currentAction: null, liveScreenshotUrl: "/api/evidence/extensions/run/screenshots/PRIVATE_RESUME.png" }) } } };
+  new Function("module", "exports", "fixture", streamBundle.outputFiles[0].text)(streamMod, streamMod.exports, streamFixture);
+  const stream = await streamMod.exports.GET(new Request("https://example.test/api/runs/fixture/stream"), { params: Promise.resolve({ id: "fixture" }) });
+  const streamed = await stream.text();
+  assert.match(streamed, /"liveScreenshotUrl":null/);
+  assert.doesNotMatch(streamed, /PRIVATE_|screenshots\//, "The public live feed must not advertise raw extension captures, including legacy images");
   const statusMocks = { ...mocks, "@/lib/db": "export const getDbFromContext = async () => fixture.db;", "@/lib/auth": "export const getOptionalUser = async () => fixture.user;" } as Record<string, string>;
   const statusBundle = await build({ entryPoints: ["src/app/api/status/[slug]/route.ts"], bundle: true, write: false, platform: "node", format: "cjs",
     plugins: [{ name: "status-boundaries", setup(build) {

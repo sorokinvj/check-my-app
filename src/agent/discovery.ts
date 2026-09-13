@@ -151,10 +151,9 @@ export async function discoverApp(args: {
     onCredentialRejected: (signature) => recordCredentialRejection(env, run.id, signature),
     knownUrls: knownUrlsFrom(run.targetUrl, publishedUrls),
     onScreenshot: async (buffer) => {
-      const privateImage = Boolean(extension && !extension.popup);
       if (extension && !run.id) throw new Error("Extension evidence requires a run owner");
-      const { storageUrl } = await putScreenshot(env, buffer, privateImage ? { privateRunId: run.id! } : extension ? { publicRunId: run.id! } : "public");
-      if (!privateImage) await onLiveScreenshot?.(storageUrl);
+      const { storageUrl } = await putScreenshot(env, buffer, extension ? { privateRunId: run.id! } : "public");
+      if (!extension) await onLiveScreenshot?.(storageUrl);
       return storageUrl;
     },
   };

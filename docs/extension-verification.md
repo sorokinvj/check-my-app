@@ -2,7 +2,7 @@
 
 Source: [Extension verification PRD](https://app.notion.com/p/3d97bac6430a81a1b09fdacc72d609c6).
 
-## Current state — 2026-09-13 23:18 UTC
+## Current state — 2026-09-13 23:28 UTC
 
 [PR #81](https://github.com/sorokinvj/check-my-app/pull/81) remains on
 `feat/chrome-extension-targets`. No CheckMyApp production merge, migration
@@ -26,7 +26,7 @@ Run 6 (`cmu0fj66c000srq13nzoajdfp`, public
 It uses local CheckMyApp Workflow/D1/R2 and the actual Cloudflare native executor
 against production JobLander. Its frozen Workflow bundle SHA-256 is
 `583354cb7e41c5bc8af4cad24bf6dc20c4caa88952a2e8e7f4ce1857df3d2617`.
-Discovery is in progress. This is not a CheckMyApp production Run.
+Discovery produced all five journeys. Interview completed with a fresh relevant answer, 151 seconds, three minutes, both live debit steps, observed Stop and stable balance. AI practice is in progress. This is not a CheckMyApp production Run.
 
 Current native executor version 17 (`b6c8e5e7-f6cb-404a-a500-da570e681c4b`)
 passed the exact interview spec downloaded from Run 4's verdict UI: 179 seconds,
@@ -40,6 +40,14 @@ An active interview session deferred ordinary Stop before 120 seconds, but
 immediate cancellation stopped it before that minimum and confirmed stable
 balance and disposal. Evidence: `/tmp/checkmyapp-cloudflare-no-input-cleanup.json`
 and `/tmp/checkmyapp-cloudflare-cancel-cleanup.json`.
+
+A live screenshot check then found a selected resume filename still visible in
+native popup pixels. All extension captures now stay private, independent of
+popup state; the public evidence proxy denies legacy extension images and the
+live feed omits their URLs. The checking agent still receives images internally.
+A new public UI capture confirmed the preview no longer exposes those pixels.
+The actual evidence/stream routes are covered by acceptance tests, all required
+checks pass, and a focused Claude review approved the correction.
 
 The public verdict and review APIs now hide draft/failed extension observations;
 actual HTTP requests for failed Run 5 returned no journeys or findings. Private

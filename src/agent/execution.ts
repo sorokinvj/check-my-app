@@ -189,10 +189,9 @@ export async function walkOneJourney(args: {
       // CHE-171: a 404 on an address outside this set is not a defect.
       knownUrls: knownUrlsFrom(run.targetUrl, publishedUrls),
       onScreenshot: async (buffer) => {
-        const privateImage = Boolean(extension && !extension.popup);
-        const stored = await putScreenshot(env, buffer, privateImage ? { privateRunId: run.id } : extension ? { publicRunId: run.id } : "public");
-        lastScreenshot = privateImage ? null : stored;
-        if (!privateImage) await onLiveScreenshot?.(stored.storageUrl);
+        const stored = await putScreenshot(env, buffer, extension ? { privateRunId: run.id } : "public");
+        lastScreenshot = extension ? null : stored;
+        if (!extension) await onLiveScreenshot?.(stored.storageUrl);
         return stored.storageUrl;
       },
       onReportStep: async (reported) => {
