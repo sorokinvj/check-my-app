@@ -1,7 +1,8 @@
 export function assessExtensionOutput(session) {
   const result = assessOutputs(session);
-  const failure = assessVisibleSessionFailure(session);
-  return failure ? { ...result, confirmed: false, failure } : result;
+  const alert = assessSessionAlert(session);
+  if (alert?.source === 'unverified-product-alert') return { ...result, confirmed: false, reason: 'The session alert does not establish either a current failure or completed recovery' };
+  return alert ? { ...result, confirmed: false, failure: alert } : result;
 }
 
 function assessOutputs(session) {
@@ -14,8 +15,9 @@ function assessOutputs(session) {
   return { ...interview, confirmed: interview.confirmed && conversation.confirmed, practice: conversation };
 }
 
-export function assessVisibleSessionFailure(session) {
+function assessSessionAlert(session) {
   if (!session.audioPreflight?.passed || session.runtimeFailure) return null;
+  let uncertain = null;
   for (const [id, observation, surface] of [
     ['extension-capture', session.observation, 'extension-shadow-panel'],
     ['ai-practice', session.practiceObservation, 'practice-page'],
@@ -27,14 +29,36 @@ export function assessVisibleSessionFailure(session) {
       if (surface === 'extension-shadow-panel' ? !sample.panelPresent : !sample.callActive) continue;
       for (const text of sample.alerts ?? []) {
         if (typeof text !== 'string' || text.length > 1000 || observation.baseline?.includes(text)) continue;
-        if (!/\b(error|failure|failed|unavailable|unable to|could not)\b/i.test(text)) continue;
-        if (/\b(?:no|zero|without)\s+(?:\w+\s+){0,2}(?:errors?|failures?)\b|\b(?:error|failure)[ -]free\b|\b(?:error|failure)\s+(?:(?:was|is|has|been|now|already|fully|completely|successfully)\s+)*(?:resolved|cleared)\b/i.test(text)) continue;
         if (/credential|password|sign.?in|log.?in|permission|denied|microphone|insufficient|balance|minutes|payment|quota|too many|rate.?limit|429/i.test(text)) continue;
-        return { source: 'visible-product-alert', text, observedAt: sample.at, surface };
+        const status = classifyFailureAlert(text);
+        if (status === 'failure') return { source: 'visible-product-alert', text, observedAt: sample.at, surface };
+        if (status === 'uncertain') uncertain = { source: 'unverified-product-alert' };
       }
     }
   }
-  return null;
+  return uncertain;
+}
+
+function classifyFailureAlert(text) {
+  // A recovery notice is not a defect, and a successful clause must not hide
+  // another failure in the same alert. Negation belongs to its own clause.
+  const statuses = text.replace(/\bnot\s+yet\b/gi, 'not').split(/[,.!?;\n]+|\b(?:but|however|yet|and)\b/i).map(clause => {
+    if (!/\b(errors?|failures?|failed|unavailable|unable to|could not)\b/i.test(clause)) return 'none';
+    if (/\b(?:resolved|cleared|recovered)\b/i.test(clause)) {
+      if (/\b(?:no|zero|none|without)\b/i.test(clause)) return 'uncertain';
+      if (/\b(?:not|never|cannot|unable|failed)\b[^.!?;]{0,60}\b(?:resolved|cleared|recovered)\b|n't\b[^.!?;]{0,60}\b(?:resolved|cleared|recovered)\b/i.test(clause)) return 'failure';
+      // Recognize completed states, not arbitrary words between error and
+      // resolved. Other recovery language remains unverified, never green.
+      if (/\b(?:errors?|failures?)\s*[:–—-]?\s*(?:(?:was|is|were|are|has been|have been)\s+)?(?:(?:now|already|successfully|fully|completely|automatically)\s+)*(?:resolved|cleared|recovered)\b/i.test(clause)) return 'none';
+      return 'uncertain';
+    }
+    if (/\b(?:no|zero|without)\s+(?:\w+\s+){0,2}(?:errors?|failures?)\b|\b(?:error|failure)[ -]free\b/i.test(clause)) return 'none';
+    if (/\b(?:no|zero)\s+(?:requests?|sessions?|attempts?|connections?|operations?|responses?|calls?|checks?|tasks?|jobs?)\s+(?:(?:have|has|had)\s+)?(?:ever\s+)?failed\b/i.test(clause)) return 'none';
+    if (/\b(?:no|not|never|none|without)\b|n't\b/i.test(clause) && !/\b(?:could not|unable to)\b/i.test(clause)) return 'uncertain';
+    if (/\b(?:can|may|might|will|should|must|possibly|probably|perhaps)\b/i.test(clause)) return 'uncertain';
+    return /\b(?:failed|unavailable|unable to|could not|errors? (?:has |have )?occurred)\b/i.test(clause) ? 'failure' : 'uncertain';
+  });
+  return statuses.includes('failure') ? 'failure' : statuses.includes('uncertain') ? 'uncertain' : 'none';
 }
 
 function assessInterviewOutput(session) {
@@ -46,13 +70,17 @@ function assessInterviewOutput(session) {
     : ['technical', 'challenge', 'project', 'solved'];
   if (!['microphone-only', 'tab-only', 'interview', 'practice'].includes(mode)) return { confirmed: false, reason: 'No controlled stimulus was recorded' };
   const baseline = session.audioPreflight?.baselinePanel ?? '';
+  const firstObserved = new Map();
   for (const sample of samples) {
     if (sample.surface !== 'extension-shadow-panel' || !sample.panelPresent || sample.at < lease.startedAt || sample.at > lease.cleanup.stopClickedAt) continue;
     for (const result of sample.results ?? []) {
       if (typeof result.question !== 'string' || typeof result.answer !== 'string' || result.answer.trim().length < 40 || baseline.includes(result.answer.trim())) continue;
+      const answer = result.answer.trim();
+      if (!firstObserved.has(answer)) firstObserved.set(answer, sample.at);
+      const observedAt = firstObserved.get(answer);
       const words = new Set(result.question.toLowerCase().match(/[a-z]+/g) ?? []);
-      if (mode === 'practice' ? !matchesHeardCoachQuestion(session, result.question, sample.at) : terms.filter(term => words.has(term)).length < terms.length - 1) continue;
-      return { confirmed: true, surface: 'extension-shadow-panel', observedAt: sample.at, mode, question: result.question, answer: result.answer };
+      if (mode === 'practice' ? !matchesHeardCoachQuestion(session, result.question, observedAt) : terms.filter(term => words.has(term)).length < terms.length - 1) continue;
+      return { confirmed: true, surface: 'extension-shadow-panel', observedAt, mode, question: result.question, answer: result.answer };
     }
   }
   return { confirmed: false, reason: 'No fresh relevant question and answer were observed during the owned session' };

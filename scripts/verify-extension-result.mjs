@@ -42,6 +42,12 @@ for (const invalid of [
   { ...paraphrased, practiceObservation: { samples: [candidate, { ...liveCoach, at: 4000 }] } },
   { ...paraphrased, observation: { samples: [{ ...sample, results: [{ question: 'Which database has the nicest logo?', answer }] }] } },
 ]) assert.equal(assessExtensionOutput(invalid).confirmed, false, 'A question needs current candidate input and an earlier matching coach question');
+const repeatedAnswer = { ...paraphrased, practiceObservation: { samples: [candidate, { ...liveCoach, at: 2500 }] },
+  observation: { samples: [1800, 2800].map(at => ({ ...structuredClone(paraphrased.observation.samples[0]), at })) } };
+assert.equal(assessExtensionOutput(repeatedAnswer).confirmed, false, 'Later coach speech cannot validate an unchanged answer from an earlier poll');
+const changedAnswer = structuredClone(repeatedAnswer);
+changedAnswer.observation.samples[1].results[0].answer += ' I compared query plans before and after indexing the database.';
+assert.equal(assessExtensionOutput(changedAnswer).confirmed, true, 'A new answer after the observed coach prompt is eligible');
 
 const oldQuestionThenCandidate = { ...coach, at: 1800, utterances: [...coach.utterances, ...candidate.utterances] };
 assert.equal(assessPracticeOutput({ ...practice, practiceObservation: { samples: [oldQuestionThenCandidate, { ...oldQuestionThenCandidate, at: 2500 }] } }).confirmed, false, 'A repeated cumulative transcript cannot turn the coach question into a new reply');
@@ -50,13 +56,20 @@ assert.equal(assessPracticeOutput({ ...practice, practiceObservation: { samples:
 
 const explicitFailure = { ...session, audioPreflight: { passed: true }, observation: { samples: [{ ...sample, results: [], alerts: ['The response service is unavailable.'] }] } };
 assert.equal(assessExtensionOutput(explicitFailure).failure?.source, 'visible-product-alert');
-for (const alert of ['No error occurred.', 'Connected without any error.', 'The earlier error was resolved.', 'The earlier error is now resolved.', 'The error has been fully resolved.', 'Error-free session.']) {
-  assert.equal(assessExtensionOutput({ ...explicitFailure, observation: { samples: [{ ...sample, alerts: [alert] }] } }).failure, undefined, 'A negated or resolved error is not positive failure evidence');
+for (const alert of ['No error occurred.', 'No error occurred and no requests failed.', 'Connected without any error.', 'The earlier error was resolved.', 'The earlier error is now resolved.', 'The error has been fully resolved.', 'The earlier error was automatically resolved.', 'Connection error: recovered.', 'The connection error was recovered automatically.', 'Error-free session.']) {
+  const result = assessExtensionOutput({ ...explicitFailure, observation: { samples: [{ ...sample, alerts: [alert] }] } });
+  assert.equal(result.failure, undefined, 'A negated or resolved error is not positive failure evidence');
+  assert.equal(result.confirmed, true, 'An affirmative recovery does not invalidate an observed answer');
 }
-for (const alert of ['The error could not be resolved.', 'The error was not resolved.', 'The failure has not been cleared.']) {
+for (const alert of ['The error could not be resolved.', 'The error has not yet been resolved.', 'Connection failed, you can try again.', 'The error was not resolved.', 'The errors were not resolved.', 'The failure has not been cleared.', 'The error was resolved, but the response failed.', 'No errors connecting; the response service is unavailable.']) {
   const result = assessExtensionOutput({ ...explicitFailure, observation: { samples: [{ ...sample, alerts: [alert] }] } });
   assert.equal(result.confirmed, false, 'An unresolved error takes precedence over an earlier answer');
   assert.equal(result.failure?.source, 'visible-product-alert');
+}
+for (const alert of ['The error will be resolved.', 'This error can be resolved by retrying the request.', 'The connection error is being resolved.', 'The error has probably been resolved.', 'The service is not unavailable.', 'No errors were resolved.', 'Error details.', 'The request might have failed.']) {
+  const result = assessExtensionOutput({ ...explicitFailure, observation: { samples: [{ ...sample, alerts: [alert] }] } });
+  assert.equal(result.confirmed, false, 'Uncertain recovery cannot validate an earlier answer');
+  assert.equal(result.failure, undefined, 'Ambiguous wording cannot become a product allegation');
 }
 assert.equal(assessExtensionOutput({ ...explicitFailure, audioPreflight: { passed: false } }).failure, undefined);
 assert.equal(assessExtensionOutput({ ...explicitFailure, runtimeFailure: { kind: 'browser-exited' } }).failure, undefined);
