@@ -2,7 +2,101 @@
 
 Source: [Extension verification PRD](https://app.notion.com/p/3d97bac6430a81a1b09fdacc72d609c6).
 
-## Current state — 2026-09-13 20:17 UTC
+## Current state — 2026-09-13 23:18 UTC
+
+[PR #81](https://github.com/sorokinvj/check-my-app/pull/81) remains on
+`feat/chrome-extension-targets`. No CheckMyApp production merge, migration
+or deployment has occurred. The repository explicitly forbids merging.
+Prisma generation, both typechecks, lint and all 55 acceptance scripts pass
+on the current source (three existing lint warnings). Actual Codex and Claude
+reviews found publication, privacy and retention issues; their corrections
+pass the acceptance registry. The follow-up confirmed the prior fixes and found one remaining public phase-artifact path. New phase records now stay private, the legacy public path returns 404, and a final focused Claude review found no remaining P1/P2 in that correction. All required checks pass after it.
+
+Run 5 (`cmu0dooq1000irq13b6a6wj1z`, public
+`cmu0dooq1000jrq1342cbicya`) failed without publishing a verdict after an
+observation response stalled in the local bridge. The Workflow eventually hit
+its 25-minute limit. Independent final evidence confirms its only paid session
+stopped after 178.79 seconds, application Stop and stable balance were observed,
+and its lease was disposed. No fresh response was established; silence did not
+become a product finding. Observation requests now have a 45-second bound that
+covers headers and body even when the transport ignores AbortSignal.
+
+Run 6 (`cmu0fj66c000srq13nzoajdfp`, public
+`cmu0fj66c000trq13t4cph76e`) was submitted through the real local owner dashboard.
+It uses local CheckMyApp Workflow/D1/R2 and the actual Cloudflare native executor
+against production JobLander. Its frozen Workflow bundle SHA-256 is
+`583354cb7e41c5bc8af4cad24bf6dc20c4caa88952a2e8e7f4ce1857df3d2617`.
+Discovery is in progress. This is not a CheckMyApp production Run.
+
+Current native executor version 17 (`b6c8e5e7-f6cb-404a-a500-da570e681c4b`)
+passed the exact interview spec downloaded from Run 4's verdict UI: 179 seconds,
+three minutes, two live minute steps, a fresh relevant answer, UI Stop and
+68.753 seconds of unchanged balance. The exported file was used unchanged.
+Evidence: `/tmp/checkmyapp-run4-export-current17-cleanup.json`.
+
+Two independent native checks also passed. An injected silent microphone on our
+own audio fixture caused preflight refusal with RMS zero and no paid session.
+An active interview session deferred ordinary Stop before 120 seconds, but
+immediate cancellation stopped it before that minimum and confirmed stable
+balance and disposal. Evidence: `/tmp/checkmyapp-cloudflare-no-input-cleanup.json`
+and `/tmp/checkmyapp-cloudflare-cancel-cleanup.json`.
+
+The public verdict and review APIs now hide draft/failed extension observations;
+actual HTTP requests for failed Run 5 returned no journeys or findings. Private
+R2 evidence returned HTTP 404. Original checker-gap observations remain private
+and actionable through an internal evidence reference; missing-access gaps are
+preserved. Partial published results participate in status reporting, distinct
+extension alerts retain distinct deduplication identities, and run-owned private
+artifacts and native PNGs are included in ephemeral expiry.
+
+Run 4's LLM ledger totals $1.9482585: Sonnet 4.6 discovery $0.3016491,
+Sonnet 4.6 walking $1.5428694, and Opus 4.8 synthesis $0.10374. Its Run.costUsd
+field reports $1.7738805 because it omits intermediate walk-summary calls; that
+existing bookkeeping discrepancy remains separate from this extension change.
+The current structured JobLander publisher needs no Opus synthesis call.
+
+Remaining: finish and inspect Run 6's public report and actual UI exports,
+complete current-source review and PR CI, obtain an explicit exception to the
+merge prohibition, then deploy through the normal pipeline and verify a fresh
+Run through CheckMyApp production. Production QA sign-in is already verified;
+no production Run or QA-plan mutation has occurred.
+
+## Previous checkpoint — 2026-09-13 22:20 UTC
+
+PR #81 remains on the feature branch. No CheckMyApp production merge,
+migration or deployment has occurred; the repository explicitly forbids merging.
+All 55 acceptance scripts, both typechecks, Prisma generation and lint pass
+(three existing lint warnings). A new actual Codex review is running.
+
+Full Run 4 (`cmu09ocae0008rq13x4esc715`, public
+`cmu09ocae0009rq13vcdne11m`) completed against production JobLander using
+local CheckMyApp Workflow/D1/R2 and the Cloudflare native executor version 16.
+Interview, practice and combined use returned fresh relevant responses.
+Interview charged three minutes, practice three and combined use six. All
+seven phase leases were disposed; the three session journeys confirmed UI
+Stop and stable balance for more than one minute. Sign-in/history started no
+paid sessions. Exact live debits/rounding remain inconclusive for practice and
+combined use. Five actual UI-exported specs were downloaded.
+
+The Run 4 verdict is **not accepted**: its summary retained a dropped billing
+allegation, called an unstarted panel confusing, and repeated resume details.
+That immutable Run is retained as failure evidence. The current implementation
+builds JobLander's public report from confirmed executor observations, records
+minute precision as a checker coverage gap, stores companion captures and raw
+transcripts under a private prefix, and refuses those objects through the public
+evidence route. Draft/failed extension reports cannot expose raw journey text.
+New acceptance exercises positive errors, neutral gaps, missing provenance,
+private content exclusion, and the actual public evidence/verdict routes.
+
+Native executor version 17 (`b6c8e5e7-f6cb-404a-a500-da570e681c4b`) completed
+its rollout at 21:23:51 UTC with three healthy instances. Run 5 uses a separately
+frozen Workflow bundle SHA-256
+`ff03fab0c5508a318d7e93b1d249dbd4c1300140d13b7271e70fe3c3645610cb`.
+Current full-run publication, exported replay, active cancellation and missing
+audio-input checks remain pending. Production owner sign-in has been verified
+without submitting a production Run or changing the production QA plan.
+
+## Previous checkpoint — 2026-09-13 20:17 UTC
 
 [PR #81](https://github.com/sorokinvj/check-my-app/pull/81) is ready for review,
 branch `feat/chrome-extension-targets`. No CheckMyApp production migration,

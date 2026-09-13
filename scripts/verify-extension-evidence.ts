@@ -7,7 +7,9 @@ import type { AgentEnv } from "../src/agent/env";
 
 async function main() {
   let accessOutcome: Record<string, unknown> = {};
-  const accessEnv = { db: { run: { update: async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => {
+  const accessEnv = { db: { step: { findMany: async () => [], deleteMany: async ({ where }: { where: unknown }) => { assert.deepEqual(where, { journey: { runId: "missing-account" } }); } },
+    journey: { updateMany: async ({ data }: { data: { status: string } }) => { assert.equal(data.status, "skipped"); } },
+    run: { update: async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => {
     assert.equal(where.id, "missing-account"); accessOutcome = data;
   } } } } as unknown as AgentEnv;
   assert.equal(await completeExtensionAccessCheck(accessEnv, "missing-account", 0.5), "unverified");
@@ -24,12 +26,13 @@ async function main() {
   const final = { disposed: true, session: { ...identity, sessions: [], applicationCleanup: "not-started", billingCleanup: "not-started" } };
   const scan = extensionPhaseEvidence("scan", identity, final);
   assert.equal(scan.cleanupComplete, true);
-  assert.match(scan.artifactUrl, /run-123_scan\/cleanup.json$/);
+  assert.match(scan.artifactUrl, /private\/extensions\/run-123_scan\/phase.json$/);
   assert.equal(extensionPhaseEvidence("scan", identity, { disposed: false }).cleanupComplete, false);
   assert.equal(extensionPhaseEvidence("scan", identity, { ...final, session: { ...final.session, runtimeFailure: { kind: "browser-exited" } } }).cleanupComplete, false);
   assert.throws(() => extensionPhaseEvidence("scan", identity, { ...final, session: { ...final.session, ownerRunId: "another-run" } }), /another attempt/);
   let stored: string | null = null;
-  const env = { db: { run: { findUnique: async () => ({ extensionEvidence: stored }), update: async ({ data }: { data: { extensionEvidence: string } }) => { stored = data.extensionEvidence; } } } } as unknown as AgentEnv;
+  const artifacts = new Map<string, string>();
+  const env = { bindings: { EVIDENCE: { put: async (key: string, value: string) => { artifacts.set(key, value); } } }, db: { run: { findUnique: async () => ({ extensionEvidence: stored }), update: async ({ data }: { data: { extensionEvidence: string } }) => { stored = data.extensionEvidence; } } } } as unknown as AgentEnv;
   await persistExtensionPhase(env, "run-123", "scan", identity, final);
   const next = { ...identity, ownerRunId: "run-123_discovery", sessionId: "session-456" };
   await persistExtensionPhase(env, "run-123", "discovery", next, { disposed: true, session: { ...final.session, ...next } });
@@ -37,6 +40,8 @@ async function main() {
   assert.deepEqual(Object.keys(saved.phases), ["scan", "discovery"]);
   assert.equal(saved.phases.discovery.ownerRunId, "run-123_discovery");
   assert.equal(saved.phases.scan.ownerRunId, "run-123_scan");
+  assert.equal(JSON.parse(artifacts.get("private/extensions/run-123_scan/phase.json")!).cleanupComplete, true);
+  assert.ok([...artifacts.keys()].every(key => key.startsWith("private/")), "Phase diagnostics remain private even when a run fails before publication");
   await assert.rejects(persistExtensionPhase(env, "run-123", "walk-0", { ...next, artifactSha256: "b".repeat(64) }, { disposed: false }), /changed/);
   const joblander = { id: "run-123", targetUrl: "https://chromewebstore.google.com/detail/hafhjepjihcimcljkdphpinannbdmnhf", extensionConfig: JSON.stringify({ allowSessions: true }), testEmail: "fixture@example.test", testPasswordEnc: "encrypted-fixture" };
   assert.equal(extensionCoverageGap(joblander, stored), "our_capability", "Install/discovery/login alone cannot establish interview assistance");

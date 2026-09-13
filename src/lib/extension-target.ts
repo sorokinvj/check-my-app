@@ -69,3 +69,7 @@ export function readExtensionOptions(raw: string | null | undefined): ExtensionO
 export function publicRunError(targetKind: string, internalMessage: string | null): string | null {
   return targetKind === "extension" ? null : internalMessage;
 }
+
+export function extensionReportPublished(run: { targetKind: string; status: string; verdict: string | null }): boolean {
+  return run.targetKind !== "extension" || Boolean(run.verdict && ["completed", "partial"].includes(run.status));
+}

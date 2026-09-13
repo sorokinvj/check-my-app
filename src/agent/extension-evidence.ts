@@ -1,10 +1,19 @@
 import type { AgentEnv } from "./env";
+import { createHash } from "node:crypto";
 import { assertExtensionIdentity, extensionCleanupComplete, type ExtensionIdentity, type ExtensionSession, type ExtensionTarget } from "./extension-contract";
 import { parseExtensionLink, readExtensionOptions } from "@/lib/extension-target";
+import { publicExtensionObservation, preservedExtensionGaps } from "./extension-publication";
+import { putText } from "./env";
 
 export interface ExtensionFinalEvidence { disposed: boolean; session?: ExtensionSession }
 
 export async function completeExtensionAccessCheck(env: AgentEnv, runId: string, costUsd: number): Promise<"unverified"> {
+  const preserved = await preservedExtensionGaps(env, runId);
+  await env.db.step.deleteMany({ where: { journey: { runId } } });
+  await env.db.journey.updateMany({ where: { runId }, data: { status: "skipped", summary: "Session checks need test-account access and permission to start and stop sessions." } });
+  for (const [journeyId, steps] of preserved) {
+    for (const [order, step] of steps.entries()) await env.db.step.create({ data: { journeyId, order, ...step } });
+  }
   await env.db.run.update({ where: { id: runId }, data: {
     status: "partial", verdict: "unverified", errorMessage: null,
     bottomLine: "Session checks need test-account access and permission to start and stop sessions. Add these in your extension settings to check interview assistance, practice and their combined use.",
@@ -42,7 +51,7 @@ export function extensionPhaseEvidence(phase: string, identity: ExtensionSession
   }
   return {
     phase, scenario: identity.scenario ?? "interview", ownerRunId: identity.ownerRunId, sessionId: identity.sessionId,
-    artifactUrl: `/api/evidence/extensions/${encodeURIComponent(identity.ownerRunId)}/cleanup.json`,
+    artifactUrl: `/api/evidence/private/extensions/${encodeURIComponent(identity.ownerRunId)}/phase.json`,
     disposed: final.disposed,
     cleanupComplete: Boolean(final.disposed && final.session && !final.session.runtimeFailure && extensionCleanupComplete(final.session)),
     applicationCleanup: final.session?.applicationCleanup ?? "unverified",
@@ -51,8 +60,13 @@ export function extensionPhaseEvidence(phase: string, identity: ExtensionSession
     runtimeFailure: final.session?.runtimeFailure?.kind ?? null,
     productResultConfirmed: final.session?.productResult?.confirmed === true,
     productFailureObserved: Boolean(extensionProductFailureStep(final)),
+    productFailureSignature: extensionProductFailureStep(final) ? createHash("sha256").update(JSON.stringify([
+      identity.scenario ?? "interview", final.session?.productResult?.failure?.surface,
+      final.session?.productResult?.failure?.text.trim().toLowerCase().replace(/\s+/g, " "),
+    ])).digest("hex") : null,
     twoMinuteStepsObserved: final.session?.billing?.assessment?.twoMinuteSteps === true,
     sustainedSessionsObserved: Boolean(final.session?.sessions?.length && final.session.sessions.every(s => s.startedAt && s.cleanup?.stopClickedAt && s.cleanup.stopClickedAt - s.startedAt >= 120_000)),
+    publicObservation: publicExtensionObservation(identity, final, extensionAccountingStep(final), Boolean(extensionProductFailureStep(final))),
   };
 }
 
@@ -72,9 +86,11 @@ export async function persistExtensionPhase(env: AgentEnv, runId: string, phase:
   const row = await env.db.run.findUnique({ where: { id: runId }, select: { extensionEvidence: true } });
   const previous = row?.extensionEvidence ? JSON.parse(row.extensionEvidence) as { identity?: ExtensionIdentity; phases?: Record<string, unknown> } : {};
   assertExtensionIdentity(identity, previous.identity);
+  const result = extensionPhaseEvidence(phase, identity, final);
   const evidence = {
     identity: { name: identity.name, extensionId: identity.extensionId, packageVersion: identity.packageVersion, installedVersion: identity.installedVersion, artifactSha256: identity.artifactSha256 },
-    phases: { ...previous.phases, [phase]: extensionPhaseEvidence(phase, identity, final) },
+    phases: { ...previous.phases, [phase]: result },
   };
   await env.db.run.update({ where: { id: runId }, data: { extensionEvidence: JSON.stringify(evidence) } });
+  await putText(env, `private/extensions/${identity.ownerRunId}/phase.json`, JSON.stringify({ identity: evidence.identity, ...result }));
 }

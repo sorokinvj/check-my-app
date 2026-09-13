@@ -60,6 +60,17 @@ assert.match(await executeTool(env, 'extension_account_preflight', {}), /credent
 assert.match(await executeTool(env, 'extension_account_preflight', {}), /Valid test-account access/);
 assert.equal(rejected, 1);
 assert.equal(accountCalls, 1, 'Account rejection reaches the run-wide gate before another native call');
+const realTimeout = globalThis.setTimeout;
+globalThis.setTimeout = ((callback: (...args: unknown[]) => void, ms: number, ...args: unknown[]) => realTimeout(callback, Math.min(ms, 20), ...args)) as typeof setTimeout;
+try {
+  let signal: AbortSignal | undefined;
+  Object.assign(extension, { runner: { fetch: (request: Request) => { signal = request.signal; return new Promise(() => {}); } } });
+  await assert.rejects(extension.call('/session/observe', {}), ExtensionRuntimeError, 'A transport ignoring AbortSignal must not hold the Workflow until its whole-phase deadline');
+  assert.equal(signal?.aborted, true);
+  Object.assign(extension, { runner: { fetch: async (request: Request) => { signal = request.signal; return new Response(new ReadableStream({ start() {} })); } } });
+  await assert.rejects(extension.call('/state'), ExtensionRuntimeError, 'The deadline covers an incomplete response body too');
+  assert.equal(signal?.aborted, true);
+} finally { globalThis.setTimeout = realTimeout; }
 console.log("Extension tools: product-only observations, observed links and fatal runtime propagation pass");
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

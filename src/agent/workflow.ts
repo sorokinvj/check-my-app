@@ -38,6 +38,7 @@ import { extensionBrowserFor } from "./extension-browser";
 import { extensionStepConfig, isExtensionTarget } from "./extension-contract";
 import { ExtensionRuntimeError } from "./extension-error";
 import { extensionCoverageGap, completeExtensionAccessCheck } from "./extension-evidence";
+import { prepareExtensionPublication } from "./extension-publication";
 import { LlmBudgetError } from "./core";
 import { dedupKeyForFinding } from "@/lib/tracker/file";
 import { discoverApp, type KnownMap, type ProposedJourney, type RunInput } from "./discovery";
@@ -386,7 +387,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
           where: { mark: "watch", run: { appSlug: run.appSlug, id: { not: run.id } } },
           orderBy: { createdAt: "desc" },
           take: 10,
-          select: { title: true, category: true, severity: true, detail: true, createdAt: true },
+          select: { title: true, category: true, severity: true, detail: true, anchor: true, createdAt: true },
         });
         if (rows.length === 0) return [];
         // CHE-109: a watch mark had no way to end. The query asked only "was
@@ -397,7 +398,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
         // priority. A signature marked fixed afterwards is finished.
         const settled = await env.db.finding.findMany({
           where: { mark: "fixed", run: { appSlug: run.appSlug } },
-          select: { title: true, category: true, severity: true, detail: true, createdAt: true },
+          select: { title: true, category: true, severity: true, detail: true, anchor: true, createdAt: true },
         });
         const key = (f: (typeof rows)[number]) => dedupKeyForFinding(f, { appSlug: run.appSlug });
         const done = new Map(settled.map((f) => [key(f), f.createdAt]));
@@ -549,7 +550,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
               ...pagePaths(known?.anatomy.pages ?? []).map((p) => p.path),
             ],
             onLiveScreenshot: (url) => setLive(env, runId, { liveScreenshotUrl: url }),
-            onProgress: (note) => setLive(env, runId, { currentAction: note }),
+            onProgress: (note) => setLive(env, runId, { currentAction: isExtension ? "Exploring extension controls" : note }),
           }).catch(rethrowBudgetNonRetryable);
           // Extraction trouble first, then the outcome — so "No journeys
           // mapped" always arrives with the reason it happened next to it.
@@ -626,7 +627,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
               // CHE-171: the survey's pages; the walk learns the rest itself.
               publishedUrls: surveyedUrls(survey),
               onLiveScreenshot: (url) => setLive(env, runId, { liveScreenshotUrl: url }),
-              onProgress: (note) => setLive(env, runId, { currentAction: note }),
+              onProgress: (note) => setLive(env, runId, { currentAction: isExtension ? "Checking extension controls" : note }),
             }).catch(rethrowBudgetNonRetryable);
             const journey = await env.db.journey.findFirst({
               where: { runId, order },
@@ -652,7 +653,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
             if (r.transcript.length) {
               await putText(
                 env,
-                `transcripts/${runId}-walk-${order}.json`,
+                isExtension ? `private/runs/${runId}/walk-${order}.json` : `transcripts/${runId}-walk-${order}.json`,
                 JSON.stringify(r.transcript, null, 2),
               );
             }
@@ -698,18 +699,21 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
       });
 
       // Phase 6 — Writing (LLM synthesis + findings + verdict).
-      const verdict = await step.do("writing", async () => {
+      const verdict = await step.do("writing", extensionStepConfig(isExtension), async () => {
+        let extensionEvidence: string | null = null;
         if (isExtension) {
           const evidence = await env.db.run.findUnique({ where: { id: runId }, select: { extensionEvidence: true, credentialsRejected: true } });
+          extensionEvidence = evidence?.extensionEvidence ?? null;
           const gap = evidence?.credentialsRejected ? "missing_access" : extensionCoverageGap(run, evidence?.extensionEvidence);
           if (gap === "missing_access") return completeExtensionAccessCheck(env, runId, (discovery?.costUsd ?? 0) + walkCost);
           if (gap) throw new NonRetryableError("internal: the extension's core result and cleanup were not established; no verdict may be published", "ExtensionRuntimeError");
         }
         await transition(env, runId, "writing", { icon: "info", text: "Writing your verdict" });
-        const synth = await synthesizeVerdict({ env, llm, runId, anatomy, knowledge }).catch(
+        const structured = extensionEvidence ? await prepareExtensionPublication(env, runId, extensionEvidence) : null;
+        const synth = structured ?? await synthesizeVerdict({ env, llm, runId, anatomy, knowledge }).catch(
           rethrowBudgetNonRetryable,
         );
-        await recordUsage(env, runId, "synthesis", llm.synthModel, synth.usage);
+        if (!structured) await recordUsage(env, runId, "synthesis", llm.synthModel, synth.usage);
         // CHE-188: a finding whose only evidence is a skipped step is dropped
         // before it becomes a row (run #153 wrote one off a step our own fill
         // could not drive). Same journey/step order synthesis numbered its
@@ -758,11 +762,15 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
         const transcript: TranscriptEntry[] = discovery?.transcript ?? [];
         let transcriptUrl: string | null = null;
         if (transcript.length) {
-          transcriptUrl = await putText(
+          const rawTranscriptUrl = await putText(
             env,
-            `transcripts/${runId}.json`,
+            isExtension ? `private/runs/${runId}/discovery.json` : `transcripts/${runId}.json`,
             JSON.stringify(transcript, null, 2),
           );
+          if (!isExtension) transcriptUrl = rawTranscriptUrl;
+        }
+        if (structured) {
+          transcriptUrl = await putText(env, `transcripts/${runId}.json`, JSON.stringify(structured.audit, null, 2));
         }
 
         // Coverage before opinion: a partial run's pill covers journeys nobody
@@ -785,6 +793,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
         // said so — run #128 knew about seven pages, built four journeys, and
         // the difference was visible only in the database.
         const bottomLine = await (async () => {
+          if (structured) return carriedAware;
           const pages = (anatomy.pages ?? []).filter(Boolean);
           if (pages.length === 0) return carriedAware;
           const steps = await env.db.step.findMany({
@@ -802,7 +811,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
         await env.db.run.update({
           where: { id: runId },
           data: {
-            status: "completed",
+            status: structured?.partial ? "partial" : "completed",
             verdict: checked.verdict,
             bottomLine,
             appLens: JSON.stringify(synth.appLens),
@@ -1388,7 +1397,7 @@ async function persistFindings(env: AgentEnv, runId: string, findings: Synthesiz
         run: { appSlug: run.appSlug, id: { not: runId } },
       },
       orderBy: { createdAt: "asc" },
-      select: { title: true, category: true, severity: true, detail: true, mark: true },
+      select: { title: true, category: true, severity: true, detail: true, anchor: true, mark: true },
     });
     for (const m of marked) {
       inheritedMarks.set(dedupKeyForFinding(m, { appSlug: run.appSlug }), m.mark);
@@ -1412,11 +1421,12 @@ async function persistFindings(env: AgentEnv, runId: string, findings: Synthesiz
       detail: JSON.stringify(f.detail),
     };
     const anchor = JSON.stringify({
+      ...(f.errorSignature ? { errorSignature: f.errorSignature } : {}),
       stepRef: step ? f.stepRef : null,
       hands: claimedHands(f),
       trail: trailPresent ? "present" : "absent",
     });
-    const mark = run ? inheritedMarks.get(dedupKeyForFinding(shaped, { appSlug: run.appSlug })) : undefined;
+    const mark = run ? inheritedMarks.get(dedupKeyForFinding({ ...shaped, anchor }, { appSlug: run.appSlug })) : undefined;
     await env.db.finding.create({
       data: {
         runId,

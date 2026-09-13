@@ -40,23 +40,31 @@ function assessSessionAlert(session) {
 }
 
 function classifyFailureAlert(text) {
-  // A recovery notice is not a defect, and a successful clause must not hide
-  // another failure in the same alert. Negation belongs to its own clause.
-  const statuses = text.replace(/\bnot\s+yet\b/gi, 'not').split(/[,.!?;\n]+|\b(?:but|however|yet|and)\b/i).map(clause => {
+  // Keyword exclusion repeatedly confused recovery, advice and negated lists
+  // with current failures. Recognize complete assertions; other wording cannot
+  // publish either a green result or a product allegation.
+  const actor = String.raw`(?:(?:the|a|an|this)\s+)?(?:request|response(?:\s+service)?|connection|session|capture|operation|service|server|call|generation|processing)`;
+  const error = String.raw`(?:(?:the|a|an|this)\s+)?(?:(?:earlier|connection|response|unexpected)\s+)?(?:errors?|failures?)`;
+  const completeRecovery = new RegExp(String.raw`^${error}\s*[:–—-]?\s*(?:(?:was|is|were|are|has\s+been|have\s+been)\s+)?(?:(?:now|already|successfully|fully|completely|automatically)\s+)*(?:resolved|cleared|recovered)(?:\s+(?:successfully|fully|completely|automatically)|\s+without\s+retrying)?$`, 'i');
+  const unresolved = new RegExp(String.raw`^${error}\s+(?:(?:was|were|is|are)\s+(?:not|never)|(?:has|have)\s+(?:not|never)\s+been|could\s+not\s+be|cannot\s+be)\s+(?:resolved|cleared|recovered)$`, 'i');
+  const failure = new RegExp(String.raw`^${actor}\s+(?:(?:has|have)\s+)?failed(?:$|\s+(?:to|because|due\s+to)\s+.+|:\s*.+)$`, 'i');
+  const unavailable = new RegExp(String.raw`^${actor}\s+(?:(?:is|are|was|were)\s+)?(?:(?:temporarily|currently)\s+)?unavailable$`, 'i');
+  const inability = new RegExp(String.raw`^(?:${actor}\s+(?:(?:is|was)\s+)?)?(?:unable\s+to|could\s+not)\s+(?:connect|send|receive|process|generate|produce|complete|load|start|stop|resolve|recover|clear)\b.*$`, 'i');
+  const occurred = new RegExp(String.raw`^${error}\s+(?:(?:has|have)\s+)?occurred(?:\s+(?:while|when|during)\s+.+)?$`, 'i');
+  const statuses = text.replace(/\bnot\s+yet\b/gi, 'not').split(/(?<=[,.!?;\n])|\b(?:but|however|yet|and)\b/i).map(part => {
+    const clause = part.trim().replace(/[,.!;]+$/, '').replace(/\s+/g, ' ');
     if (!/\b(errors?|failures?|failed|unavailable|unable to|could not)\b/i.test(clause)) return 'none';
-    if (/\b(?:resolved|cleared|recovered)\b/i.test(clause)) {
-      if (/\b(?:no|zero|none|without)\b/i.test(clause)) return 'uncertain';
-      if (/\b(?:not|never|cannot|unable|failed)\b[^.!?;]{0,60}\b(?:resolved|cleared|recovered)\b|n't\b[^.!?;]{0,60}\b(?:resolved|cleared|recovered)\b/i.test(clause)) return 'failure';
-      // Recognize completed states, not arbitrary words between error and
-      // resolved. Other recovery language remains unverified, never green.
-      if (/\b(?:errors?|failures?)\s*[:–—-]?\s*(?:(?:was|is|were|are|has been|have been)\s+)?(?:(?:now|already|successfully|fully|completely|automatically)\s+)*(?:resolved|cleared|recovered)\b/i.test(clause)) return 'none';
-      return 'uncertain';
-    }
-    if (/\b(?:no|zero|without)\s+(?:\w+\s+){0,2}(?:errors?|failures?)\b|\b(?:error|failure)[ -]free\b/i.test(clause)) return 'none';
-    if (/\b(?:no|zero)\s+(?:requests?|sessions?|attempts?|connections?|operations?|responses?|calls?|checks?|tasks?|jobs?)\s+(?:(?:have|has|had)\s+)?(?:ever\s+)?failed\b/i.test(clause)) return 'none';
-    if (/\b(?:no|not|never|none|without)\b|n't\b/i.test(clause) && !/\b(?:could not|unable to)\b/i.test(clause)) return 'uncertain';
-    if (/\b(?:can|may|might|will|should|must|possibly|probably|perhaps)\b/i.test(clause)) return 'uncertain';
-    return /\b(?:failed|unavailable|unable to|could not|errors? (?:has |have )?occurred)\b/i.test(clause) ? 'failure' : 'uncertain';
+    if (clause.endsWith('?')) return 'uncertain';
+    if (/^(?:no|zero)\s+(?:errors?|failures?)(?:\s+(?:occurred|reported|recorded|detected|connecting|(?:were|was)\s+(?:reported|recorded|detected)))?$/i.test(clause)
+      || /^connected without (?:any )?(?:errors?|failures?)$/i.test(clause)
+      || /^(?:error|failure)[ -]free(?:\s+(?:session|connection|operation))?$/i.test(clause)
+      || /^(?:no|zero)\s+(?:requests?|sessions?|attempts?|connections?|operations?|responses?|calls?|checks?|tasks?|jobs?)\s+(?:(?:have|has|had)\s+)?(?:ever\s+)?failed$/i.test(clause)
+      || completeRecovery.test(clause)) return 'none';
+    const inabilityAssertion = clause.split(/:|\s+because\b|\s+due\s+to\b/i)[0];
+    const definiteInability = inability.test(clause)
+      && !/\b(?:may|might|can|will|should|must|possibly|probably|perhaps|could(?!\s+not\b))\b/i.test(inabilityAssertion);
+    if (definiteInability || [unresolved, failure, unavailable, occurred].some(pattern => pattern.test(clause))) return 'failure';
+    return 'uncertain';
   });
   return statuses.includes('failure') ? 'failure' : statuses.includes('uncertain') ? 'uncertain' : 'none';
 }

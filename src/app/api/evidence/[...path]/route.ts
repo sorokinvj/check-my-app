@@ -11,6 +11,9 @@ export const dynamic = "force-dynamic";
 
 export async function GET(_req: Request, { params }: { params: Promise<{ path: string[] }> }) {
   const key = (await params).path.join("/");
+  // Earlier extension attempts wrote diagnostics outside the private prefix.
+  // Keep those immutable records inaccessible after moving new writes too.
+  if (key.startsWith("private/") || /^extensions\/[^/]+\/cleanup\.json$/.test(key)) return NextResponse.json({ error: "Not found" }, { status: 404 });
   const { env } = getCloudflareContext();
   const bucket = (env as unknown as { EVIDENCE?: R2Bucket }).EVIDENCE;
   if (!bucket) return NextResponse.json({ error: "Storage unavailable" }, { status: 503 });

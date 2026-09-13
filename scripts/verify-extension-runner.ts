@@ -26,7 +26,7 @@ async function main() {
   const pending: Promise<void>[] = [];
   const ctx = { storage, waitUntil: (promise: Promise<void>) => { pending.push(promise); } };
   let release!: (response: Response) => void, deletes = 0, destroys = 0, artifact = "";
-  const env = { deletedSchedules: [] as string[], EVIDENCE: { put: async (_key: string, value: string) => { artifact = value; } },
+  const env = { deletedSchedules: [] as string[], EVIDENCE: { put: async (key: string, value: string) => { assert.equal(key, "private/extensions/owned-attempt/cleanup.json"); artifact = value; } },
     destroy: async () => { destroys++; }, transport: async (request: Request) => {
       if (request.method === "DELETE") { deletes++; return new Promise<Response>(resolve => { release = resolve; }); }
       return Response.json({ ...await request.json() as object, sessionId: "owned-session" });

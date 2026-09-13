@@ -28,6 +28,8 @@ export interface ExtensionSession extends ExtensionIdentity {
   popupPath: string | null;
   browserVersion: string;
   allowSessions?: boolean;
+  popupSignedIn?: boolean;
+  accountBaseline?: { source?: string; balance?: number };
   maxSessionSeconds?: number;
   runtimeFailure?: { kind: string; code?: number | null; signal?: string | null; at?: string };
   sessions?: Array<{ id: string; state: string; startedAt?: number; cleanup?: { applicationStopObserved?: boolean; stopClickedAt?: number } | null }>;

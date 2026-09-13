@@ -1,4 +1,4 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { getDbFromContext } from "@/lib/db";
 import { parseJson } from "@/lib/json";
@@ -18,7 +18,7 @@ import { fullRechecksRemaining } from "@/lib/plans";
 import type { UserPlan } from "@/lib/enums";
 import type { AppLens, RunEvent } from "@/lib/types";
 import { OG_IMAGE } from "@/lib/site-metadata";
-import { extensionDisplayName } from "@/lib/extension-target";
+import { extensionDisplayName, extensionReportPublished } from "@/lib/extension-target";
 
 export const dynamic = "force-dynamic";
 
@@ -104,6 +104,7 @@ export default async function VerdictPage({
     },
   });
   if (!run) notFound();
+  if (!extensionReportPublished(run)) redirect(`/run/${run.publicId}`);
 
   const verdictMeta = run.verdict ? VERDICT_META[run.verdict] : null;
   const duration = formatDuration(run.startedAt, run.completedAt);
@@ -214,7 +215,7 @@ export default async function VerdictPage({
       )}
       {run.status === "partial" && (
         <p className="mb-4 rounded-lg border border-status-confusing/40 bg-status-confusing/10 px-4 py-2.5 text-sm text-status-confusing">
-          The agent got partway through and paused — this is a partial verdict.
+          {run.targetKind === "extension" ? "Some parts of this extension remain unverified. The results below show what was confirmed." : "The agent got partway through and paused — this is a partial verdict."}
         </p>
       )}
       {/* Owner decision, 2026-09-05: an anonymous verdict is public and listed.

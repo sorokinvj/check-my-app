@@ -4,7 +4,7 @@ import type { ToolEnv } from "./tools";
 import { prepareAgentPage, scrubSecrets, normalizeFillValue, UNDRIVEN_INSTRUCTION } from "./tools";
 import { assertExtensionIdentity, extensionCleanupComplete, extensionToolAllowed, gateExtensionStep, type ExtensionIdentity, type ExtensionRunnerInput, type ExtensionSession } from "./extension-contract";
 import type { ExtensionRunner } from "./extension-runner";
-import { ExtensionRuntimeError } from "./extension-error";
+import { ExtensionRuntimeError, extensionOperation } from "./extension-error";
 import type { ExtensionFinalEvidence } from "./extension-evidence";
 import { extensionReplaySpec, type ExtensionReplayAction, type NativeReplayControl } from "./extension-replay";
 import type { RecordedAction } from "./tools";
@@ -42,16 +42,19 @@ export class ExtensionBrowser {
   }
 
   async call<T>(path: string, input?: unknown): Promise<T> {
-    const response = await this.runner.fetch(new Request(`http://runner${path}`, {
-      method: input === undefined ? "GET" : "POST",
-      ...(input === undefined ? {} : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) }),
-    })).catch(() => { throw new ExtensionRuntimeError("The owned extension executor disconnected"); });
-    if (!response.ok) {
-      const message = `Extension operation unavailable: ${(await response.text()).slice(0, 300)}`;
-      if (response.status === 410 || response.status >= 500) throw new ExtensionRuntimeError(message);
-      throw new Error(message);
-    }
-    return response.json<T>();
+    return extensionOperation(async signal => {
+      const response = await this.runner.fetch(new Request(`http://runner${path}`, {
+        signal,
+        method: input === undefined ? "GET" : "POST",
+        ...(input === undefined ? {} : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) }),
+      })).catch(() => { throw new ExtensionRuntimeError("The owned extension executor disconnected"); });
+      if (!response.ok) {
+        const message = `Extension operation unavailable: ${(await response.text()).slice(0, 300)}`;
+        if (response.status === 410 || response.status >= 500) throw new ExtensionRuntimeError(message);
+        throw new Error(message);
+      }
+      return response.json<T>();
+    }, path === "/session/observe" ? 45_000 : 120_000);
   }
 
   private async connectPage(env?: ToolEnv): Promise<void> {
@@ -177,9 +180,11 @@ export class ExtensionBrowser {
         result = { minutesAvailable: (result as { balance: number }).balance, sessionHistory: "visible" };
       } else if (name === "extension_screenshot") {
         if (!this.popup) return "Use screenshot for the target tab, or open the native popup first.";
-        const response = await this.runner.fetch(new Request("http://runner/popup.png"));
-        if (!response.ok) throw new Error("A redacted native screenshot is unavailable");
-        const buffer = Buffer.from(await response.arrayBuffer());
+        const buffer = await extensionOperation(async signal => {
+          const response = await this.runner.fetch(new Request("http://runner/popup.png", { signal }));
+          if (!response.ok) throw new Error("A redacted native screenshot is unavailable");
+          return Buffer.from(await response.arrayBuffer());
+        }, 45_000);
         result = await this.publishScreenshot(env, buffer, input);
       } else if (name === "extension_start_session") {
         if (!this.identity.allowSessions) return this.missingAccess("Session-start permission and a test account are required for this step. It remains skipped with missing_access.");
@@ -269,6 +274,8 @@ export class ExtensionBrowser {
     this.rememberProductRead({ surface: "native-popup", controls: this.nodes.map(n => ({
       role: n.role, name: scrubSecrets(env, n.name || n.placeholder || ""), editable: n.editable, protected: n.protected, enabled: n.enabled,
     })) });
+    if (this.identity.extensionId === "hafhjepjihcimcljkdphpinannbdmnhf"
+      && this.nodes.some(n => /^(?:Show|Showing) JobLander Insights$/.test(n.name))) this.identity.popupSignedIn = true;
     return {
       surface: "native-popup",
       url: `chrome-extension://${this.identity.extensionId}/${this.identity.popupPath}`,

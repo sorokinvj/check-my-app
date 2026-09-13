@@ -120,7 +120,7 @@ interface Filed {
   body?: string;
 }
 
-function stubWorld(steps: StoredStep[], opts: { existing?: Record<string, string> } = {}) {
+function stubWorld(steps: StoredStep[], opts: { existing?: Record<string, string>; extensionAudit?: boolean } = {}) {
   const filed: Filed[] = [];
   const comments: { issueId: string; body: string }[] = [];
   const links = new Map<string, { id: string; externalIssueId: string; status: string; occurrences: number; escalatedAt: null; defectClass: null }>();
@@ -132,7 +132,7 @@ function stubWorld(steps: StoredStep[], opts: { existing?: Record<string, string
   const tracker: Tracker = {
     async createIssue(draft: TicketDraft): Promise<CreatedIssue> {
       const identifier = `CHE-${++counter}`;
-      filed.push({ kind: "created", identifier, title: draft.title });
+      filed.push({ kind: "created", identifier, title: draft.title, body: draft.description });
       return { id: identifier, identifier, url: `https://linear.app/x/${identifier}` };
     },
     async addComment(issueId: string, body: string) {
@@ -144,6 +144,7 @@ function stubWorld(steps: StoredStep[], opts: { existing?: Record<string, string
   };
 
   const run = {
+    targetKind: opts.extensionAudit ? "extension" : "website",
     id: "run-1",
     runNumber: 153,
     publicId: "pub-1",
@@ -187,7 +188,7 @@ function stubWorld(steps: StoredStep[], opts: { existing?: Record<string, string
     tracker: { teamId: "team" },
   };
   const board = { self, tracker, baseUrl: "https://checkmyapp.dev" } as unknown as GapBoard;
-  const env = { db: db as unknown as PrismaClient, bindings: {} } as unknown as AgentEnv;
+  const env = { db: db as unknown as PrismaClient, bindings: { EVIDENCE: { head: async () => opts.extensionAudit ? { key: "private/runs/run-1/checker-gaps.json" } : null } } } as unknown as AgentEnv;
   return { env, board, filed, comments };
 }
 
@@ -264,6 +265,18 @@ async function main() {
     check("unclassified recurrence comments on CHE-86", again.filed[0]?.kind === "commented" && again.filed[0].identifier === "CHE-86");
     const withStep = again.comments.find((c) => c.issueId === "CHE-86" && c.body.includes(UNCLASSIFIED.label));
     check("…and the comment carries the step text", Boolean(withStep), again.comments.map((c) => c.body).join(" || "));
+  }
+
+  {
+    const privateStep = { ...UNCLASSIFIED, label: "PRIVATE_RESUME_CONTEXT", observed: "PRIVATE_DIALOGUE_CONTEXT" };
+    const w = stubWorld([privateStep], { extensionAudit: true });
+    await fileCapabilityGaps(w.env, "run-1", { board: w.board });
+    check("extension checker gap: ticket points to the retained private observations", w.filed[0]?.body?.includes("private/runs/run-1/checker-gaps.json") === true);
+    check("extension checker gap: resume/dialogue stays out of the ticket", !JSON.stringify(w.filed).includes("PRIVATE_"));
+    const again = stubWorld([privateStep], { extensionAudit: true, existing: { [PROD_KEYS.unclassified.key]: "CHE-86" } });
+    await fileCapabilityGaps(again.env, "run-1", { board: again.board });
+    check("extension checker gap: recurrence retains the current audit reference", again.comments.some(c => c.body.includes("private/runs/run-1/checker-gaps.json")));
+    check("extension checker gap: recurrence does not copy private content", !JSON.stringify(again.comments).includes("PRIVATE_"));
   }
 
   // 4 — the existing classes keep their prod dedup keys, and their inputs

@@ -2,7 +2,7 @@
   "name": "checkmyapp",
   "version": "0.1.0",
   "private": true,
-  "description": "Paste a link. We'll show you your app. \u2014 a product mirror with QA fallout.",
+  "description": "Paste a link. We'll show you your app. — a product mirror with QA fallout.",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -82,7 +82,8 @@
     "verify:extension-practice": "node scripts/verify-extension-practice.mjs",
     "verify:extension-runner": "tsx scripts/verify-extension-runner.ts",
     "verify:extension-screenshot": "node scripts/verify-extension-screenshot.mjs",
-    "verify:extension-adoption": "tsx scripts/verify-extension-adoption.ts"
+    "verify:extension-adoption": "tsx scripts/verify-extension-adoption.ts",
+    "verify:extension-publication": "tsx --tsconfig tsconfig.json scripts/verify-extension-publication.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.104.1",
@@ -114,6 +115,7 @@
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "autoprefixer": "^10.4.20",
+    "esbuild": "0.28.0",
     "eslint": "^9.39.4",
     "eslint-config-next": "^16.2.9",
     "postcss": "^8.4.49",

@@ -120,7 +120,7 @@ export async function fileCapabilityGaps(
 ): Promise<CapabilityNote[]> {
   const run = await env.db.run.findUnique({
     where: { id: runId },
-    select: { id: true, runNumber: true, publicId: true, startedAt: true, appSlug: true, targetUrl: true },
+    select: { id: true, runNumber: true, publicId: true, startedAt: true, appSlug: true, targetUrl: true, targetKind: true },
   });
   if (!run) return [];
 
@@ -168,19 +168,27 @@ export async function fileCapabilityGaps(
     ];
   }
   const { self, tracker, baseUrl } = board;
+  const privateAuditKey = `private/runs/${runId}/checker-gaps.json`;
+  let privateAudit = run.targetKind === "extension" && Boolean(await env.bindings.EVIDENCE.head(privateAuditKey));
+  if (run.targetKind === "extension" && !privateAudit) {
+    await env.bindings.EVIDENCE.put(privateAuditKey, JSON.stringify(allGaps), { httpMetadata: { contentType: "application/json" } });
+    privateAudit = true;
+  }
 
   // Collapse this run's gaps onto capabilities before filing.
   const byCapability = new Map<GapClass, string[]>();
   for (const g of allGaps) {
     const cls = classOf({ ...g, targetOrigin: run.targetUrl });
     const examples = byCapability.get(cls) ?? [];
-    examples.push(`${run.appSlug} · ${g.journey.title} → ${g.label}: ${g.observed ?? ""}`.slice(0, 300));
+    examples.push(privateAudit ? `${run.appSlug} · ${GAP_CLASSES[cls].label}: observed during this run; original step evidence is retained privately.`
+      : `${run.appSlug} · ${g.journey.title} → ${g.label}: ${g.observed ?? ""}`.slice(0, 300));
     byCapability.set(cls, examples);
   }
 
   const notes: CapabilityNote[] = [];
   for (const [cls, examples] of byCapability) {
     const { label, why } = GAP_CLASSES[cls];
+    const observationExamples = privateAudit ? [...examples, `Original step labels, observations and actions are retained in private R2 evidence: ${privateAuditKey}.`] : examples;
     const finding: TicketFinding = {
       runId: run.id,
       number: 0,
@@ -189,7 +197,7 @@ export async function fileCapabilityGaps(
       severity: "high",
       detail: JSON.stringify({
         where: "CheckMyApp agent capability",
-        whatWeTried: examples,
+        whatWeTried: observationExamples,
         whatHappened:
           `A customer run could not verify a step because of our own checker, not because of ` +
           `anything wrong with their product. Seen on ${run.appSlug} (run #${run.runNumber}).`,
@@ -222,11 +230,11 @@ export async function fileCapabilityGaps(
       // "still present in run #N" and CHE-86's body still lists only run
       // #96's steps. The steps themselves go on the ticket every time, so the
       // next class can be written from them.
-      if (cls === "unclassified" && outcome.kind === "commented") {
+      if ((cls === "unclassified" || privateAudit) && outcome.kind === "commented") {
         await tracker.addComment(
           outcome.identifier,
-          `Unclassified in run #${run.runNumber} — the step(s), so this becomes a named capability:\n` +
-            examples.map((e) => `- ${e}`).join("\n"),
+          `${cls === "unclassified" ? "Unclassified" : "Evidence"} in run #${run.runNumber} — the step(s):\n` +
+            observationExamples.map((e) => `- ${e}`).join("\n"),
         );
       }
       notes.push({

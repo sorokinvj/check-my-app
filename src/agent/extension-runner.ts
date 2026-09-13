@@ -107,7 +107,7 @@ export class ExtensionRunner extends Container<AgentBindings> {
       try {
         await this.ctx.storage.put("finalEvidence", evidence);
         persisted = true;
-        await this.env.EVIDENCE.put(`extensions/${lease.ownerRunId}/cleanup.json`, JSON.stringify(extensionArtifactEvidence(evidence)));
+        await this.env.EVIDENCE.put(`private/extensions/${lease.ownerRunId}/cleanup.json`, JSON.stringify(extensionArtifactEvidence(evidence)));
       } finally {
         await this.destroy();
         if (persisted) {

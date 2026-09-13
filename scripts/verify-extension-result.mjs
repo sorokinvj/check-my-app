@@ -56,17 +56,17 @@ assert.equal(assessPracticeOutput({ ...practice, practiceObservation: { samples:
 
 const explicitFailure = { ...session, audioPreflight: { passed: true }, observation: { samples: [{ ...sample, results: [], alerts: ['The response service is unavailable.'] }] } };
 assert.equal(assessExtensionOutput(explicitFailure).failure?.source, 'visible-product-alert');
-for (const alert of ['No error occurred.', 'No error occurred and no requests failed.', 'Connected without any error.', 'The earlier error was resolved.', 'The earlier error is now resolved.', 'The error has been fully resolved.', 'The earlier error was automatically resolved.', 'Connection error: recovered.', 'The connection error was recovered automatically.', 'Error-free session.']) {
+for (const alert of ['No error occurred.', 'No error occurred and no requests failed.', 'Connected without any error.', 'The earlier error was resolved.', 'The earlier error is now resolved.', 'The error has been fully resolved.', 'The earlier error was automatically resolved.', 'Connection error: recovered.', 'The connection error was recovered automatically.', 'The error was resolved without retrying.', 'Error-free session.']) {
   const result = assessExtensionOutput({ ...explicitFailure, observation: { samples: [{ ...sample, alerts: [alert] }] } });
   assert.equal(result.failure, undefined, 'A negated or resolved error is not positive failure evidence');
   assert.equal(result.confirmed, true, 'An affirmative recovery does not invalidate an observed answer');
 }
-for (const alert of ['The error could not be resolved.', 'The error has not yet been resolved.', 'Connection failed, you can try again.', 'The error was not resolved.', 'The errors were not resolved.', 'The failure has not been cleared.', 'The error was resolved, but the response failed.', 'No errors connecting; the response service is unavailable.']) {
+for (const alert of ['The error could not be resolved.', 'The error has not yet been resolved.', 'Connection failed, you can try again.', 'Request failed: no response from server.', 'Unable to connect because the server may be offline.', 'The error was not resolved.', 'The errors were not resolved.', 'The failure has not been cleared.', 'The error was resolved, but the response failed.', 'No errors connecting; the response service is unavailable.']) {
   const result = assessExtensionOutput({ ...explicitFailure, observation: { samples: [{ ...sample, alerts: [alert] }] } });
   assert.equal(result.confirmed, false, 'An unresolved error takes precedence over an earlier answer');
   assert.equal(result.failure?.source, 'visible-product-alert');
 }
-for (const alert of ['The error will be resolved.', 'This error can be resolved by retrying the request.', 'The connection error is being resolved.', 'The error has probably been resolved.', 'The service is not unavailable.', 'No errors were resolved.', 'Error details.', 'The request might have failed.']) {
+for (const alert of ['The error will be resolved.', 'This error can be resolved by retrying the request.', 'The connection error is being resolved.', 'The error has probably been resolved.', 'The service is not unavailable.', 'No errors were resolved.', 'Error details.', 'The request might have failed.', 'No errors, failed requests, or unavailable services.', 'The errors might not have been resolved.', 'Request failed?', 'Unable to connect messages may appear during startup.']) {
   const result = assessExtensionOutput({ ...explicitFailure, observation: { samples: [{ ...sample, alerts: [alert] }] } });
   assert.equal(result.confirmed, false, 'Uncertain recovery cannot validate an earlier answer');
   assert.equal(result.failure, undefined, 'Ambiguous wording cannot become a product allegation');
