@@ -70,7 +70,7 @@ export function isExtensionTarget(run: Pick<ExtensionTarget, "targetKind" | "tar
   return run.targetKind === "extension" || isChromeStoreUrl(run.targetUrl);
 }
 
-export function extensionInput(run: ExtensionTarget, phase: string, scenario: ExtensionRunnerInput["scenario"] = "interview"): ExtensionRunnerInput | null {
+export function extensionInput(run: ExtensionTarget, phase: string, scenario?: ExtensionRunnerInput["scenario"]): ExtensionRunnerInput | null {
   const store = parseExtensionLink(run.targetUrl);
   if (!isExtensionTarget(run)) return null;
   if (!store || (run.extensionId && run.extensionId !== store.id)) throw new Error("Extension identity does not match its Store link");
@@ -78,13 +78,15 @@ export function extensionInput(run: ExtensionTarget, phase: string, scenario: Ex
   const practice = scenario === "practice" || scenario === "practice-extension";
   if (practice && store.id !== "hafhjepjihcimcljkdphpinannbdmnhf") throw new Error("This practice scenario belongs to a different extension");
   return {
-    scenario,
+    scenario: scenario ?? "interview",
     ownerRunId: `${run.id}_${phase}`,
     extensionId: store.id,
     targetUrl: practice ? "https://joblander.app/practice" : options.companionUrl || "fixture:interview",
     ...(practice ? { stimulusMode: "practice" as const } : {}),
     maxDurationSeconds: 1200,
-    allowSessions: phase.startsWith("walk-") && options.allowSessions === true && Boolean(run.testEmail && run.testPasswordEnc),
+    // Reading account history must not start another paid interview. Only a
+    // discovered session journey carries an explicit scenario authorization.
+    allowSessions: phase.startsWith("walk-") && scenario !== undefined && options.allowSessions === true && Boolean(run.testEmail && run.testPasswordEnc),
     maxSessionSeconds: options.maxSessionSeconds ?? 180,
   };
 }

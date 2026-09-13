@@ -27,8 +27,8 @@ export function assessVisibleSessionFailure(session) {
       if (surface === 'extension-shadow-panel' ? !sample.panelPresent : !sample.callActive) continue;
       for (const text of sample.alerts ?? []) {
         if (typeof text !== 'string' || text.length > 1000 || observation.baseline?.includes(text)) continue;
-        if (!/\b(error|failed|unavailable|unable to|could not)\b/i.test(text)) continue;
-        if (/\b(?:no|zero|without)\s+(?:\w+\s+){0,2}(?:errors?|failures?)\b|\b(?:error|failure)[ -]free\b|\b(?:error|failure).{0,40}\b(?:resolved|cleared|recovered)\b/i.test(text)) continue;
+        if (!/\b(error|failure|failed|unavailable|unable to|could not)\b/i.test(text)) continue;
+        if (/\b(?:no|zero|without)\s+(?:\w+\s+){0,2}(?:errors?|failures?)\b|\b(?:error|failure)[ -]free\b|\b(?:error|failure)\s+(?:(?:was|is|has|been|now|already|fully|completely|successfully)\s+)*(?:resolved|cleared)\b/i.test(text)) continue;
         if (/credential|password|sign.?in|log.?in|permission|denied|microphone|insufficient|balance|minutes|payment|quota|too many|rate.?limit|429/i.test(text)) continue;
         return { source: 'visible-product-alert', text, observedAt: sample.at, surface };
       }
@@ -51,11 +51,39 @@ function assessInterviewOutput(session) {
     for (const result of sample.results ?? []) {
       if (typeof result.question !== 'string' || typeof result.answer !== 'string' || result.answer.trim().length < 40 || baseline.includes(result.answer.trim())) continue;
       const words = new Set(result.question.toLowerCase().match(/[a-z]+/g) ?? []);
-      if (terms.filter(term => words.has(term)).length < (mode === 'practice' ? 2 : terms.length - 1)) continue;
+      if (mode === 'practice' ? !matchesHeardCoachQuestion(session, result.question, sample.at) : terms.filter(term => words.has(term)).length < terms.length - 1) continue;
       return { confirmed: true, surface: 'extension-shadow-panel', observedAt: sample.at, mode, question: result.question, answer: result.answer };
     }
   }
   return { confirmed: false, reason: 'No fresh relevant question and answer were observed during the owned session' };
+}
+
+function matchesHeardCoachQuestion(session, question, observedAt) {
+  const lease = session.sessions?.find(s => s.id === 'ai-practice');
+  if (!lease?.startedAt || !lease.cleanup?.applicationStopObserved) return false;
+  // The live coach paraphrased the controlled topic as "What part of the
+  // database stack...". Correlate with what was actually spoken instead of
+  // requiring two words from a fixed sentence.
+  const stopWords = new Set('a an the i you your it its we they this that those these to of on in for with and or but as at by from is are was were be been do did does have has had how what which when why could would can will please'.split(' '));
+  const words = text => new Set((text.toLowerCase().match(/[a-z0-9]+/g) ?? []).filter(word => !stopWords.has(word)));
+  const target = words(question);
+  if (target.size < 2) return false;
+  let candidateObserved = false;
+  const previous = new Set();
+  for (const sample of session.practiceObservation?.samples ?? []) {
+    if (sample.surface !== 'practice-page' || !sample.callActive || sample.at < lease.startedAt || sample.at > Math.min(observedAt, lease.cleanup.stopClickedAt)) continue;
+    for (const utterance of sample.utterances ?? []) {
+      if (typeof utterance.text !== 'string') continue;
+      if (utterance.speaker === 'You' && /\bmaple\b/i.test(utterance.text) && /\bdatabase\b|\bquer(?:y|ies)\b/i.test(utterance.text)) candidateObserved = true;
+      if (utterance.speaker !== 'Aria') continue;
+      const text = utterance.text.trim().replace(/\s+/g, ' ');
+      const fresh = !previous.has(text); previous.add(text);
+      if (!fresh || !candidateObserved || !/\bdatabase\b|\bquer(?:y|ies)\b|\bmaple\b|\bresponse time\b|\bimprovement\b|\breduction\b|\b30%/i.test(text)) continue;
+      const heard = words(text), overlap = [...target].filter(word => heard.has(word)).length;
+      if (overlap >= 2 && overlap / Math.min(target.size, heard.size) >= 0.6) return true;
+    }
+  }
+  return false;
 }
 
 export function assessPracticeOutput(session) {

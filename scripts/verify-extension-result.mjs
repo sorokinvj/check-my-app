@@ -28,6 +28,21 @@ assert.equal(assessPracticeOutput({ ...practice, practiceObservation: { samples:
 assert.equal(assessExtensionOutput({ ...session, ...practice, sessions: [...session.sessions, ...practice.sessions] }).confirmed, true);
 assert.equal(assessExtensionOutput({ ...session, ...practice, observation: { samples: [] }, sessions: [...session.sessions, ...practice.sessions] }).confirmed, false, 'A combined scenario requires both products to answer');
 
+const liveCoach = { ...coach, at: 1800, utterances: [{ speaker: 'Aria', text: 'Okay, focusing on those queries and that 30% reduction. What part of the database stack were you working on?' }] };
+const paraphrased = { ...session, ...practice, stimulus: { mode: 'practice' }, sessions: [...session.sessions, ...practice.sessions],
+  practiceObservation: { samples: [candidate, liveCoach] }, observation: { samples: [{ ...sample, results: [{ question: 'What part of the database stack were you working on to achieve the 30% reduction?', answer }] }] } };
+assert.equal(assessExtensionOutput(paraphrased).confirmed, true, 'The real coach question is stronger provenance than a fixed phrase');
+for (const text of ['Tell me how you improved database queries in project Maple.', 'How did you improve database queries in project Maple']) {
+  const prompt = { ...paraphrased, practiceObservation: { samples: [candidate, { ...liveCoach, utterances: [{ speaker: 'Aria', text }] }] },
+    observation: { samples: [{ ...sample, results: [{ question: 'How did you improve database queries in project Maple?', answer }] }] } };
+  assert.equal(assessExtensionOutput(prompt).confirmed, true, 'Imperative and unpunctuated spoken prompts have the same observed provenance');
+}
+for (const invalid of [
+  { ...paraphrased, practiceObservation: { samples: [liveCoach] } },
+  { ...paraphrased, practiceObservation: { samples: [candidate, { ...liveCoach, at: 4000 }] } },
+  { ...paraphrased, observation: { samples: [{ ...sample, results: [{ question: 'Which database has the nicest logo?', answer }] }] } },
+]) assert.equal(assessExtensionOutput(invalid).confirmed, false, 'A question needs current candidate input and an earlier matching coach question');
+
 const oldQuestionThenCandidate = { ...coach, at: 1800, utterances: [...coach.utterances, ...candidate.utterances] };
 assert.equal(assessPracticeOutput({ ...practice, practiceObservation: { samples: [oldQuestionThenCandidate, { ...oldQuestionThenCandidate, at: 2500 }] } }).confirmed, false, 'A repeated cumulative transcript cannot turn the coach question into a new reply');
 const newReply = { speaker: 'Aria', text: 'Which indexes did you add to improve those database queries, and how did you measure latency?' };
@@ -35,8 +50,13 @@ assert.equal(assessPracticeOutput({ ...practice, practiceObservation: { samples:
 
 const explicitFailure = { ...session, audioPreflight: { passed: true }, observation: { samples: [{ ...sample, results: [], alerts: ['The response service is unavailable.'] }] } };
 assert.equal(assessExtensionOutput(explicitFailure).failure?.source, 'visible-product-alert');
-for (const alert of ['No error occurred.', 'Connected without any error.', 'The earlier error was resolved.', 'Error-free session.']) {
+for (const alert of ['No error occurred.', 'Connected without any error.', 'The earlier error was resolved.', 'The earlier error is now resolved.', 'The error has been fully resolved.', 'Error-free session.']) {
   assert.equal(assessExtensionOutput({ ...explicitFailure, observation: { samples: [{ ...sample, alerts: [alert] }] } }).failure, undefined, 'A negated or resolved error is not positive failure evidence');
+}
+for (const alert of ['The error could not be resolved.', 'The error was not resolved.', 'The failure has not been cleared.']) {
+  const result = assessExtensionOutput({ ...explicitFailure, observation: { samples: [{ ...sample, alerts: [alert] }] } });
+  assert.equal(result.confirmed, false, 'An unresolved error takes precedence over an earlier answer');
+  assert.equal(result.failure?.source, 'visible-product-alert');
 }
 assert.equal(assessExtensionOutput({ ...explicitFailure, audioPreflight: { passed: false } }).failure, undefined);
 assert.equal(assessExtensionOutput({ ...explicitFailure, runtimeFailure: { kind: 'browser-exited' } }).failure, undefined);

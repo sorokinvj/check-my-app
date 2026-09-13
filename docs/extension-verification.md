@@ -2,7 +2,7 @@
 
 Source: [Extension verification PRD](https://app.notion.com/p/3d97bac6430a81a1b09fdacc72d609c6).
 
-## Current state — 2026-09-13 19:54 UTC
+## Current state — 2026-09-13 20:17 UTC
 
 [PR #81](https://github.com/sorokinvj/check-my-app/pull/81) is ready for review,
 branch `feat/chrome-extension-targets`. No CheckMyApp production migration,
@@ -25,31 +25,36 @@ harness checks exercise native popup and companion-panel images through the
 real agent loop in always-on, requested and text-only modes. Current-head
 review and CI will rerun after this checkpoint.
 
-The isolated native executor is version
-`30809ae0-f023-414c-8ee4-5f9a5dc08d11`, container application version 13;
-its rollout completed. Both native login and settings screenshots were
-verified live: cropped product controls remain visible, account inputs and
-existing document names are masked, and no paid session was started.
-Evidence: `/tmp/checkmyapp-popup-login.png`,
-`/tmp/checkmyapp-popup-settings.png`,
-`/tmp/checkmyapp-popup-screenshot-cleanup.json`.
-The additional negative/resolved-alert exclusion has passed acceptance and
-will be deployed after the currently active paid Run has finished.
+The isolated native executor's version 14 rollout completed. A further revision
+is being rolled out before Run 4, including two review corrections: affirmative
+recovery alerts remain non-failures, and spoken prompts need no question mark.
+Both native login and settings screenshots were verified live on version 13:
+cropped product controls remain visible; account inputs and document names
+are masked; no paid session was started for those screenshot checks.
 
-Full Run 3 was submitted from the owner UI at 19:37 UTC:
-`cmu07twfw00112u136r00vpkl`, public `cmu07twfw00122u13mjvi6rp6`.
-It uses a frozen Workflow bundle outside the watched repository, local
-CheckMyApp D1/R2 and actual Cloudflare sessions against production JobLander.
-Scan and discovery completed (45 discovery iterations). The public preview
-now shows the native product rather than the desktop or synthetic fixture.
-The interview journey completed: 178 seconds, a fresh relevant answer,
-application Stop, three charged minutes, both live minute steps, confirmed
-cessation and disposed=true. Evidence:
-`/tmp/checkmyapp-workflow-run3-interview-cleanup.json`.
-Practice is in progress; its session stopped at 121 seconds and the UI
-balance/history confirms three minutes and stable post-Stop balance, while
-both live minute transitions were not observed. Final practice result and
-combined journey are still pending. This is not a deployed CheckMyApp Run.
+Full Run 3 (`cmu07twfw00112u136r00vpkl`, public
+`cmu07twfw00122u13mjvi6rp6`) finished without a verdict. Its frozen Workflow
+used local CheckMyApp D1/R2 and actual Cloudflare sessions against production
+JobLander. Discovery completed and returned the three session journeys plus
+sign-in and account history. Interview passed at 178 seconds (three minutes,
+two live debit steps); practice passed at 121 seconds (three minutes, stable
+balance; live debit steps inconclusive). Both combined sessions stopped at
+178/177 seconds and charged six minutes with confirmed cessation, but the
+old fixed-word matcher rejected real answers to the coach's paraphrased
+questions. The immutable Run remains failed; re-evaluating its saved evidence
+is a regression check, not a new live pass. All seven phase leases are disposed
+and every started session has observed application Stop and stable balance.
+Evidence: `/tmp/checkmyapp-workflow-run3-walk-0-final.json` through
+`/tmp/checkmyapp-workflow-run3-walk-4-final.json`.
+
+The corrected matcher correlates fresh extension answers with actually observed
+coach prompts after the controlled candidate input. Negative cases exclude
+missing input, later coach speech and unrelated questions. Account-history
+walking also exposed an unnecessary extra paid capture: only the three explicit
+session journeys now receive session permission. Discovery/sign-in/history
+retain account inspection but cannot start a paid process. Run 4 is prepared
+with a new frozen Workflow and will use the fully applied native revision.
+This is not yet a deployed CheckMyApp production Run.
 
 Full Run 1 failed during discovery cleanup; no paid scenario or verdict.
 Run `cmtzwjnm0000h2u1399cdot4d`, public `cmtzwjnm0000i2u13pip5zpo8`.

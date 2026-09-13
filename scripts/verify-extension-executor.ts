@@ -6,9 +6,10 @@ const run = { id: "run-extension-123", targetKind: "extension", targetUrl: `http
 assert.equal(extensionInput({ ...run, targetKind: "website", targetUrl: "https://example.test" }, "scan"), null);
 assert.equal(isExtensionTarget({ targetUrl: run.targetUrl }), true, "A legacy Store-link run must never survey the listing as its product");
 assert.equal(extensionInput(run, "discovery")?.allowSessions, false);
-assert.equal(extensionInput(run, "walk-0")?.allowSessions, true);
-assert.equal(extensionInput({ ...run, testPasswordEnc: null }, "walk-0")?.allowSessions, false);
-assert.equal(extensionInput({ ...run, extensionConfig: '{}' }, "walk-0")?.allowSessions, false);
+assert.equal(extensionInput(run, "walk-0", "interview")?.allowSessions, true);
+assert.equal(extensionInput(run, "walk-0")?.allowSessions, false, "An account or sign-in journey cannot inherit paid session permission");
+assert.equal(extensionInput({ ...run, testPasswordEnc: null }, "walk-0", "interview")?.allowSessions, false);
+assert.equal(extensionInput({ ...run, extensionConfig: '{}' }, "walk-0", "interview")?.allowSessions, false);
 assert.equal(extensionInput(run, "walk-0")?.ownerRunId, "run-extension-123_walk-0");
 assert.throws(() => extensionInput({ ...run, extensionId: "a".repeat(32) }, "scan"), /does not match/);
 assert.throws(() => extensionInput({ ...run, targetUrl: "https://chromewebstore.google.com/detail/bad" }, "scan"), /does not match/);
