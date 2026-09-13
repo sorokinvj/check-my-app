@@ -55,6 +55,34 @@ export async function startPractice(page) {
   return { control, at: Date.now() };
 }
 
+export async function preparePracticeStart(page, combined) {
+  if (combined) {
+    const panel = page.locator('#joblander-extension-host');
+    await panel.getByRole('button', { name: 'Collapse insights', exact: true }).click({ timeout: 3000 });
+    const header = panel.locator('header[role="status"]');
+    if (await header.count() !== 1) throw new Error('The interview assistance header is ambiguous');
+    const bounds = await header.boundingBox();
+    if (!bounds || bounds.width < 300 || bounds.height < 20) throw new Error('The interview assistance header is unavailable');
+    // The observed draggable header keeps capture active when collapsed. Move
+    // its empty grab area above practice's controls, using ordinary pointer
+    // input; a CSS rewrite would hide the real obstruction from the check.
+    await page.mouse.move(bounds.x + 230, bounds.y + bounds.height / 2);
+    await page.mouse.down();
+    try { await page.mouse.move(250, 65, { steps: 12 }); }
+    finally { await page.mouse.up(); }
+  }
+  // Trial input cannot start a call. Ownership is registered only after the
+  // intended Start is reachable, so an overlay cannot create a phantom meter.
+  await page.getByRole('button', { name: 'Start call', exact: true }).click({ trial: true, timeout: 3000 });
+  return { insightsCollapsed: combined, startReachable: true };
+}
+
+export async function restorePracticeInsights(page) {
+  await page.locator('#joblander-extension-host').getByRole('button', { name: 'Expand insights', exact: true }).click({ timeout: 3000 });
+  await page.locator('#joblander-extension-host').getByRole('button', { name: 'Collapse insights', exact: true }).waitFor({ state: 'visible', timeout: 3000 });
+  return { insightsExpanded: true };
+}
+
 export class PracticeStartRejected extends Error {}
 
 export async function stopPractice(page) {
@@ -74,18 +102,50 @@ export async function stopPractice(page) {
 
 export async function readPractice(page) {
   const text = (await page.locator('body').innerText()).slice(0, 16000);
-  const utterances = text.split('\n').flatMap(line => {
-    const match = /^(Aria|You):\s*(.+)$/.exec(line.trim());
-    return match ? [{ speaker: match[1], text: match[2] }] : [];
-  });
+  const transcript = page.getByRole('button', { name: 'View full transcript', exact: true });
+  // The live transcript labels the candidate with the account display name.
+  // Read its observed two-span rows, not arbitrary colon text elsewhere on
+  // the page; normalize only the other participant in this two-person call.
+  const rows = await transcript.isVisible() ? await transcript.evaluate(button => [...button.parentElement.querySelectorAll('div')].flatMap(row => {
+    const spans = [...row.children];
+    return spans.length === 2 && spans.every(node => node.tagName === 'SPAN') && /:\s*$/.test(spans[0].textContent)
+      ? [{ speaker: spans[0].textContent.replace(/:\s*$/, '').trim(), text: spans[1].textContent.trim() }] : [];
+  })) : [];
+  const utterances = normalizePracticeUtterances(rows);
   return { surface: 'practice-page', text, utterances,
+    alerts: await page.locator('body').evaluate(body => [...body.querySelectorAll('[role="alert"]')].filter(el => {
+      const box = el.getBoundingClientRect();
+      return box.width > 0 && box.height > 0 && getComputedStyle(el).visibility !== 'hidden';
+    }).map(el => el.innerText?.trim() ?? '').filter(Boolean)),
     callActive: !await page.getByRole('button', { name: 'Start call', exact: true }).isVisible() };
+}
+
+export function normalizePracticeUtterances(rows) {
+  const candidates = new Set(rows.filter(row => row.speaker !== 'Aria').map(row => row.speaker));
+  if (candidates.size > 1 || [...candidates].some(name => !name || name.length > 80)) throw new Error('Practice participants are ambiguous');
+  return rows.map(row => ({ speaker: row.speaker === 'Aria' ? 'Aria' : 'You', text: row.text.slice(0, 5000) }));
 }
 
 export async function enablePracticeMicrophone(page) {
   // Call controls appear before the coach joins. Wait for actual dialogue
   // before changing the microphone, rather than terminating a joining call.
   await page.getByRole('button', { name: 'View full transcript', exact: true }).waitFor({ state: 'visible', timeout: 35_000 });
+  const liveMicrophone = page.locator('button[data-lk-source="microphone"]');
+  const liveControls = await liveMicrophone.evaluateAll(nodes => nodes.flatMap((node, index) => node.getRootNode() === document && node.getBoundingClientRect().width > 0 ? [{ index }] : []));
+  if (liveControls.length) {
+    if (liveControls.length !== 1) throw new Error('The practice microphone control is ambiguous');
+    const microphone = liveMicrophone.nth(liveControls[0].index);
+    const state = () => microphone.evaluate(node => ({ enabled: node.getAttribute('data-lk-enabled'), pressed: node.getAttribute('aria-pressed') }));
+    const before = await state();
+    if (before.enabled !== before.pressed || !['true', 'false'].includes(before.enabled)) throw new Error('The practice microphone state is unavailable');
+    if (before.enabled === 'false') await microphone.click({ timeout: 3000 });
+    for (let i = 0; i < 30; i++) {
+      const after = await state();
+      if (after.enabled === 'true' && after.pressed === 'true') return { microphoneOn: true, source: 'microphone-control', before, after };
+      await page.waitForTimeout(100);
+    }
+    throw new Error('The practice microphone did not turn on');
+  }
   const inputs = page.getByRole('checkbox');
   const candidates = await inputs.evaluateAll(nodes => nodes.flatMap((node, index) => node.getRootNode() === document ? [{ index }] : []));
   if (candidates.length === 0) {
@@ -95,8 +155,8 @@ export async function enablePracticeMicrophone(page) {
     const before = practiceMutedMicrophone(await practiceControls(page));
     await page.locator('button').nth(before.index).click({ timeout: 3000 });
     for (let i = 0; i < 30; i++) {
-      const after = (await practiceControls(page)).find(control => control.index === before.index);
-      if (after?.ownDocument && after.visible && after.icon && after.icon !== before.icon && !after.icon.includes('M12.227 11.52')) return { microphoneOn: true, before: before.icon, after: after.icon };
+      const enabled = (await practiceControls(page)).filter(control => control.ownDocument && control.visible && !control.disabled && !control.text && !control.label && control.icon.includes('M2.975 8.002') && control.icon.includes('M5 3a3 3'));
+      if (enabled.length === 1) return { microphoneOn: true, before: before.icon, after: enabled[0].icon };
       await page.waitForTimeout(100);
     }
     throw new Error('The practice microphone did not change to its on state');

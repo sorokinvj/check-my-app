@@ -6,6 +6,7 @@ import { createCheckSchema, extensionOptionsSchema } from "@/lib/validation";
 import { startCheck } from "@/lib/start-check";
 import { startPaidCheck } from "@/lib/one-check";
 import { startSavedApp } from "@/lib/start-saved-app";
+import { createRecheckRun } from "@/lib/recheck";
 import { enableWatchForRun } from "@/lib/watch-enable";
 
 async function main() {
@@ -61,6 +62,24 @@ assert.deepEqual(await startSavedApp(db,{id:"other-owner",plan:"business"},"app"
 assert.equal(rows.length, 3, "A different owner must not start a run with saved credentials");
 const watchDb = {run:{findUnique: async()=>({...app,ownerId:"owner",ephemeral:false})}} as unknown as PrismaClient;
 assert.equal((await enableWatchForRun(watchDb,{id:"owner",plan:"business",clerkOrgId:null},{runPublicId:"p",frequency:"daily",notifyOnChangeOnly:true})).kind,"gated");
+const rechecked: Record<string, unknown>[] = [];
+let savedReads = 0;
+const previous = { ...app, id: 'old-run', appId: 'app', ownerId: 'owner', testPasswordEnc: null, targetKind: 'extension', extensionId: id, extensionConfig: JSON.stringify(config), owner: { plan: 'business' }, ephemeral: false };
+const recheckDb = {
+  run: { findUnique: async ({where}: {where: {publicId?: string}}) => where.publicId ? previous : null,
+    create: async ({data}: {data: Record<string, unknown>}) => { rechecked.push(data); return { id: 'new-run', publicId: 'new-public' }; } },
+  app: { findFirst: async ({where}: {where: Record<string, unknown>}) => {
+    assert.deepEqual(where, { id: 'app', ownerId: 'owner', targetKind: 'extension', extensionId: id }); savedReads++;
+    return { testEmail: 'saved@example.test', testPasswordEnc: 'encrypted-saved-fixture', extensionConfig: JSON.stringify({ ...config, allowSessions: true }), userNotes: 'Saved permission' };
+  } }, counter: { upsert: async () => ({ value: 8 }) },
+} as unknown as PrismaClient;
+const recheckDeps = { canMutate: async () => true, trigger: async () => {}, siteCap: () => 20, now: () => new Date('2026-09-13T00:00:00Z'), ephemeralTtlDays: () => 7 };
+assert.equal((await createRecheckRun(recheckDb, 'old-public', {}, recheckDeps)).kind, 'ok');
+assert.equal(rechecked[0].testPasswordEnc, 'encrypted-saved-fixture');
+assert.equal(rechecked[0].testEmail, 'saved@example.test');
+assert.equal(rechecked[0].userNotes, 'Saved permission');
+assert.equal((await createRecheckRun(recheckDb, 'old-public', {}, { ...recheckDeps, canMutate: async () => false })).kind, 'unauthorized');
+assert.equal(savedReads, 1, 'A stranger cannot even read saved extension credentials');
 console.log("Extension targets: stable identity, validation, public/paid/dashboard starts and ownership verified");
 
 }

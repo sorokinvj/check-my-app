@@ -30,10 +30,11 @@ export interface ExtensionSession extends ExtensionIdentity {
   allowSessions?: boolean;
   maxSessionSeconds?: number;
   runtimeFailure?: { kind: string; code?: number | null; signal?: string | null; at?: string };
-  sessions?: Array<{ id: string; state: string; cleanup?: { applicationStopObserved?: boolean } | null }>;
+  sessions?: Array<{ id: string; state: string; startedAt?: number; cleanup?: { applicationStopObserved?: boolean; stopClickedAt?: number } | null }>;
   applicationCleanup?: string;
   billingCleanup?: string;
-  productResult?: { confirmed: boolean; observedAt?: number; mode?: string };
+  productResult?: { confirmed: boolean; observedAt?: number; mode?: string;
+    failure?: { source: string; text: string; observedAt: number; surface: string } };
   billing?: { assessment?: { status?: string; twoMinuteSteps?: boolean; expectedMinutes?: number; observedMinutes?: number; cessationMs?: number;
     sessions?: Array<{ id: string; kind: string; dateUtc: string; durationSeconds: number }> } };
 }
@@ -47,6 +48,22 @@ export interface ExtensionRunnerInput {
   allowSessions: boolean;
   maxSessionSeconds: number;
   stimulusMode?: "interview" | "tab-only" | "microphone-only" | "practice";
+}
+
+export function extensionStepConfig(isExtension: boolean) {
+  // A ten-minute paid session also needs installation, login and post-Stop
+  // observation. A named native lease must never be reopened by a step retry.
+  return isExtension ? { timeout: "25 minutes" as const, retries: { limit: 0, delay: "1 second" as const } } : {};
+}
+
+export function extensionToolAllowed(identity: Pick<ExtensionSession, "extensionId" | "scenario" | "allowSessions">, name: string): boolean {
+  const practice = name === "extension_prepare_practice" || name === "extension_start_practice";
+  const paid = practice || ["extension_start_session", "extension_observe_session", "extension_stop_sessions"].includes(name);
+  const adapter = paid || name === "extension_account_preflight" || name === "extension_audio_preflight";
+  if (adapter && identity.extensionId !== "hafhjepjihcimcljkdphpinannbdmnhf") return false;
+  if (paid && !identity.allowSessions) return false;
+  if (practice && !["practice", "practice-extension"].includes(identity.scenario ?? "interview")) return false;
+  return name !== "extension_start_session" || identity.scenario !== "practice";
 }
 
 export function isExtensionTarget(run: Pick<ExtensionTarget, "targetKind" | "targetUrl">): boolean {

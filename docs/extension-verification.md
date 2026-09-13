@@ -2,48 +2,111 @@
 
 Source: [Extension verification PRD](https://app.notion.com/p/3d97bac6430a81a1b09fdacc72d609c6).
 
-## Current state — 2026-09-12 21:44 UTC
+## Current state — 2026-09-13 19:14 UTC
 
-Feature branch `feat/chrome-extension-targets` is pushed through `026e3ca`.
-Draft [PR #81](https://github.com/sorokinvj/check-my-app/pull/81) is open.
-CheckMyApp production has not been migrated or deployed; no merge. The user’s
-repository instruction prohibits merging and pushing to main.
+Draft [PR #81](https://github.com/sorokinvj/check-my-app/pull/81), branch
+`feat/chrome-extension-targets`. No CheckMyApp production migration, deployment
+or merge. The explicit repository instruction still prohibits merging.
 
-- The native Cloudflare generated-spec replay described below passed. Actual
-  workerd discovery through the Cloudflare executor also completed: 154.643
-  seconds, 33 calls, session `95cdda9d-2496-4407-a9ef-79b35c65abf0`, five
-  journeys including interview, practice and simultaneous scenarios. No paid
-  session started; disposal and not-started cleanup were confirmed. Evidence:
-  `/tmp/checkmyapp-cloudflare-discovery-result.json` and
-  `/tmp/checkmyapp-cloudflare-discovery-cleanup.json`.
-- Practice probe 6 reached its own Stop and SESSION COMPLETE, then disposed
-  the browser. Session `de593cd7-b9db-47e9-a5ff-78d39d6c0b6e` lasted only a
-  fraction of a second before its microphone operation failed. Its billing
-  observation was inconclusive; it is not a passing practice test. The Linux
-  microphone was an unnamed button with a muted microphone glyph, not the
-  checkbox expected from the earlier UI. Call controls appeared before dialogue.
-- The adapter now waits for the coach’s transcript control, then supports both
-  the checkbox and the observed muted microphone button. Stop controls are
-  restricted to the owned document, excluding extension shadow controls.
-  Probe 7 was explicitly refused because another practice was still active.
-  It retained that refusal, recorded zero owned sessions and disposed cleanly;
-  it did not attempt to Stop another tab. Stable balance or Start call alone
-  do not establish that the account’s active-practice lock has cleared.
-- Durable cleanup now snapshots the matching owned session before disposal so
-  an interrupted cleanup response retains the available lifecycle evidence.
-  The public artifact keeps scenario and sanitized practice result only.
-- Required generate, web and agent typechecks, lint and all 52 acceptance
-  scripts passed again after these changes. Lint has three existing warnings.
-- PR CI passed on `026e3ca`. The Claude review action failed before inference
-  (one turn, no model usage or cost, no review comments); its log exposes no
-  more specific cause. This is not a clean review. A current-head review and
-  final CI remain required. No workflow files have been edited.
+All nine findings from the independent Codex review have been addressed:
+long-session Workflow timeout and no retry of an owned native lease; account
+credential rejection and single-attempt input; fresh ordered coach utterances;
+positive product-error evidence distinct from missing output; server-side
+self-check refusal for saved-app Run; saved owner settings on extension recheck;
+accounting-aware native replay; intermediate versus terminal observation replay;
+and removal of the impossible Daily Watch action from extension verdicts.
+New positive-error evidence is restricted to visible product alerts during a
+controlled, safely stopped session; unavailable input, credentials, quota,
+permissions, 429 and runtime failures cannot establish a product error.
 
-Current isolated Cloudflare version: `651cde1f-0b07-45cd-9efb-1e6665db221a`.
-A fresh integrated workerd walk through that Cloudflare executor is running.
-Remaining: successful practice-only and simultaneous runs, current integrated
-walk and exported replay, full submission and Workflow, review/CI, authorized
-production release and outside verification.
+Prisma generation, both typechecks, lint and all 52 acceptance scripts passed
+after these changes. Three pre-existing lint warnings remain. The same real
+combined capture still passes the stricter output evaluator; billing precision
+remains inconclusive. Current isolated Cloudflare version:
+`1662e460-0274-465a-853c-bd6e182d5ff6`.
+
+Full Run 1, submitted from the local dashboard, failed during discovery cleanup:
+`cmtzwjnm0000h2u1399cdot4d`, public ID `cmtzwjnm0000i2u13pip5zpo8`.
+The executor's recovery record says HTTP 500/unverified; no paid scenario or
+verdict was published. A separate fresh transport/cleanup probe passed. The
+local Workflow retried a custom-named NonRetryableError; the installed Miniflare
+checks the literal error name/message. Explicit zero retries now enforce the
+native lease contract without relying on that development-runtime behavior.
+The exact original cleanup failure cause has not been established.
+
+Full Run 2 was submitted through the owner UI at 19:11 UTC:
+`cmu06woha000r2u13t8opj32h`, public ID `cmu06woha000s2u130bcql632`.
+It runs the real Workflow against local product D1/R2 and real Cloudflare native
+sessions against production JobLander. Scan completed and discovery is active.
+A local transport audit records only operation paths/statuses; a local method
+spy records tool names and current surface, without account inputs.
+This is not a deployed CheckMyApp production Run.
+
+The live preview exposed a remaining presentation issue: native desktop proof
+includes the synthetic companion and Chrome chrome; a generic fixture-only
+frame also appeared in Run 1. Native structured observations remain distinct.
+Before release, constrain the public image to the observed product surface and
+verify it live. Do not weaken redaction to make the screenshot look better.
+
+Remaining: finish Run 2 and its generated replay; correct public screenshot
+framing; verify cancellation; obtain current-source review and current-head CI;
+then authorized release and an outside production check.
+
+### Prior live evidence and billing policy — 14:25 UTC
+
+- Home and dashboard accept official Store links, save separate extension
+  settings and offer an on-demand check in the existing design. Desktop and
+  390px owner flows were exercised, including encrypted test-account settings.
+- The full production Workflow implementation was submitted through the local
+  dashboard at 14:21 UTC. Run `cmtzwjnm0000h2u1399cdot4d`, public ID
+  `cmtzwjnm0000i2u13pip5zpo8`, Workflow instance
+  `2db55e3f-9ae0-4908-b756-36c79a15d35c`. It uses local product D1/R2 and real
+  native sessions in the isolated Cloudflare executor against production
+  JobLander. This is not a CheckMyApp production deployment.
+- Actual Cloudflare discovery completed earlier with five product journeys and
+  no paid sessions. The generated interview spec also passed against Cloudflare:
+  149-second history, three minutes, both live minute transitions, relevant
+  answer, timely confirmation and unchanged balance after Stop.
+- Cloudflare practice probe 8 ran for 147 UI-history seconds, used three minutes
+  (1589 → 1586), reached native Stop and a stable balance for 73.454 seconds.
+  Its DOM exposed a named candidate and Aria; the transcript adapter now reads
+  those observed rows and normalizes the candidate without retaining the name.
+- Combined probe 3 (`7229638d-4359-47bf-a455-04e25365141e`, 14:07–14:11 UTC)
+  produced both a relevant extension answer and a relevant coach follow-up.
+  Both sessions stopped after about 148 locally observed seconds, the practice
+  history showed 147 seconds, and balance 1583 → 1577 remained stable. Only the
+  practice history row appeared; independent extension rounding is inconclusive.
+- The PRD explicitly permits partial billing coverage when customer-visible
+  history lacks precision. Cleanup now requires positive application Stop plus
+  a stable post-Stop balance, independently of exact rounding. Missing minute
+  evidence creates a skipped accounting Step, a partial journey and the distinct
+  `extension_minute_accounting` capability gap. It cannot become a billing PASS
+  or a product defect. All three core scenarios still require fresh results,
+  at least two observed minutes per session and confirmed cleanup.
+- The combined adapter now collapses and drags the observed extension header
+  through ordinary pointer input before Start call, then restores Insights.
+  A trial click proves reachability before registering the practice meter.
+  Scenario-specific tool availability prevents unrelated session controls from
+  tainting a successful walk. Disposal errors are typed non-retryable failures.
+- Current isolated Cloudflare version:
+  `70bef50e-b4f9-4ff1-80c1-c2a79d16a0cb`. Required Prisma generation, web and
+  agent typechecks, lint and all 52 acceptance scripts passed on this source.
+  Lint retains three existing warnings. An independent Codex review is running.
+- GitHub CI passed on `588bc87`; Claude's action failed before inference and
+  produced no review. Two tool-free API review attempts were inspected; a valid
+  cleanup retry issue was corrected, but their contradictory findings do not
+  constitute a clean review. Current-source review and current-head CI remain.
+
+Evidence: `/tmp/checkmyapp-cloudflare-practice-8-cleanup.json`,
+`/tmp/checkmyapp-cloudflare-combined-3-cleanup.json`,
+`/tmp/checkmyapp-cloudflare-walk-cleanup.json`,
+`/tmp/checkmyapp-cloudflare-discovery-cleanup.json`, and
+`/tmp/checkmyapp-cloudflare-replay-cleanup.json`. These are internal local proof;
+public artifacts exclude unrelated history, documents, credentials and URLs.
+
+Remaining: complete the current UI-submitted Workflow and generated replay,
+resolve actual review findings, verify cancellation, finish current-head CI,
+then authorized production release and an outside production check.
 
 ### Previous checkpoint — 21:17 UTC
 
@@ -343,14 +406,14 @@ to this checkpoint; their older “not integrated yet” statements are supersed
 - [x] Read product rules, current execution path, PRD and meeting-lab runbook.
 - [x] Inspect the production form and preserve its existing visual language.
 - [x] Create an isolated worktree from origin/main (5725423).
-- [ ] Prove Store installation, installed identity, native popup, active tab,
+- [x] Prove Store installation, installed identity, native popup, active tab,
   Shadow DOM and synthetic audio in a disposable Linux profile.
-- [ ] Add Store links to the public submission and owner onboarding, with
+- [x] Add Store links to the public submission and owner onboarding, with
   separate extension identity, companion URL and bounded session permission.
 - [ ] Run discovery and journeys through the existing agent and verdict path.
-- [ ] Persist version, actions, stimulus, result and verified cleanup evidence.
+- [x] Persist version, actions, stimulus, result and verified cleanup evidence.
 - [ ] Verify three JobLander scenarios, negative cases and cancellation.
-- [x] Pass Prisma generation, both typechecks, lint and the acceptance registry (39 scripts).
+- [x] Pass Prisma generation, both typechecks, lint and the acceptance registry (52 scripts).
 - [ ] Commit to the feature branch and obtain current-head review and green CI.
 - [ ] Deploy and run the complete production flow against the Store build.
 

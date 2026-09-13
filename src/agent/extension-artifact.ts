@@ -21,6 +21,7 @@ export function extensionArtifactEvidence(value: unknown) {
         cleanup: pick(record(entry).cleanup, ["applicationStopObserved", "stopClickedAt", "confirmClickedAt", "stoppedAt"]),
       })),
       productResult: { ...pick(session.productResult, ["confirmed", "observedAt", "question", "answer"]),
+        ...(record(session.productResult).failure ? { failure: pick(record(session.productResult).failure, ["source", "text", "observedAt", "surface"]) } : {}),
         ...(record(session.productResult).practice ? { practice: pick(record(session.productResult).practice, ["confirmed", "observedAt", "answer"]) } : {}),
       },
       billing: { assessment: {

@@ -4,10 +4,22 @@ import { parseExtensionLink, readExtensionOptions } from "@/lib/extension-target
 
 export interface ExtensionFinalEvidence { disposed: boolean; session?: ExtensionSession }
 
+export function extensionProductFailureStep(final: ExtensionFinalEvidence) {
+  const failure = final.session?.productResult?.failure;
+  if (!final.disposed || !final.session || final.session.runtimeFailure || !extensionCleanupComplete(final.session) || failure?.source !== "visible-product-alert") return null;
+  return { label: "Session response", status: "broken" as const,
+    attempted: "Receive a response during the session.", observed: `The session displayed an error: ${failure.text}` };
+}
+
 export function extensionAccountingStep(final: ExtensionFinalEvidence) {
   const session = final.session;
   const accounting = session?.billing?.assessment;
-  if (!final.disposed || !session || !extensionCleanupComplete(session) || accounting?.status !== "confirmed" || !Number.isSafeInteger(accounting.observedMinutes) || !accounting.sessions?.length) return null;
+  if (!final.disposed || !session || !session.sessions?.length || !extensionCleanupComplete(session)) return null;
+  if (accounting?.status !== "confirmed" || !accounting.twoMinuteSteps || !Number.isSafeInteger(accounting.observedMinutes) || !accounting.sessions?.length) {
+    return { label: "Session minutes", status: "skipped" as const, unverifiedReason: "our_capability" as const, gapClass: "extension_minute_accounting",
+      attempted: "Check minute-by-minute charges and each session's final rounding.",
+      observed: "The sessions ended and the balance stayed unchanged for at least one minute after Stop. Minute-by-minute charges and final rounding were not confirmed." };
+  }
   const durations = accounting.sessions.map(row => `${row.durationSeconds} seconds`).join(" and ");
   return { label: "Session minutes", status: "ok" as const,
     attempted: "End the session and check its minute usage.",
@@ -29,7 +41,9 @@ export function extensionPhaseEvidence(phase: string, identity: ExtensionSession
     ownedSessions: final.session?.sessions?.length ?? null,
     runtimeFailure: final.session?.runtimeFailure?.kind ?? null,
     productResultConfirmed: final.session?.productResult?.confirmed === true,
+    productFailureObserved: Boolean(extensionProductFailureStep(final)),
     twoMinuteStepsObserved: final.session?.billing?.assessment?.twoMinuteSteps === true,
+    sustainedSessionsObserved: Boolean(final.session?.sessions?.length && final.session.sessions.every(s => s.startedAt && s.cleanup?.stopClickedAt && s.cleanup.stopClickedAt - s.startedAt >= 120_000)),
   };
 }
 
@@ -38,8 +52,9 @@ export function extensionCoverageGap(run: ExtensionTarget, raw: string | null | 
   if (!run.testEmail || !run.testPasswordEnc || !readExtensionOptions(run.extensionConfig).allowSessions) return "missing_access";
   try {
     const evidence = JSON.parse(raw ?? "{}") as { phases?: Record<string, ReturnType<typeof extensionPhaseEvidence>> };
-    const results = Object.entries(evidence.phases ?? {}).filter(([phase, result]) => phase.startsWith("walk-") && result.productResultConfirmed && result.cleanupComplete).map(([, result]) => result);
-    if (["interview", "practice", "practice-extension"].every(scenario => results.some(result => result.scenario === scenario && result.ownedSessions === (scenario === "practice-extension" ? 2 : 1)))) return null;
+    const results = Object.entries(evidence.phases ?? {}).filter(([phase, result]) => phase.startsWith("walk-") && result.cleanupComplete).map(([, result]) => result);
+    if (["interview", "practice", "practice-extension"].every(scenario => results.some(result => result.scenario === scenario &&
+      (result.productFailureObserved || result.productResultConfirmed && result.sustainedSessionsObserved && result.ownedSessions === (scenario === "practice-extension" ? 2 : 1))))) return null;
   } catch { /* Incomplete provenance cannot establish the core flow. */ }
   return "our_capability";
 }

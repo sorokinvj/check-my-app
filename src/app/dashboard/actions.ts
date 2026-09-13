@@ -4,6 +4,8 @@ import { startSavedApp } from "@/lib/start-saved-app";
 import { extensionOptionsFromForm } from "@/lib/validation";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { headers } from "next/headers";
+import { isSelfCheckRequest, selfCheckRedirectPath } from "@/lib/self-check";
 import { requireUser } from "@/lib/auth";
 import { credentialFingerprint, encryptSecret } from "@/lib/crypto";
 import { generateApiKey, hashApiKey } from "@/lib/apiKeys";
@@ -213,6 +215,7 @@ export async function deleteApp(
 }
 
 export async function runSavedApp(appId: string, _previous: { error: string } | null) {
+  if (isSelfCheckRequest(await headers())) redirect(selfCheckRedirectPath(`/dashboard/${appId}`));
   const { user, db } = await requireUser();
   const result = await startSavedApp(db, { id: user.id, plan: user.plan as UserPlan }, appId);
   if ("error" in result) return result;

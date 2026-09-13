@@ -38,9 +38,14 @@ export type GapClass =
   | "undriven_control"
   | "extension_runtime"
   | "extension_session_cleanup"
+  | "extension_minute_accounting"
   | "unclassified";
 
 export const GAP_CLASSES: Record<GapClass, { label: string; why: string }> = {
+  extension_minute_accounting: {
+    label: "Checker cannot establish each extension session's minute usage",
+    why: "A stable balance after Stop proves cessation, but does not establish minute-by-minute charges or independently rounded session totals. Missing UI evidence must remain a coverage gap, never a billing pass or a customer defect.",
+  },
   extension_runtime: {
     label: "Checker cannot complete an installed Chrome extension check",
     why: "The Store listing cannot establish whether the installed extension works. Installation identity, its native controls and target tab must remain available throughout the check.",

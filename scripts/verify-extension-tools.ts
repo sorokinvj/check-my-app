@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { ExtensionBrowser } from "../src/agent/extension-browser";
 import { ExtensionRuntimeError } from "../src/agent/extension-error";
-import { executeTool, type ToolEnv } from "../src/agent/tools";
+import { executeTool, browserToolsFor, type ToolEnv } from "../src/agent/tools";
 
 async function main() {
 const extension = Object.assign(Object.create(ExtensionBrowser.prototype), {
@@ -34,6 +34,32 @@ Object.assign(extension, { runner: { fetch: async () => new Response("gone", { s
 await assert.rejects(executeTool(env, "extension_read", {}), ExtensionRuntimeError);
 Object.assign(extension, { runner: { fetch: async () => { throw new Error("transport gone"); } } });
 await assert.rejects(executeTool(env, "extension_read", {}), ExtensionRuntimeError);
+Object.assign(extension, { browser: { isConnected: () => true }, popup: true,
+  nodes: [{ ref: "native-start", role: "check box", name: "Show JobLander Insights", editable: false, protected: false }],
+  identity: { extensionId: "hafhjepjihcimcljkdphpinannbdmnhf", scenario: "interview", allowSessions: true },
+});
+assert.match(await executeTool(env, "extension_click", { ref: "native-start" }), /Use extension_start_session/);
+const reported = { status: "ok", observed: "Interview assistance is active." };
+await extension.tool(env, "report_step", reported);
+assert.equal(reported.status, "ok", "Routing to the available Start action does not taint a later confirmed step");
+const names = () => browserToolsFor(env).map(t => t.name);
+assert.ok(names().includes("extension_start_session"));
+assert.ok(!names().includes("extension_prepare_practice"));
+assert.match(await executeTool(env, "extension_prepare_practice", {}), /outside the current scenario/);
+Object.assign(extension.identity, { scenario: "practice" });
+assert.ok(names().includes("extension_start_practice"));
+assert.ok(!names().includes("extension_start_session"));
+Object.assign(extension.identity, { allowSessions: false });
+assert.ok(!names().some(name => ["extension_start_session", "extension_prepare_practice", "extension_start_practice"].includes(name)));
+const unfinished = Object.assign(Object.create(ExtensionBrowser.prototype), { browser: { close: async () => {} }, runner: { expire: async () => {}, finalEvidence: async () => ({ disposed: true, session: { sessions: [{ state: "unverified" }] } }) } }) as ExtensionBrowser;
+await assert.rejects(unfinished.finish(), ExtensionRuntimeError, "Unverified paid cleanup aborts the workflow without retrying the spent attempt");
+let rejected = 0, accountCalls = 0;
+Object.assign(extension, { popup: false, browser: { isConnected: () => true }, runner: { fetch: async () => { accountCalls++; return Response.json({ credentialRejected: true }); } } });
+Object.assign(env, { testEmail: 'fixture@example.test', testPassword: 'fixture-password', credentials: { rejected: false }, onCredentialRejected: async () => { rejected++; } });
+assert.match(await executeTool(env, 'extension_account_preflight', {}), /credentials were rejected/);
+assert.match(await executeTool(env, 'extension_account_preflight', {}), /Valid test-account access/);
+assert.equal(rejected, 1);
+assert.equal(accountCalls, 1, 'Account rejection reaches the run-wide gate before another native call');
 console.log("Extension tools: product-only observations, observed links and fatal runtime propagation pass");
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

@@ -26,6 +26,7 @@ import { isSelfCheckRedirect, isSelfUrl, selfCheckRefusalIn } from "./self-hosts
 import type { GapClass } from "./gap-classes";
 import type { ExtensionBrowser } from "./extension-browser";
 import { ExtensionRuntimeError } from "./extension-error";
+import { extensionToolAllowed } from "./extension-contract";
 
 export interface ToolEnv {
   page: Page;
@@ -461,7 +462,7 @@ const EXTENSION_TOOLS: Anthropic.Tool[] = [
 
 export function browserToolsFor(env: Pick<ToolEnv, "visionTriggers" | "extension">): Anthropic.Tool[] {
   const base = env.visionTriggers ? BROWSER_TOOLS_VISION_ON_DEMAND : BROWSER_TOOLS;
-  return env.extension ? [...base, ...EXTENSION_TOOLS] : base;
+  return env.extension ? [...base, ...EXTENSION_TOOLS.filter(tool => extensionToolAllowed(env.extension!.identity, tool.name))] : base;
 }
 
 // ─── Executor ────────────────────────────────────────────────────────────────

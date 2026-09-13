@@ -195,7 +195,7 @@ export function RunLive({
       </div>
 
       <p className="text-center font-mono text-[13px] text-fg-faint">
-        Close this tab — we&apos;ll email {notifyEmail ?? "you"} when done.
+        {notifyEmail ? <>Close this tab — we&apos;ll email {notifyEmail} when done.</> : "You can return to this page to see the result."}
       </p>
     </div>
   );

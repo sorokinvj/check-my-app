@@ -2,7 +2,7 @@ import type { Browser, Page, Locator } from "@cloudflare/playwright";
 import type { AgentEnv } from "./env";
 import type { ToolEnv } from "./tools";
 import { prepareAgentPage, scrubSecrets, normalizeFillValue, UNDRIVEN_INSTRUCTION } from "./tools";
-import { assertExtensionIdentity, extensionCleanupComplete, gateExtensionStep, type ExtensionIdentity, type ExtensionRunnerInput, type ExtensionSession } from "./extension-contract";
+import { assertExtensionIdentity, extensionCleanupComplete, extensionToolAllowed, gateExtensionStep, type ExtensionIdentity, type ExtensionRunnerInput, type ExtensionSession } from "./extension-contract";
 import type { ExtensionRunner } from "./extension-runner";
 import { ExtensionRuntimeError } from "./extension-error";
 import type { ExtensionFinalEvidence } from "./extension-evidence";
@@ -99,6 +99,7 @@ export class ExtensionBrowser {
       }
       return undefined;
     }
+    if (!extensionToolAllowed(this.identity, name)) return "This action is outside the current scenario. Continue with the tools available for this journey.";
     try {
       let result: unknown;
       if (name === "extension_open") {
@@ -126,6 +127,14 @@ export class ExtensionBrowser {
       else if (name === "extension_click" || name === "extension_fill") {
         const node = this.nodes.find(n => n.ref === input.ref);
         if (!node || !this.popup) throw new Error("Read the native popup to obtain a current control reference");
+        // A request for the known Start control has an available owned action.
+        // Routing it there is not a failed product interaction: carrying that
+        // refusal into report_step marked a later confirmed Start as skipped.
+        if (name === "extension_click" && this.identity.extensionId === "hafhjepjihcimcljkdphpinannbdmnhf" && node.name === "Show JobLander Insights") {
+          return extensionToolAllowed(this.identity, "extension_start_session")
+            ? "Use extension_start_session to start interview assistance with its Stop limit."
+            : "This scenario does not include starting interview assistance.";
+        }
         if (name === "extension_click" && env.credentials?.rejected && /log.?in|sign.?in/i.test(node.name)) return this.missingAccess("The saved credentials were already rejected. This step requires missing_access.");
         let value = normalizeFillValue(String(input.value ?? ""));
         const recordedValue = scrubSecrets(env, value);
@@ -156,6 +165,11 @@ export class ExtensionBrowser {
         if (this.popup) return "Close the native popup before opening the account balance.";
         if (!env.testEmail || !env.testPassword || env.credentials?.rejected) return this.missingAccess("Valid test-account access is required for the balance and session history.");
         result = await this.call("/account/preflight", { email: env.testEmail, password: env.testPassword });
+        if ((result as { credentialRejected?: boolean }).credentialRejected) {
+          if (env.credentials) env.credentials.rejected = true;
+          await env.onCredentialRejected?.("account sign-in: explicit credential rejection");
+          return this.missingAccess("The saved test account credentials were rejected. Account access is required to continue.");
+        }
         this.rememberProductRead(result);
         const practice = (result as { practice?: unknown }).practice;
         if (practice) this.rememberProductRead(practice);
@@ -189,7 +203,10 @@ export class ExtensionBrowser {
         result = { started: true, session: "Practice is active with the microphone on." };
       } else if (name === "extension_observe_session") {
         result = await this.call("/session/observe", {});
-        if (this.replayActions.at(-1)?.kind !== "observe") this.replayActions.push({ kind: "observe" });
+        const terminal = (result as { complete?: boolean }).complete === true;
+        const previous = this.replayActions.at(-1);
+        if (previous?.kind === "observe") previous.terminal ||= terminal;
+        else this.replayActions.push({ kind: "observe", terminal });
         this.rememberProductRead({ surface: "extension-panel", ...result as object });
         result = this.sessionReading(result);
       } else if (name === "extension_stop_sessions") {
@@ -218,7 +235,7 @@ export class ExtensionBrowser {
     return { sessions: view.sessions.map(s => `${s.name}: ${s.applicationStopObserved ? "ended with confirmation" : s.state}${s.elapsedSeconds === undefined ? "" : ` after ${s.elapsedSeconds} seconds`}.`),
       answers: view.questionAndAnswers,
       practiceConversation: view.practiceConversation ?? [],
-      minutes: view.minuteAccounting === "confirmed" ? `${view.minutesUsed} minutes used. The balance remained unchanged after the session ended.` : "The account balance follow-up is still pending. Use extension_observe_session again.",
+      minutes: view.minuteAccounting === "confirmed" ? `${view.minutesUsed} minutes used. The balance remained unchanged after the session ended.` : view.complete ? "Minute-by-minute charges and final rounding were not confirmed. Report this accounting assertion as skipped; the final accounting step records its coverage gap." : "The account balance follow-up is still pending. Use extension_observe_session again.",
       complete: view.complete };
   }
 
@@ -268,7 +285,8 @@ export class ExtensionBrowser {
   async exportSpec(title: string): Promise<string> {
     await this.finish();
     const final = await this.finalEvidence();
-    return extensionReplaySpec(title, this.identity, this.replayActions, final.session?.productResult?.confirmed === true);
+    return extensionReplaySpec(title, this.identity, this.replayActions, final.session?.productResult?.confirmed === true,
+      final.session?.billing?.assessment?.status === "confirmed" && final.session.billing.assessment.twoMinuteSteps === true);
   }
 
   async guardClick(target: Locator): Promise<string | null> {
@@ -278,8 +296,9 @@ export class ExtensionBrowser {
     // CSS selector cannot bypass the session ledger by omitting its name.
     const { label, practiceControl } = await target.evaluate(el => {
       const control = el.closest("button,label,[role=button],[role=checkbox]") ?? el;
-      return { label: [control.textContent, control.getAttribute("aria-label"), control.getAttribute("title")].filter(Boolean).join(" "),
-        practiceControl: control.getRootNode() === document && (control.getAttribute("role") === "checkbox" || Boolean(control.querySelector("svg.lucide-x"))),
+      const label = [control.textContent, control.getAttribute("aria-label"), control.getAttribute("title")].filter(Boolean).join(" ").trim();
+      return { label,
+        practiceControl: control.getRootNode() === document && (control.getAttribute("role") === "checkbox" || control.matches("input[type=checkbox]") || control.tagName === "BUTTON" && !label),
       };
     });
     const onPractice = this.identity.targetUrl.startsWith("https://joblander.app/") && /\/practice\/?$/.test(new URL(this.identity.targetUrl).pathname);
@@ -314,7 +333,7 @@ export class ExtensionBrowser {
     await this.browser?.close().catch(() => {});
     await this.runner.expire();
     const final = await this.runner.finalEvidence();
-    if (!final.disposed || !final.session || !extensionCleanupComplete(final.session)) throw new Error("internal: extension session cleanup is unverified; no verdict may be published");
+    if (!final.disposed || !final.session || !extensionCleanupComplete(final.session)) throw new ExtensionRuntimeError("The owned extension session cleanup is unverified; no verdict may be published");
     if (final.session.runtimeFailure) throw new ExtensionRuntimeError("The owned extension browser ended before cleanup; no verdict may be published");
   }
 }

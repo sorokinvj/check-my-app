@@ -3,20 +3,21 @@ import type { RecordedAction } from "./tools";
 
 export interface NativeReplayControl { role: string; name: string; editable: boolean; protected: boolean }
 export type ExtensionReplayAction =
-  | { kind: "open" | "close" | "audio" | "account" | "start" | "observe" | "stop" | "practice-prepare" | "practice-start" }
+  | { kind: "open" | "close" | "audio" | "account" | "start" | "stop" | "practice-prepare" | "practice-start" }
+  | { kind: "observe"; terminal: boolean }
   | { kind: "native-click"; control: NativeReplayControl }
   | { kind: "native-fill"; control: NativeReplayControl; value: string }
   | { kind: "native-expect"; names: string[] }
   | { kind: "page"; action: RecordedAction };
 
-export function extensionReplaySpec(title: string, identity: ExtensionSession, actions: ExtensionReplayAction[], coreResult: boolean): string {
+export function extensionReplaySpec(title: string, identity: ExtensionSession, actions: ExtensionReplayAction[], coreResult: boolean, accountingConfirmed = false): string {
   if (!actions.length) throw new Error("No observed extension actions to export");
   const plan = { title, identity: {
     extensionId: identity.extensionId, packageVersion: identity.packageVersion,
     installedVersion: identity.installedVersion, artifactSha256: identity.artifactSha256,
   }, targetUrl: identity.targetUrl === "http://127.0.0.1:9091/" ? "fixture:interview" : identity.targetUrl,
   scenario: identity.scenario ?? "interview", stimulusMode: identity.stimulus?.mode ?? "interview",
-  maxSessionSeconds: identity.maxSessionSeconds ?? 180, coreResult, actions };
+  maxSessionSeconds: identity.maxSessionSeconds ?? 180, coreResult, accountingConfirmed, actions };
   return `// Replays the observed native extension surfaces in a fresh isolated executor.
 // Requires CMA_EXTENSION_RUNNER_URL and CMA_EXTENSION_RUNNER_TOKEN for the native
 // executor, plus TEST_EMAIL / TEST_PASSWORD when the recorded journey signs in.
@@ -110,9 +111,11 @@ test(plan.title, async ({ request }) => {
       } else if (step.kind === 'observe') {
         let result;
         const deadline = Date.now() + (plan.maxSessionSeconds + 150) * 1000;
-        do { result = await call('/session/observe', {}); } while (!result.complete && Date.now() < deadline);
-        expect(result.complete).toBe(true);
-        expect(result.minuteAccounting).toBe('confirmed');
+        do { result = await call('/session/observe', {}); } while (step.terminal && !result.complete && Date.now() < deadline);
+        if (step.terminal) {
+          expect(result.complete).toBe(true);
+          if (plan.accountingConfirmed) expect(result.minuteAccounting).toBe('confirmed');
+        }
       } else if (step.kind === 'stop') { await disconnect(); await call('/popup/close', {}); await call('/session/stop', {}); }
       else if (step.kind === 'page') {
         const page = await targetPage(), action = step.action;

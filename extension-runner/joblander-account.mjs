@@ -14,7 +14,24 @@ export async function signInAccount(page, email, password) {
   await page.getByPlaceholder('Email address', { exact: true }).fill(email);
   await page.getByPlaceholder('Password', { exact: true }).fill(password);
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
-  await page.getByText('Minutes', { exact: true }).waitFor({ state: 'visible', timeout: 20_000 });
+  await page.waitForFunction(() => /(?:^|\n)Minutes\s*(?:\n|$)/.test(document.body.innerText)
+    || /invalid (?:login|credentials|password|email)|incorrect (?:email|password)|wrong password|too many (?:attempts|requests)|auth\/(?:invalid-credential|wrong-password|user-not-found)/i.test(document.body.innerText), undefined, { timeout: 20_000 });
+  if (credentialRejection(await page.locator('body').innerText())) return { credentialRejected: true };
+  await page.getByText('Minutes', { exact: true }).waitFor({ state: 'visible', timeout: 1000 });
+  return { signedIn: true };
+}
+
+export function credentialRejection(text) {
+  return /invalid (?:login|credentials|password|email)|incorrect (?:email|password)|wrong password|too many (?:attempts|requests)|auth\/(?:invalid-credential|wrong-password|user-not-found)/i.test(text);
+}
+
+export async function signInAccountOnce(state, page, email, password) {
+  if (state.accountCredentialsRejected) return { credentialRejected: true };
+  if (state.accountSignInAttempted) throw new Error('The account sign-in attempt is already consumed');
+  state.accountSignInAttempted = true;
+  const result = await signInAccount(page, email, password);
+  if (result.credentialRejected) state.accountCredentialsRejected = true;
+  return result;
 }
 
 export async function readAccountBalance(page, refresh = true) {

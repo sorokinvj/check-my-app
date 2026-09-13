@@ -145,7 +145,7 @@ export default async function VerdictPage({
   // server would honour it, computed with the same helpers the routes use
   // (rules in src/lib/viewer-capabilities.ts).
   const caps = viewerCapabilities({
-    run: { ownerId: run.ownerId, hasWatch, ephemeral: run.ephemeral },
+    run: { ownerId: run.ownerId, hasWatch, ephemeral: run.ephemeral, targetKind: run.targetKind },
     viewer,
     viewerApp,
     canMutate: await canMutateOwned(prisma, run.ownerId),

@@ -1,11 +1,15 @@
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 export function assessUiBilling({ baseline, stopped, later, sessions, samples = [] }) {
-  const inconclusive = reason => ({ status: 'inconclusive', cleanupConfirmed: false, reason });
+  let cessation = {};
+  const inconclusive = reason => ({ status: 'inconclusive', cleanupConfirmed: false, ...cessation, reason });
   if (!baseline || !stopped || !later || [baseline, stopped, later].some(s => s.source !== 'account-ui' || !Number.isSafeInteger(s.balance) || !Array.isArray(s.history))) return inconclusive('The displayed balance or history is missing');
   if (later.at - stopped.at < 65_000) return inconclusive('The post-Stop observation is too short');
   if (later.balance !== stopped.balance) return inconclusive('The displayed balance changed after Stop');
   if (!sessions.length || sessions.some(s => !s.startedAt || !s.cleanup?.applicationStopObserved)) return inconclusive('Owned application Stop is missing');
+  // Stop and a stable balance establish cessation independently of whether
+  // the product exposes enough history to verify each meter's rounding.
+  cessation = { cleanupConfirmed: true, observedMinutes: baseline.balance - stopped.balance, cessationMs: later.at - stopped.at };
   const previous = new Set(baseline.history?.map(h => h.id) ?? []);
   const newRows = (later.history ?? []).filter(h => !previous.has(h.id));
   if (newRows.length !== sessions.length) return inconclusive('The new history rows cannot be attributed to the owned sessions');

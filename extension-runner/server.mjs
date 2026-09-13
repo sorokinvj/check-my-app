@@ -13,11 +13,11 @@ import { NativeSurface } from './surface.mjs';
 import { SessionObservation, readExtensionPanel } from './observation.mjs';
 import { childIsRunning, ownedProtocolAction, disconnectInspectionClients } from './health.mjs';
 import { stimulusFor, microphoneMatchesStimulus } from './stimulus.mjs';
-import { signInAccount, readAccountBalance, readAccountSnapshot } from './joblander-account.mjs';
+import { signInAccountOnce, readAccountBalance, readAccountSnapshot } from './joblander-account.mjs';
 import { BillingObservation } from './billing.mjs';
 import { assessExtensionOutput } from './result.mjs';
 import { sessionView } from './session-view.mjs';
-import { preparePractice, inspectPractice, startPractice, stopPractice, readPractice, practiceControls, enablePracticeMicrophone, observePracticeRequests, PracticeStartRejected } from './joblander-practice.mjs';
+import { preparePractice, inspectPractice, startPractice, stopPractice, readPractice, practiceControls, enablePracticeMicrophone, observePracticeRequests, PracticeStartRejected, preparePracticeStart, restorePracticeInsights } from './joblander-practice.mjs';
 
 const exec = promisify(execFile);
 const token = process.env.RUNNER_CONTROL_TOKEN;
@@ -298,6 +298,7 @@ async function finalizeBilling() {
 
 async function practicePreflight() {
   if (!session || closed || closing || session.popupTargetId || ledger.snapshot().length || !session.accountBaseline) throw new Error('Practice preparation requires a fresh account and no active session');
+  if (!['practice', 'practice-extension'].includes(session.scenario)) throw new Error('This scenario does not include practice');
   if (session.extensionId !== 'hafhjepjihcimcljkdphpinannbdmnhf' || new URL(session.targetUrl).origin !== 'https://joblander.app') throw new Error('Practice requires its own product tab');
   const browser = await chromium.connectOverCDP(upstream);
   try {
@@ -322,13 +323,14 @@ async function startPracticeSession() {
       await browser.close();
     }
   };
-  ledger.register({ id: 'ai-practice', targetId: session.targetTabId, maxSeconds: session.maxSessionSeconds, stop });
   observationBrowser ??= await chromium.connectOverCDP(upstream);
   const page = await pageForTarget(observationBrowser.contexts()[0], cdp, session.targetTabId);
   try {
     session.practiceRequests = [];
     detachPracticeRequests = observePracticeRequests(page, session.practiceRequests);
     await cdp.send('Target.activateTarget', { targetId: session.targetTabId });
+    session.practiceLayout = await preparePracticeStart(page, session.scenario === 'practice-extension');
+    ledger.register({ id: 'ai-practice', targetId: session.targetTabId, maxSeconds: session.maxSessionSeconds, stop });
     session.practiceStart = await startPractice(page);
     ledger.started('ai-practice');
     if (!billing) {
@@ -341,6 +343,7 @@ async function startPracticeSession() {
       baseline: session.practicePreflight.text, read: async () => native.redact(await readPractice(page)) });
     practiceObservation.start();
     session.practiceMicrophone = await enablePracticeMicrophone(page);
+    if (session.scenario === 'practice-extension') session.practiceLayout = { ...session.practiceLayout, ...await restorePracticeInsights(page) };
     return { started: true, session: 'Practice', sessions: ledger.snapshot() };
   } catch (error) {
     session.practiceFailure = { message: error.message, controls: await practiceControls(page).catch(() => []), page: await readPractice(page).catch(() => null) };
@@ -352,6 +355,8 @@ async function startPracticeSession() {
 async function accountPreflight(input) {
   if (!session || closed || closing || ledger.snapshot().length || session.popupTargetId) throw new Error('Account preflight requires a fresh attempt with its popup closed');
   if (session.accountTabId && session.accountBaseline) return { balance: session.accountBaseline.balance, source: 'account-ui', historyObserved: true, practice: session.practiceDiscovery };
+  if (session.accountCredentialsRejected) return { credentialRejected: true };
+  if (session.accountSignInAttempted) throw new Error('The account sign-in attempt is already consumed');
   if (session.extensionId !== 'hafhjepjihcimcljkdphpinannbdmnhf') throw new Error('Account verification is unavailable for this extension');
   if (typeof input.email !== 'string' || typeof input.password !== 'string' || !input.email || !input.password) throw new Error('Test-account access is required');
   native.secrets.set(input.email, '{{TEST_EMAIL}}'); native.secrets.set(input.password, '{{TEST_PASSWORD}}');
@@ -361,7 +366,8 @@ async function accountPreflight(input) {
     const channel = await browser.contexts()[0].newCDPSession(page);
     session.accountTabId = (await channel.send('Target.getTargetInfo')).targetInfo.targetId;
     await channel.detach();
-    await signInAccount(page, input.email, input.password);
+    const access = await signInAccountOnce(session, page, input.email, input.password);
+    if (access.credentialRejected) return access;
     session.accountBaseline = await readAccountSnapshot(page);
     const practicePage = await browser.contexts()[0].newPage();
     try { session.practiceDiscovery = await inspectPractice(practicePage); }

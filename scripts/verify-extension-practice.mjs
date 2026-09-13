@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { practiceStopControl, practiceMutedMicrophone, stopPractice, observePracticeRequests } from '../extension-runner/joblander-practice.mjs';
+import { practiceStopControl, practiceMutedMicrophone, stopPractice, observePracticeRequests, normalizePracticeUtterances, preparePracticeStart } from '../extension-runner/joblander-practice.mjs';
 import { EventEmitter } from 'node:events';
 
 const stop = { index: 5, ownDocument: true, visible: true, disabled: false, text: '', label: '', icon: '<svg class="lucide lucide-x"/>', color: 'rgba(0, 0, 0, 0)', width: 24, height: 24 };
@@ -14,6 +14,8 @@ const microphone = { ...stop, index: 2, icon: '<svg><path d="M12.227 11.52"/></s
 assert.equal(practiceMutedMicrophone([microphone, stop]).index, 2);
 assert.throws(() => practiceMutedMicrophone([microphone, { ...microphone, index: 3 }]), /ambiguous/);
 assert.throws(() => practiceMutedMicrophone([{ ...microphone, ownDocument: false }]), /unavailable/);
+assert.deepEqual(normalizePracticeUtterances([{ speaker: 'Casey QA', text: 'In project Maple I improved database queries.' }, { speaker: 'Aria', text: 'Which queries did you optimize?' }]), [{ speaker: 'You', text: 'In project Maple I improved database queries.' }, { speaker: 'Aria', text: 'Which queries did you optimize?' }]);
+assert.throws(() => normalizePracticeUtterances([{ speaker: 'Casey', text: 'One' }, { speaker: 'Alex', text: 'Two' }]), /ambiguous/);
 let clicked = false;
 const page = {
   url: () => 'https://joblander.app/practice',
@@ -37,4 +39,9 @@ assert.doesNotMatch(JSON.stringify(requests), /private|value/);
 detach();
 events.emit('requestfailed', request);
 assert.equal(requests.length, 2, 'Our later browser disposal is outside the product request observation');
+let trials = 0;
+const readyPage = { getByRole: () => ({ click: async input => { assert.equal(input.trial, true, 'Readiness must never start a call'); trials++; } }) };
+assert.equal((await preparePracticeStart(readyPage, false)).startReachable, true);
+assert.equal(trials, 1);
+await assert.rejects(preparePracticeStart({ getByRole: () => ({ click: async input => { assert.equal(input.trial, true); throw new Error('Overlay intercepts Start'); } }) }, false), /Overlay/);
 console.log('Practice lifecycle rejects ambiguous controls, changed tabs and unobserved Stop');

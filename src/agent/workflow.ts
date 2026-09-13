@@ -35,7 +35,7 @@ import { discoveryMemoryEnabled, makeAgentEnv, putText, type AgentBindings, type
 import { makeLlm, type UsageTotals } from "./llm";
 import { launchAgentBrowser, closeAgentBrowser, newAgentContext, surfaceScan } from "./browser";
 import { extensionBrowserFor } from "./extension-browser";
-import { isExtensionTarget } from "./extension-contract";
+import { extensionStepConfig, isExtensionTarget } from "./extension-contract";
 import { ExtensionRuntimeError } from "./extension-error";
 import { extensionCoverageGap } from "./extension-evidence";
 import { LlmBudgetError } from "./core";
@@ -465,7 +465,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
       });
 
       // Phase 2 — Surface scan (deterministic).
-      const scan = await step.do("surface_scan", async () => {
+      const scan = await step.do("surface_scan", extensionStepConfig(isExtension), async () => {
         await transition(env, runId, "surface_scan", { icon: "info", text: `Loading ${run.targetUrl}` });
         const browser = await launchAgentBrowser(env, { run, phase: "scan" }).catch(rethrowBudgetNonRetryable);
         try {
@@ -516,7 +516,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
           });
         });
       }
-      const discovery = plan.taken ? null : await step.do("discovery", async () => {
+      const discovery = plan.taken ? null : await step.do("discovery", extensionStepConfig(isExtension), async () => {
         // CHE-133: a watched app was mapped on its last full check; hand that
         // map to discovery so it confirms rather than redraws. Same swallow
         // contract as the other cheap rungs — a failure to load memory costs
@@ -612,7 +612,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
 
       let walkCost = 0;
       for (const { order, proposed } of walkList) {
-        const jcost = await step.do(`walk-${order}`, async () => {
+        const jcost = await step.do(`walk-${order}`, extensionStepConfig(isExtension), async () => {
           const browser = await launchAgentBrowser(env, { run, phase: `walk-${order}`, expected: scan.extensionIdentity ?? undefined, scenario: proposed.extensionScenario }).catch(rethrowBudgetNonRetryable);
           try {
             const r = await walkOneJourney({

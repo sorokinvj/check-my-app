@@ -129,18 +129,23 @@ export async function createRecheckRun(
     remaining = gate.remaining;
   }
 
+  // On-demand runs discard their password after completion. Only the same
+  // owner's saved extension may supply credentials for the next explicit run.
+  const saved = prev.targetKind === "extension" && prev.appId && prev.ownerId
+    ? await prisma.app.findFirst({ where: { id: prev.appId, ownerId: prev.ownerId, targetKind: "extension", extensionId: prev.extensionId },
+      select: { testEmail: true, testPasswordEnc: true, extensionConfig: true, userNotes: true } }) : null;
   const run = await prisma.run.create({
     data: {
       runNumber: await nextRunNumber(prisma),
       targetUrl: prev.targetUrl,
       targetKind: prev.targetKind,
       extensionId: prev.extensionId,
-      extensionConfig: prev.extensionConfig,
+      extensionConfig: saved?.extensionConfig ?? prev.extensionConfig,
       appSlug: prev.appSlug,
-      testEmail: prev.testEmail,
-      testPasswordEnc: prev.testPasswordEnc,
+      testEmail: saved ? saved.testEmail : prev.testEmail,
+      testPasswordEnc: saved ? saved.testPasswordEnc : prev.testPasswordEnc,
       scopeHints: prev.scopeHints,
-      userNotes: prev.userNotes,
+      userNotes: saved ? saved.userNotes : prev.userNotes,
       focusAreas: prev.focusAreas,
       notifyEmail: prev.notifyEmail,
       watchId: prev.watchId,

@@ -64,6 +64,10 @@ export async function readExtensionPanel(page) {
       surface: 'extension-shadow-panel',
       text: panel?.innerText?.slice(0, 12_000) ?? '',
       panelPresent: Boolean(panel && panel.getBoundingClientRect().width),
+      alerts: Array.from(panel?.querySelectorAll('[role="alert"]') ?? []).filter(el => {
+        const box = el.getBoundingClientRect();
+        return box.width > 0 && box.height > 0 && getComputedStyle(el).visibility !== 'hidden';
+      }).map(el => el.innerText?.trim() ?? '').filter(Boolean),
       results,
       ...(location.origin === 'http://127.0.0.1:9091' && audio ? { tabStimulus: { playing: !audio.paused, currentTime: audio.currentTime, readyState: audio.readyState } } : {}),
     };

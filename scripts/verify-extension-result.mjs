@@ -23,5 +23,18 @@ assert.equal(assessPracticeOutput({ ...practice, practiceMicrophone: {} }).confi
 assert.equal(assessPracticeOutput({ ...practice, practiceObservation: { samples: [coach] } }).confirmed, false, 'A greeting or response without candidate input cannot establish microphone delivery');
 assert.equal(assessPracticeOutput({ ...practice, practiceObservation: { samples: [coach, { ...candidate, at: 2500 }] } }).confirmed, false, 'The response must follow the candidate');
 assert.equal(assessPracticeOutput({ ...practice, practiceObservation: { samples: [candidate, { ...coach, at: 4000 }] } }).confirmed, false);
+assert.equal(assessPracticeOutput({ ...practice, practiceObservation: { samples: [candidate, { ...coach, utterances: [{ speaker: 'Aria', text: 'What was the most challenging part of optimizing those queries?' }] }] } }).confirmed, true);
+assert.equal(assessPracticeOutput({ ...practice, practiceObservation: { samples: [candidate, { ...coach, utterances: [{ speaker: 'Aria', text: 'Hello and welcome! I am happy to help you get started today.' }] }] } }).confirmed, false);
 assert.equal(assessExtensionOutput({ ...session, ...practice, sessions: [...session.sessions, ...practice.sessions] }).confirmed, true);
 assert.equal(assessExtensionOutput({ ...session, ...practice, observation: { samples: [] }, sessions: [...session.sessions, ...practice.sessions] }).confirmed, false, 'A combined scenario requires both products to answer');
+
+const oldQuestionThenCandidate = { ...coach, at: 1800, utterances: [...coach.utterances, ...candidate.utterances] };
+assert.equal(assessPracticeOutput({ ...practice, practiceObservation: { samples: [oldQuestionThenCandidate, { ...oldQuestionThenCandidate, at: 2500 }] } }).confirmed, false, 'A repeated cumulative transcript cannot turn the coach question into a new reply');
+const newReply = { speaker: 'Aria', text: 'Which indexes did you add to improve those database queries, and how did you measure latency?' };
+assert.equal(assessPracticeOutput({ ...practice, practiceObservation: { samples: [oldQuestionThenCandidate, { ...oldQuestionThenCandidate, at: 2500, utterances: [...oldQuestionThenCandidate.utterances, newReply] }] } }).confirmed, true);
+
+const explicitFailure = { ...session, audioPreflight: { passed: true }, observation: { samples: [{ ...sample, results: [], alerts: ['The response service is unavailable.'] }] } };
+assert.equal(assessExtensionOutput(explicitFailure).failure?.source, 'visible-product-alert');
+assert.equal(assessExtensionOutput({ ...explicitFailure, audioPreflight: { passed: false } }).failure, undefined);
+assert.equal(assessExtensionOutput({ ...explicitFailure, runtimeFailure: { kind: 'browser-exited' } }).failure, undefined);
+assert.equal(assessExtensionOutput({ ...explicitFailure, observation: { samples: [{ ...sample, alerts: ['Too many requests: error 429'] }] } }).failure, undefined);
