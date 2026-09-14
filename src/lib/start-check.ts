@@ -56,9 +56,27 @@ export async function startCheck(
 ): Promise<StartedCheck> {
   const { input } = opts;
   const appSlug = appSlugFromUrl(input.url);
+  // CHE-234: a check an owner starts by hand against an app they already own is
+  // a check OF THAT APP — the dashboard's "check now", the API, the app-review
+  // skill. Until this, only the scheduler set `appId`, so those runs walked the
+  // app's journeys and updated none of their history (30 runs of it by the time
+  // it was noticed). Attaching them also puts their cost inside the app's daily
+  // agent budget (scheduler.ts), which is the honest reading: it is the same
+  // app's spend, whoever pressed the button. An ephemeral run stays app-less —
+  // a PR preview is not the app (CHE-202).
+  const appId =
+    opts.ownerId && !opts.ephemeral
+      ? ((
+          await db.app.findUnique({
+            where: { ownerId_appSlug: { ownerId: opts.ownerId, appSlug } },
+            select: { id: true },
+          })
+        )?.id ?? null)
+      : null;
   const run = await db.run.create({
     data: {
       runNumber: await nextRunNumber(db),
+      appId,
       targetUrl: input.url,
       ...extensionColumns(input.url, input.extension),
       appSlug,
