@@ -2,7 +2,33 @@
 
 Source: [Extension verification PRD](https://app.notion.com/p/3d97bac6430a81a1b09fdacc72d609c6).
 
-## Current state — 2026-09-14 10:47 UTC
+## Current state — 2026-09-14 12:22 UTC
+
+PR #81 is still on `feat/chrome-extension-targets`; CI passed for `8b6aff4`.
+CheckMyApp production has not been merged or deployed. The hourly heartbeat
+`chrome-extensions` is paused in the authoritative automation configuration.
+
+Native executor v18 completed its Cloudflare rollout at 11:37:40 UTC
+(Worker `24d06419-c119-4785-b9b8-c826ea7741f5`, image SHA-256
+`6b9b260cb4a17813034240f46c5f4484b3390cdd0140545158647f5b99f7a69f`).
+Its focused combined attempt stopped both owned sessions through the UI after
+150/149 seconds, disposed the browser and observed 73.601 seconds of unchanged
+balance. Six minutes were consumed. Precise attribution remains inconclusive;
+practice returned a fresh response, but the extension showed no fresh question
+or answer. This is cleanup evidence, not a complete combined-scenario pass.
+Private evidence: `/tmp/checkmyapp-cloudflare-combined18-cleanup.json`.
+
+The unchanged Run 4 combined export stalled before paid Start on a
+placeholder-only email field. Its unpaid attempt was explicitly disposed.
+The generator now bounds connection, action and navigation waits, and supports
+exact placeholder/label/role matching while refusing unidentified or ambiguous
+fields. The generated-code acceptance test exercises placeholder sign-in,
+missing/ambiguous field refusal before Start and mandatory disposal. Prisma,
+both typechecks, lint (three existing warnings) and all 55 acceptance scripts
+pass. A current-generator replay of the same recorded plan is in progress;
+it is not yet a fresh verdict-UI download. No full Run 7 has been submitted.
+
+## Previous checkpoint — 2026-09-14 10:47 UTC
 
 PR #81 remains on `feat/chrome-extension-targets`; pushed head `c904293` has
 green CI. CheckMyApp production has not been merged, migrated or deployed.

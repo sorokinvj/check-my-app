@@ -69,8 +69,10 @@ test(plan.title, async ({ request }) => {
     return found.ref;
   };
   const targetPage = async () => {
-    browser ??= await chromium.connectOverCDP(base.replace(/^http/, 'ws') + '/v1/devtools/browser/' + session.sessionId, { headers: { Authorization: 'Bearer ' + token } });
+    browser ??= await chromium.connectOverCDP(base.replace(/^http/, 'ws') + '/v1/devtools/browser/' + session.sessionId, { headers: { Authorization: 'Bearer ' + token }, timeout: 30_000 });
     const context = browser.contexts()[0];
+    context.setDefaultTimeout(15_000);
+    context.setDefaultNavigationTimeout(30_000);
     for (const page of context.pages()) {
       if (page.url().startsWith('chrome-extension:')) continue;
       const channel = await context.newCDPSession(page);
@@ -134,7 +136,11 @@ test(plan.title, async ({ request }) => {
           const target = action.selector ? page.locator(action.selector) : page.getByRole(action.role, { name: action.name, exact: true });
           await target.click();
         } else if (action.kind === 'fill') {
-          const target = action.selector ? page.locator(action.selector) : page.getByLabel(action.label, { exact: true });
+          if (!action.selector && !action.label) throw new Error('The recorded field has no identity');
+          // Placeholder-only sign-in fields are observable targets too. Keep
+          // exact, strict matching so drift cannot send credentials elsewhere.
+          const target = action.selector ? page.locator(action.selector)
+            : page.getByLabel(action.label, { exact: true }).or(page.getByPlaceholder(action.label, { exact: true })).or(page.getByRole('textbox', { name: action.label, exact: true }));
           await target.fill(substitute(action.value));
         }
       }
