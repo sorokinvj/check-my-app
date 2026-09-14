@@ -6,6 +6,8 @@ import { encryptSecret } from "@/lib/crypto";
 import { appSlugFromUrl } from "@/lib/utils";
 import { assertCanAddWatch } from "@/lib/plans";
 import type { UserPlan, WatchFrequency } from "@/lib/enums";
+import { extensionColumns, parseExtensionLink } from "@/lib/extension-target";
+import { createCheckSchema, extensionOptionsFromForm } from "@/lib/validation";
 
 // Persist an onboarded App + its Watch + TicketPolicy in one nested write.
 // D1 has no transactions, but the spike (CHE-21) proved nested create works and
@@ -27,10 +29,13 @@ export async function createApp(
 ): Promise<CreateAppResult> {
   const { user, db } = await requireUser();
 
-  const targetUrl = String(formData.get("targetUrl") ?? "").trim();
-  if (!/^https?:\/\/.+\..+/.test(targetUrl)) {
-    return { error: "Enter a valid app URL (https://…)" };
-  }
+  const target = createCheckSchema.shape.url.safeParse(String(formData.get("targetUrl") ?? ""));
+  if (!target.success) return { error: "Enter your app URL or a Chrome Web Store extension link." };
+  const targetUrl = target.data;
+  const isExtension = Boolean(parseExtensionLink(targetUrl));
+  if (formData.get("targetKind") === "extension" && !isExtension) return { error: "Enter a Chrome Web Store extension link." };
+  const extension = extensionOptionsFromForm(formData);
+  if (isExtension && !extension.success) return { error: extension.error.issues[0].message };
   const appSlug = appSlugFromUrl(targetUrl);
 
   const testEmail = (String(formData.get("testEmail") ?? "").trim() || null) as string | null;
@@ -46,7 +51,7 @@ export async function createApp(
   const frequency = String(formData.get("frequency") ?? "daily") as WatchFrequency;
 
   // Tier gate (CHE-34): Daily Watch availability + cadence + count per plan.
-  const gate = await assertCanAddWatch(db, {
+  const gate = isExtension ? { ok: true as const } : await assertCanAddWatch(db, {
     ownerId: user.id,
     plan: user.plan as UserPlan,
     frequency,
@@ -81,6 +86,7 @@ export async function createApp(
         ownerId: user.id,
         orgId: user.clerkOrgId ?? null,
         targetUrl,
+        ...extensionColumns(targetUrl, extension.success ? extension.data : undefined),
         appSlug,
         testEmail,
         testPasswordEnc,
@@ -88,7 +94,7 @@ export async function createApp(
         userNotes,
         focusAreas,
         writeMode,
-        watch: {
+        watch: isExtension ? undefined : {
           create: {
             appSlug,
             targetUrl,
@@ -115,5 +121,5 @@ export async function createApp(
     throw err;
   }
 
-  redirect(`/dashboard?added=${encodeURIComponent(appSlug)}`);
+  redirect(`/dashboard?${isExtension ? "extensionAdded" : "added"}=${encodeURIComponent(appSlug)}`);
 }

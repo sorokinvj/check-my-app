@@ -16,7 +16,8 @@ import {
   type UndrivenControl,
   type ToolEnv,
 } from "./tools";
-import { newAgentContext } from "./browser";
+import { newAgentContext, newAgentPage, closeAgentContext } from "./browser";
+import { extensionBrowserFor } from "./extension-browser";
 import { walkingSystem } from "./instructions";
 import type { AppKnowledge } from "./knowledge";
 import { harnessMode, putScreenshot, putText, walkImageWindow, type AgentEnv } from "./env";
@@ -31,6 +32,8 @@ import { cutUndrivenClaims, type GateStep } from "./findings-gate";
 import { summaryFallback } from "@/lib/verdict-language";
 import { summarizeWalk } from "./summary";
 import { recordWalk, resolveJourney } from "./journey-catalog";
+import { ExtensionRuntimeError } from "./extension-error";
+import { extensionAccountingStep, extensionProductFailureStep } from "./extension-evidence";
 
 export interface WalkRun extends RunInput {
   id: string;
@@ -123,7 +126,8 @@ export async function walkOneJourney(args: {
     // CHE-193: on our own hosts the context announces itself on the requests
     // the web half guards, and on nothing else (CHE-212; self-hosts.ts).
     const context = await newAgentContext(browser, run.targetUrl, env.bindings);
-    const page = await context.newPage();
+    const page = await newAgentPage(browser, context);
+    const extension = extensionBrowserFor(browser);
 
     // CHE-231: which journey OF THE APP this walk is a check of, decided before
     // a single step is written. The identity rules are in lib/journey-key.ts;
@@ -161,7 +165,8 @@ export async function walkOneJourney(args: {
 
     const toolEnv: ToolEnv = {
       page,
-      targetOrigin: originOf(run.targetUrl),
+      extension,
+      targetOrigin: originOf(extension?.identity.targetUrl ?? run.targetUrl),
       // CHE-193: lets the click gate know which extra hosts are ours.
       selfCheckHosts: env.bindings.SELF_CHECK_HOSTS,
       // CHE-168 decides whether the nav model sees at all (llm.navVision);
@@ -207,9 +212,9 @@ export async function walkOneJourney(args: {
       // CHE-171: a 404 on an address outside this set is not a defect.
       knownUrls: knownUrlsFrom(run.targetUrl, publishedUrls),
       onScreenshot: async (buffer) => {
-        const stored = await putScreenshot(env, buffer);
-        lastScreenshot = stored;
-        await onLiveScreenshot?.(stored.storageUrl);
+        const stored = await putScreenshot(env, buffer, extension ? { privateRunId: run.id } : "public");
+        lastScreenshot = extension ? null : stored;
+        if (!extension) await onLiveScreenshot?.(stored.storageUrl);
         return stored.storageUrl;
       },
       onReportStep: async (reported) => {
@@ -222,9 +227,9 @@ export async function walkOneJourney(args: {
         // With the judge off this returns the step untouched.
         const step = await adjudicateStep({
           llm,
-          enabled: harness.judge,
+          enabled: harness.judge && !extension?.popup,
           step: reported,
-          page,
+          page: toolEnv.page,
           networkLog: toolEnv.networkLog,
           scrub: (text) => scrubSecrets(toolEnv, text),
           usage: judgeUsage,
@@ -283,6 +288,9 @@ export async function walkOneJourney(args: {
       },
       onWriteTest: async (test) => {
         testWritten = true;
+        // Native specs are built from successful operations only, after Stop
+        // and disposal; a model-authored website spec cannot replay the popup.
+        if (extension) return;
         await persistGeneratedTest(env, {
           appSlug: run.appSlug,
           journeyId: journey.id,
@@ -296,7 +304,9 @@ export async function walkOneJourney(args: {
     try {
       const result = await runAgentLoop({
         system: walkingSystem(run, proposed.title, proposed.steps, knowledge),
-        task: `Target app: ${run.targetUrl}\nWalk the journey now. Navigate to the target first.`,
+        task: extension
+          ? `Target product: installed extension ${extension.identity.name}. Walk this journey through extension_open and the companion tab ${extension.identity.targetUrl}. The Store listing and synthetic companion content are not the product. Session actions use the owned session tools; Stop must be observed before completing the journey.`
+          : `Target app: ${run.targetUrl}\nWalk the journey now. Navigate to the target first.`,
         env: toolEnv,
         llm,
         // CHE-134: sized to the journey. The cap was a flat 50 whatever the
@@ -337,7 +347,7 @@ export async function walkOneJourney(args: {
       // it walked real steps but wrote no test, reuse the journey context to
       // force the spec out — the "worker authors its own e2e tests" guarantee
       // must hold per run, not depend on the model remembering to wrap up.
-      if (!testWritten && stepStatuses.length > 0) {
+      if (!extension && !testWritten && stepStatuses.length > 0) {
         const spec = await finalizeJson(
           llm,
           result.messages,
@@ -381,15 +391,38 @@ export async function walkOneJourney(args: {
         where: { id: journey.id },
         data: { status, summary },
       });
+      if (extension && stepStatuses.length > 0) {
+        await extension.finish();
+        const failure = extensionProductFailureStep(await extension.finalEvidence());
+        if (failure) {
+          productizeStep(failure);
+          await env.db.step.create({ data: { journeyId: journey.id, order: stepOrder++, ...failure } });
+          stepStatuses.push(failure.status);
+          await env.db.journey.update({ where: { id: journey.id }, data: { status: journeyStatus(stepStatuses) } });
+        }
+        const accounting = extensionAccountingStep(await extension.finalEvidence());
+        if (accounting) {
+          // The final balance settles after the agent's last visible Stop.
+          // Record that independent observation even if the loop wrapped up.
+          await env.db.step.create({ data: { journeyId: journey.id, order: stepOrder++, ...accounting } });
+          stepStatuses.push(accounting.status);
+          await env.db.journey.update({ where: { id: journey.id }, data: { status: journeyStatus(stepStatuses) } });
+        }
+        await persistGeneratedTest(env, { appSlug: run.appSlug, journeyId: journey.id, title: proposed.title,
+          content: await extension.exportSpec(proposed.title) });
+      }
       // CHE-231: the catalog learns what this walk found — the status, the plan
-      // the next walk starts from, the failure streak. Best-effort by contract:
-      // the catalog is how the app remembers, never how a run succeeds.
+      // the next walk starts from, the failure streak. After the extension
+      // block, which can add steps and move the status: the catalog records
+      // where the journey actually landed, not where it stood mid-wrap-up.
+      // Best-effort by contract: the catalog is how the app remembers, never
+      // how a run succeeds.
       await recordWalk(env, {
         appJourneyId: identity.appJourneyId,
         runId: run.id,
         runNumber: run.runNumber,
         title: proposed.title,
-        status,
+        status: journeyStatus(stepStatuses),
         plan: walkedSteps.map((s) => s.label).filter(Boolean),
       }).catch((err) => console.warn(`[journey] catalog not updated: ${errText(err)}`));
     } catch (err) {
@@ -397,7 +430,7 @@ export async function walkOneJourney(args: {
       // Our own LLM budget died (CHE-76) — not a fact about this journey or the
       // app. Propagate so the workflow aborts the whole run unpublished instead
       // of burning through the remaining journeys and shipping a verdict.
-      if (err instanceof LlmBudgetError) throw err;
+      if (err instanceof LlmBudgetError || err instanceof ExtensionRuntimeError) throw err;
       console.error(`[walk] journey "${proposed.title}" failed:`, err);
       const abortedStatus = journeyStatus(stepStatuses);
       await env.db.journey.update({
@@ -418,7 +451,7 @@ export async function walkOneJourney(args: {
         plan: walkedSteps.map((s) => s.label).filter(Boolean),
       }).catch((e) => console.warn(`[journey] catalog not updated: ${errText(e)}`));
     } finally {
-      await context.close();
+      await closeAgentContext(browser, context);
     }
   }
 

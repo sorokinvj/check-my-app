@@ -6,6 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { createApp } from "@/app/onboarding/actions";
+import { ExtensionFields } from "./extension-fields";
+import { parseExtensionLink, type ExtensionOptions } from "@/lib/extension-target";
 
 // Owner onboarding. One sectioned form (resumable multi-step is a later refinement)
 // that captures everything the agent needs for recurring QA + the ticket contract,
@@ -13,10 +15,16 @@ import { createApp } from "@/app/onboarding/actions";
 export function OnboardingWizard({
   prefillUrl,
   defaultEmail = "",
+  initialKind = "website",
 }: {
   prefillUrl: string;
   defaultEmail?: string;
+  initialKind?: "website" | "extension";
 }) {
+  const [url, setUrl] = useState(prefillUrl);
+  const [kind, setKind] = useState(initialKind);
+  const [extension, setExtension] = useState<ExtensionOptions>({});
+  const isExtension = kind === "extension" || Boolean(parseExtensionLink(url));
   const [showPassword, setShowPassword] = useState(false);
   // CHE-84: refusals come back as state instead of a thrown 500, and the action
   // is passed to <form> directly so a click that lands before hydration still
@@ -25,29 +33,40 @@ export function OnboardingWizard({
 
   return (
     <form action={formAction} className="space-y-8">
+      <input type="hidden" name="targetKind" value={isExtension ? "extension" : "website"} />
       <div className="space-y-2">
-        <p className="section-label">set up daily QA</p>
-        <h1 className="text-3xl font-semibold tracking-tight">Add your app</h1>
+        <p className="section-label">{isExtension ? "check your extension" : "set up daily QA"}</p>
+        <h1 className="text-3xl font-semibold tracking-tight">{isExtension ? "Add your extension" : "Add your app"}</h1>
         <p className="text-sm text-fg-muted">
-          We&apos;ll check it every day and file one ticket per new regression into your tracker.
+          {isExtension ? "Save your extension, then run a check whenever you need one." : "We'll check it every day and file one ticket per new regression into your tracker."}
         </p>
         <p className="text-xs text-fg-faint">
-          6 quick sections — only the site URL is required. Everything else is optional or has a
-          sensible default.
+          {isExtension ? "Start with its Chrome Web Store link. Add a test login to reach the full product." : "6 quick sections — only the site URL is required. Everything else is optional or has a sensible default."}
         </p>
       </div>
 
       {/* 1 — Site */}
       <section className="card space-y-3 p-5">
-        <p className="text-sm font-medium text-fg">1 · Site</p>
+        <div className="flex gap-1 font-mono text-xs">
+          {(["website", "extension"] as const).map(value => <button key={value} type="button"
+            aria-pressed={value === (isExtension ? "extension" : "website")} onClick={() => setKind(value)}
+            className={`rounded-md px-3 py-2 ${value === (isExtension ? "extension" : "website") ? "bg-accent/10 text-accent" : "text-fg-muted hover:text-fg"}`}>
+            {value === "extension" ? "Chrome extension" : "Website"}
+          </button>)}
+        </div>
         <Input
           name="targetUrl"
-          type="url"
-          placeholder="https://your-app.com"
-          defaultValue={prefillUrl}
+          type="text"
+          inputMode="url"
+          aria-label={isExtension ? "Chrome Web Store link" : "App URL"}
+          placeholder={isExtension ? "https://chromewebstore.google.com/detail/…" : "https://your-app.com"}
+          value={url}
+          onChange={e => setUrl(e.target.value)}
           required
         />
       </section>
+
+      {isExtension && <ExtensionFields value={extension} onChange={setExtension} />}
 
       {/* 2 — Test login */}
       <section className="card space-y-3 p-5">
@@ -171,7 +190,7 @@ export function OnboardingWizard({
       </section>
 
       {/* 6 — Cadence & notifications */}
-      <section className="card space-y-3 p-5">
+      {!isExtension && <section className="card space-y-3 p-5">
         <p className="text-sm font-medium text-fg">6 · Cadence &amp; notifications</p>
         <label className="block space-y-1">
           <span className="text-xs text-fg-muted">Frequency</span>
@@ -194,7 +213,7 @@ export function OnboardingWizard({
             defaultValue={defaultEmail}
           />
         </label>
-      </section>
+      </section>}
 
       {state?.error && (
         <p
@@ -204,7 +223,7 @@ export function OnboardingWizard({
           {state.error}
         </p>
       )}
-      <SubmitButton />
+      <SubmitButton isExtension={isExtension} />
     </form>
   );
 }
@@ -249,11 +268,11 @@ function EyeOffIcon() {
   );
 }
 
-function SubmitButton() {
+function SubmitButton({ isExtension }: { isExtension: boolean }) {
   const { pending } = useFormStatus();
   return (
     <Button type="submit" disabled={pending} className="w-full py-3.5 text-[15px]">
-      {pending ? "Saving…" : "Save & start watching"}
+      {pending ? "Saving…" : isExtension ? "Add extension" : "Save & start watching"}
     </Button>
   );
 }

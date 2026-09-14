@@ -22,6 +22,7 @@
 
 import type { PrismaClient } from "@/generated/prisma/client";
 import { deleteObjects, evidenceKey } from "@/lib/storage";
+import { isChromeStoreUrl } from "@/lib/extension-target";
 
 // How long an ephemeral run and its evidence live. Long enough to be read after
 // the PR merges; short enough that a busy repo never accumulates them.
@@ -100,7 +101,7 @@ export interface EphemeralSweepResult {
 // owns. Bottom-up so a failure midway leaves nothing dangling that the next
 // tick cannot finish: evidence → steps → journeys → findings → ledgers → run.
 //
-// R2 objects are deleted last and only when no surviving row still points at
+// Shared R2 objects are deleted last and only when no surviving row still points at
 // them: screenshots are content-addressed (src/agent/env.ts putScreenshot —
 // screenshots/<sha256>.png), so two runs that saw the same pixels share one
 // object, and an ephemeral run of a preview deploy very often sees exactly
@@ -111,14 +112,38 @@ export async function sweepExpiredEphemeralRuns(
   now: Date = new Date(),
   evidenceBucket?: R2Bucket | null,
 ): Promise<EphemeralSweepResult> {
-  const runs = await db.run.findMany({
+  const expired = await db.run.findMany({
     where: { ephemeral: true, expiresAt: { lt: now } },
-    select: { id: true, transcriptUrl: true, liveScreenshotUrl: true },
+    select: { id: true, targetKind: true, targetUrl: true, transcriptUrl: true, liveScreenshotUrl: true },
     orderBy: { expiresAt: "asc" },
     take: RUNS_PER_SWEEP,
   });
+  // Private extension artifacts have no public URL references. Keep the row
+  // until its private namespace can be swept, so an R2 outage remains retryable.
+  const extension = (run: typeof expired[number]) => run.targetKind === "extension" || isChromeStoreUrl(run.targetUrl);
+  const runs = expired.filter(run => !extension(run) || evidenceBucket);
   if (runs.length === 0) return { runs: 0, evidence: 0 };
   const runIds = runs.map((r) => r.id);
+  const extensionKeys = new Set<string>();
+  if (evidenceBucket) {
+    for (const run of runs.filter(extension)) {
+      for (const prefix of [`private/runs/${run.id}/`, `private/extensions/${run.id}_`, `extensions/${run.id}_`, `extensions/${run.id}/`]) {
+        let cursor: string | undefined;
+        do {
+          const page = await evidenceBucket.list({ prefix, cursor });
+          for (const object of page.objects) {
+            if (!object.key.startsWith(prefix)) throw new Error("Extension expiry received an artifact outside its run");
+            extensionKeys.add(object.key);
+          }
+          cursor = page.truncated ? page.cursor : undefined;
+        } while (cursor);
+      }
+    }
+    // These namespaces belong exclusively to the expired run. Delete before
+    // its row so an R2 failure keeps the owner pointer for the next sweep.
+    // A later D1 failure is safe to retry against an already empty namespace.
+    await deleteObjects(evidenceBucket, [...extensionKeys]);
+  }
 
   // Everything the runs own, and every evidence URL any of it carries.
   const journeys: { id: string; videoUrl: string | null }[] = [];
@@ -210,7 +235,7 @@ export async function sweepExpiredEphemeralRuns(
 
   // Objects: only those no surviving row still references.
   const candidates = [...urls].filter((u) => evidenceKey(u) !== null);
-  if (candidates.length === 0 || !evidenceBucket) return { runs: runs.length, evidence: 0 };
+  if (candidates.length === 0 || !evidenceBucket) return { runs: runs.length, evidence: extensionKeys.size };
 
   const stillUsed = new Set<string>();
   await eachChunk(candidates, async (part) => {
@@ -234,5 +259,5 @@ export async function sweepExpiredEphemeralRuns(
     .filter((k): k is string => k !== null);
   await deleteObjects(evidenceBucket, keys);
 
-  return { runs: runs.length, evidence: keys.length };
+  return { runs: runs.length, evidence: new Set([...extensionKeys, ...keys]).size };
 }

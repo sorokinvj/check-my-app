@@ -140,6 +140,7 @@ export function parseActions(json: string | null | undefined): RecordedAction[] 
       (a): a is RecordedAction =>
         typeof a === "object" &&
         a !== null &&
+        !(a as { surface?: unknown }).surface &&
         ["navigate", "click", "fill"].includes((a as { kind?: unknown }).kind as string),
     );
   } catch {

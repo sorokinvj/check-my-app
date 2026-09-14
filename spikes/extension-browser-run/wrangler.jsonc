@@ -1,0 +1,8 @@
+{
+ "name": "checkmyapp-extension-preflight",
+ "main": "index.mjs",
+ "compatibility_date": "2025-09-15",
+ "compatibility_flags": ["nodejs_compat"],
+ "browser": { "binding": "BROWSER", "remote": true },
+ "dev": { "ip": "127.0.0.1", "port": 8897 }
+}

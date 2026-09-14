@@ -41,6 +41,11 @@ model Run {
   // safe path — see nextRunNumber() in src/lib/db.ts.
   runNumber Int       @unique
   targetUrl String
+  targetKind String @default("website")
+  extensionId String?
+  extensionConfig String?
+  // Installed identity and lifecycle proof belong to this run, not the Store listing.
+  extensionEvidence String?
   // App slug derived from the target host, e.g. "joblander.app". Stable across runs.
   appSlug   String
 
@@ -452,6 +457,7 @@ model PendingCheck {
   createdAt DateTime @default(now())
 
   targetUrl       String
+  extensionConfig String?
   testEmail       String?
   // Encrypted like Run.testPasswordEnc; cleared the moment the run is created.
   testPasswordEnc String?
@@ -532,6 +538,9 @@ model App {
   ownerId   String
   orgId     String?
   targetUrl String
+  targetKind String @default("website")
+  extensionId String?
+  extensionConfig String?
   appSlug   String
 
   // Target test credentials retained for recurring runs (encrypted, never logged).

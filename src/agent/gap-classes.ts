@@ -36,9 +36,24 @@ export type GapClass =
   | "third_party_block"
   | "egress_unreachable"
   | "undriven_control"
+  | "extension_runtime"
+  | "extension_session_cleanup"
+  | "extension_minute_accounting"
   | "unclassified";
 
 export const GAP_CLASSES: Record<GapClass, { label: string; why: string }> = {
+  extension_minute_accounting: {
+    label: "Checker cannot establish each extension session's minute usage",
+    why: "A stable balance after Stop proves cessation, but does not establish minute-by-minute charges or independently rounded session totals. Missing UI evidence must remain a coverage gap, never a billing pass or a customer defect.",
+  },
+  extension_runtime: {
+    label: "Checker cannot complete an installed Chrome extension check",
+    why: "The Store listing cannot establish whether the installed extension works. Installation identity, its native controls and target tab must remain available throughout the check.",
+  },
+  extension_session_cleanup: {
+    label: "Checker cannot confirm extension session cleanup",
+    why: "An application may continue billing after its browser closes. Every owned session needs a timely native Stop and separate evidence that usage ceased before a verdict can be published.",
+  },
   new_tab: {
     label: "Checker cannot follow links that open in a new tab",
     why: "Outbound links are a large share of what owners worry about. verify_links resolves them server-side — the walker must reach for it automatically instead of leaving the step unverified.",

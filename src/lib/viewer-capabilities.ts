@@ -48,7 +48,7 @@ export function viewerCapabilities(input: {
   // them too (src/lib/watch-enable.ts, src/app/api/integrations/github,
   // src/app/api/runs/[id]/export-specs). Re-check and marks stay: they are
   // about the run.
-  run: { ownerId: string | null; hasWatch: boolean; ephemeral?: boolean };
+  run: { ownerId: string | null; hasWatch: boolean; ephemeral?: boolean; targetKind?: string };
   viewer: { id: string } | null;
   // The signed-in viewer's App row for run.appSlug, or null. Exists only after
   // onboarding or Enable Daily Watch — which is why it gates Create Ticket and
@@ -66,7 +66,7 @@ export function viewerCapabilities(input: {
   return {
     recheck: canMutate,
     fullRecheck: owned && canMutate,
-    enableWatch: !appless && !run.hasWatch && anonymousOrOwner,
+    enableWatch: !appless && run.targetKind !== "extension" && !run.hasWatch && anonymousOrOwner,
     watchSettings: !appless && run.hasWatch && isOwner,
     markFindings: canMutate,
     createTicket: !appless && viewerApp !== null && anonymousOrOwner,

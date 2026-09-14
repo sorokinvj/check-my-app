@@ -1,0 +1,14 @@
+import assert from 'node:assert/strict';
+import { sessionView } from '../extension-runner/session-view.mjs';
+const sessions = [{ id: 'extension-capture', state: 'active', startedAt: 2000 }];
+const sample = { at: 3000, surface: 'extension-shadow-panel', panelPresent: true, results: [{ question: 'A new question', answer: 'Its answer' }] };
+const view = (samples, leases = sessions, billing) => sessionView({ session: {}, sessions: leases, observation: { samples }, billing });
+assert.deepEqual(view([{ ...sample, at: 1000 }]).questionAndAnswers, []);
+assert.deepEqual(view([{ ...sample, surface: 'fixture' }]).questionAndAnswers, []);
+assert.deepEqual(view([sample]).questionAndAnswers, sample.results);
+assert.equal(view([sample]).complete, false);
+const stopped = [{ ...sessions[0], state: 'stopped', cleanup: { applicationStopObserved: true, stopClickedAt: 5000 } }];
+assert.equal(view([sample], stopped).complete, false, 'UI Stop alone cannot finish minute accounting');
+assert.equal(view([sample], stopped, { assessment: { status: 'confirmed', observedMinutes: 3 } }).complete, true);
+assert.equal(view([sample], stopped, { assessment: { status: 'inconclusive' } }).balanceUnchangedAfterStop, undefined);
+console.log('Owned session observation: fresh product output and independent accounting completion pass');

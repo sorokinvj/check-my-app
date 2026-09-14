@@ -1,0 +1,11 @@
+{
+  "name": "checkmyapp-agent",
+  "main": "workflow.ts",
+  "compatibility_date": "2025-09-15",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": { "APP_URL": "http://localhost:3107" },
+  "r2_buckets": [{ "binding": "EVIDENCE", "bucket_name": "checkmyapp-evidence" }],
+  "d1_databases": [{ "binding": "DB", "database_name": "checkmyapp", "database_id": "c5c35a91-2589-45f1-8e54-978eca7972dd", "migrations_dir": "../../prisma/migrations" }],
+  "workflows": [{ "name": "checkmyapp-check-run", "binding": "CHECK_RUN", "class_name": "CheckRunWorkflow" }],
+  "dev": { "ip": "127.0.0.1", "port": 8787 }
+}

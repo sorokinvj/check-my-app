@@ -40,6 +40,9 @@ export async function enableWatchForRun(
       ownerId: true,
       appSlug: true,
       targetUrl: true,
+      targetKind: true,
+      extensionId: true,
+      extensionConfig: true,
       testEmail: true,
       testPasswordEnc: true,
       scopeHints: true,
@@ -58,6 +61,7 @@ export async function enableWatchForRun(
   // schedule a daily walk of a deploy that is about to disappear. Refused
   // before any row is written.
   if (run.ephemeral) return { kind: "ephemeral" };
+  if (run.targetKind === "extension") return { kind: "gated", reason: "Extension checks run on demand. Add this extension to your dashboard to run another check." };
 
   // Find-or-create the owner's App for this target. upsert is race-safe under
   // D1 (no transactions) vs a check-then-create double-submit window.
@@ -68,6 +72,9 @@ export async function enableWatchForRun(
       ownerId: user.id,
       orgId: user.clerkOrgId ?? null,
       targetUrl: run.targetUrl,
+      targetKind: run.targetKind,
+      extensionId: run.extensionId,
+      extensionConfig: run.extensionConfig,
       appSlug: run.appSlug,
       testEmail: run.testEmail,
       testPasswordEnc: run.testPasswordEnc,

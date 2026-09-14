@@ -211,3 +211,6 @@ check(
 
 console.log(failures === 0 ? "\nall pass" : `\n${failures} FAILED`);
 process.exit(failures === 0 ? 0 : 1);
+
+const extensionOwner = viewerCapabilities({ run: { ownerId: 'owner', hasWatch: false, targetKind: 'extension' }, viewer: { id: 'owner' }, viewerApp: { id: 'app' }, canMutate: true });
+if (extensionOwner.enableWatch || !extensionOwner.recheck || !extensionOwner.exportSpecs) throw new Error('Extension verdict must offer on-demand actions without an impossible Watch');

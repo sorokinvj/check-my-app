@@ -1,0 +1,18 @@
+import assert from 'node:assert/strict';
+import { childIsRunning, ownedProtocolAction, disconnectInspectionClients } from '../extension-runner/health.mjs';
+import { EventEmitter } from 'node:events';
+assert.equal(childIsRunning({ pid: 123, exitCode: null, signalCode: null, killed: false }), true);
+assert.equal(childIsRunning({ pid: 123, exitCode: null, signalCode: 'SIGTERM', killed: false }), false, 'A signalled process has no numeric exit code but is terminal');
+assert.equal(childIsRunning({ pid: 123, exitCode: 0, signalCode: null, killed: false }), false);
+assert.equal(childIsRunning({ pid: 123, exitCode: null, signalCode: null, killed: true }), false);
+assert.equal(ownedProtocolAction({ method: 'Browser.close' }, 'owned-tab'), 'disconnect', 'A client may detach but cannot bypass owned application cleanup');
+assert.equal(ownedProtocolAction({ method: 'Target.closeTarget', params: { targetId: 'owned-tab' } }, 'owned-tab'), 'refuse');
+assert.equal(ownedProtocolAction({ method: 'Target.closeTarget', params: { targetId: 'temporary-tab' } }, 'owned-tab'), 'forward');
+assert.equal(ownedProtocolAction({ method: 'Browser.crash' }, 'owned-tab'), 'refuse');
+assert.equal(ownedProtocolAction({ method: 'Target.getTargets' }, 'owned-tab'), 'forward');
+const graceful = Object.assign(new EventEmitter(), { readyState: 1, close() { this.readyState = 3; this.emit('close'); }, terminate() { throw new Error('A closed client must not be terminated'); } });
+let terminated = false;
+const stale = Object.assign(new EventEmitter(), { readyState: 1, close() {}, terminate() { terminated = true; this.readyState = 3; this.emit('close'); } });
+await disconnectInspectionClients(new Set([graceful, stale]), 5);
+assert.equal(terminated, true, 'A stale inspection connection cannot auto-attach to the next native popup');
+console.log('Extension runtime: signalled exits, lease-owned disposal and protected target lifetime pass');

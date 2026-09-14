@@ -264,7 +264,7 @@ export async function verifyFixedLinks(env: AgentEnv, runId: string): Promise<Re
 
   const findings = await env.db.finding.findMany({
     where: { runId },
-    select: { title: true, category: true, severity: true, detail: true },
+    select: { title: true, category: true, severity: true, detail: true, anchor: true },
   });
   const presentKeys = new Set(findings.map((f) => dedupKeyForFinding(f, run)));
 
@@ -369,7 +369,7 @@ async function originalFinding(
   if (!firstSeenRunId) return null;
   const rows = await env.db.finding.findMany({
     where: { runId: firstSeenRunId },
-    select: { id: true, title: true, category: true, severity: true, detail: true, mark: true },
+    select: { id: true, title: true, category: true, severity: true, detail: true, anchor: true, mark: true },
   });
   return rows.find((f) => dedupKeyForFinding(f, { appSlug }) === dedupKey) ?? null;
 }
