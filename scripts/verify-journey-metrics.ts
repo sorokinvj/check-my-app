@@ -20,6 +20,7 @@ import {
   decideMetric,
   JOURNEY_METRICS_GUIDE,
   METRIC_BOUNDS,
+  MIN_PRICE,
   MIN_NOTE_CHARS,
   metricLine,
   type JourneyMetric,
@@ -98,6 +99,30 @@ console.log("\nWhat a model cannot do to the numbers");
   check("no answer at all writes nothing", none.value === null && !none.kept);
   const words = decideMetric({ price: "8", conversion: "45", note: "two fields were added to the form" }, previous);
   check("numbers written as text still count", words.value?.price === 8 && words.value?.conversion === 45);
+
+  // Run #192 (checkmyapp.dev, 2026-09-14), the first production run after the
+  // metric shipped: the discovery model priced all four journeys at 0 actions
+  // and 0% conversion, each with a note saying the figure was "not tracked".
+  // Stored, that says every journey in the app is free and nobody finishes it.
+  const notTracked = decideMetric(
+    { price: 0, conversion: 0, note: "Not tracked — app has no signup funnel event exposed in the UI." },
+    null,
+  );
+  check(
+    "a journey priced at zero actions is refused, not stored",
+    notTracked.value === null && notTracked.unpriced === true,
+    JSON.stringify(notTracked),
+  );
+  const zeroOverStored = decideMetric({ price: 0, conversion: 0, note: "Not tracked — no event labels in UI." }, previous);
+  check(
+    "…and it cannot overwrite a price we already had",
+    zeroOverStored.kept && zeroOverStored.value?.price === 6,
+    JSON.stringify(zeroOverStored.value),
+  );
+  const cheapest = decideMetric({ price: MIN_PRICE, conversion: 98, note: "one click on the front page" }, null);
+  check("one action is a real price and is kept", cheapest.value?.price === MIN_PRICE, JSON.stringify(cheapest.value));
+  const broken = decideMetric({ price: 4, conversion: 0, note: "the submit button does nothing" }, null);
+  check("conversion 0 stays legal — that is what a broken journey looks like", broken.value?.conversion === 0, JSON.stringify(broken.value));
 }
 
 console.log("\nA journey lives somewhere (app-wide or one page)");

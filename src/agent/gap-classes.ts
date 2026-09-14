@@ -39,9 +39,14 @@ export type GapClass =
   | "extension_runtime"
   | "extension_session_cleanup"
   | "extension_minute_accounting"
+  | "unpriced_journey"
   | "unclassified";
 
 export const GAP_CLASSES: Record<GapClass, { label: string; why: string }> = {
+  unpriced_journey: {
+    label: "Checker cannot say what a journey costs its user",
+    why: "The price of a journey — how many actions it takes and how many people finish — is the sentence an outside observer is paid for, and the one a green check mark cannot replace. A journey we walked end to end and left unpriced is a judgement we owe the owner and did not deliver.",
+  },
   extension_minute_accounting: {
     label: "Checker cannot establish each extension session's minute usage",
     why: "A stable balance after Stop proves cessation, but does not establish minute-by-minute charges or independently rounded session totals. Missing UI evidence must remain a coverage gap, never a billing pass or a customer defect.",

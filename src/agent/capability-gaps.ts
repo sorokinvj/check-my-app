@@ -94,6 +94,23 @@ async function ourBoard(env: AgentEnv): Promise<GapBoard | null> {
   return { self, tracker, baseUrl: env.bindings.APP_URL ?? "https://checkmyapp.dev" };
 }
 
+/**
+ * Journeys this run actually walked whose catalog row still carries no price.
+ *
+ * Only journeys with a catalog row count: a run with no App has nowhere to
+ * store a price, which is CHE-234's problem and not a pricing gap. Carried
+ * journeys (partial runs) are excluded for the same reason they are carried —
+ * this run did not walk them, so it owed them no judgement.
+ */
+async function unpricedJourneys(env: AgentEnv, runId: string): Promise<string[]> {
+  const rows = await env.db.journey.findMany({
+    where: { runId, carriedFromRunId: null, appJourneyId: { not: null }, appJourney: { price: null } },
+    select: { title: true },
+    take: 20,
+  });
+  return rows.map((r) => r.title);
+}
+
 // The ticket policy for anything we file against ourselves — the owner's own
 // policy when the CheckMyApp app has one, otherwise the same defaults autofile
 // falls back to, with the title prefix swapped.
@@ -153,7 +170,28 @@ export async function fileCapabilityGaps(
         ]
       : [];
 
-  const allGaps = [...gaps, ...orphanGaps, ...(opts.extraGaps ?? []).map(gap => ({ ...gap, actions: null, journey: { title: "Extension verification" } }))];
+  // CHE-235: a journey this run walked that still has no price. Read from the
+  // catalog rather than tracked through the walk, because the two ways to end
+  // up here are one failure: a model that skipped the numbers and a model that
+  // answered with numbers no journey can have (run #192 priced four journeys at
+  // 0 actions / 0% and explained that the figure was "not tracked"). Either
+  // way the owner is owed a judgement and did not get it.
+  const unpriced = await unpricedJourneys(env, runId);
+  const unpricedGaps =
+    unpriced.length > 0
+      ? [
+          {
+            label: GAP_CLASSES.unpriced_journey.label,
+            attempted: "Price each journey we walked: actions the user performs, and how many of 100 finish",
+            observed: `Walked and left unpriced: ${unpriced.slice(0, 5).join(" · ")}`,
+            gapClass: "unpriced_journey",
+            actions: null,
+            journey: { title: "Journey pricing" },
+          },
+        ]
+      : [];
+
+  const allGaps = [...gaps, ...orphanGaps, ...unpricedGaps, ...(opts.extraGaps ?? []).map(gap => ({ ...gap, actions: null, journey: { title: "Extension verification" } }))];
   if (allGaps.length === 0) return [];
 
   const board = opts.board ?? (await ourBoard(env));

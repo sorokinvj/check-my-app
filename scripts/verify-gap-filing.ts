@@ -120,7 +120,10 @@ interface Filed {
   body?: string;
 }
 
-function stubWorld(steps: StoredStep[], opts: { existing?: Record<string, string>; extensionAudit?: boolean } = {}) {
+function stubWorld(
+  steps: StoredStep[],
+  opts: { existing?: Record<string, string>; extensionAudit?: boolean; unpricedJourneys?: string[] } = {},
+) {
   const filed: Filed[] = [];
   const comments: { issueId: string; body: string }[] = [];
   const links = new Map<string, { id: string; externalIssueId: string; status: string; occurrences: number; escalatedAt: null; defectClass: null }>();
@@ -157,6 +160,19 @@ function stubWorld(steps: StoredStep[], opts: { existing?: Record<string, string
   const db = {
     run: { findUnique: async () => run },
     step: { findMany: async () => steps },
+    // CHE-235: journeys this run walked whose catalog row has no price. The
+    // where-shape is asserted here, not just the result — a filter that stopped
+    // excluding carried journeys would file gaps for walks that never happened.
+    journey: {
+      findMany: async ({ where }: { where: Record<string, unknown> }) => {
+        const shapeOk =
+          where.carriedFromRunId === null &&
+          JSON.stringify(where.appJourneyId) === JSON.stringify({ not: null }) &&
+          JSON.stringify(where.appJourney) === JSON.stringify({ price: null });
+        if (!shapeOk) throw new Error(`unpriced-journey query lost its filter: ${JSON.stringify(where)}`);
+        return (opts.unpricedJourneys ?? []).map((title) => ({ title }));
+      },
+    },
     createdResource: { findMany: async () => [], count: async () => 0 },
     issueLink: {
       findUnique: async ({ where }: { where: { appId_dedupKey: { dedupKey: string } } }) =>
@@ -383,6 +399,33 @@ async function main() {
     await fileCapabilityGaps(w.env, "run-1", { board: w.board });
     const created = w.filed.filter((f) => f.kind === "created");
     check("four gaps in three classes → three tickets", created.length === 3, created.map((f) => f.title).join(" | "));
+  }
+
+  // 7 — CHE-235: a journey we walked and left unpriced is our gap, not a
+  // silence. Run #192 walked four journeys of checkmyapp.dev, priced every one
+  // of them at 0 actions / 0% conversion with the note "not tracked", and
+  // nothing anywhere said we had failed to deliver a judgement.
+  {
+    const w = stubWorld([], { unpricedJourneys: ["Run a free first-app check", "Sign up via the free pricing CTA"] });
+    await fileCapabilityGaps(w.env, "run-1", { board: w.board });
+    const created = w.filed.filter((f) => f.kind === "created");
+    check(
+      "a walked journey with no price files one ticket on our board",
+      created.length === 1 && created[0].title.includes(GAP_CLASSES.unpriced_journey.label),
+      created.map((f) => f.title).join(" | "),
+    );
+    check(
+      "…and it names the journeys, so the next reader sees which ones",
+      (created[0]?.body ?? "").includes("Run a free first-app check"),
+      (created[0]?.body ?? "").slice(0, 160),
+    );
+  }
+
+  // …and a run whose journeys are all priced files nothing.
+  {
+    const w = stubWorld([]);
+    await fileCapabilityGaps(w.env, "run-1", { board: w.board });
+    check("every journey priced → no ticket", w.filed.length === 0, w.filed.map((f) => f.title).join(" | "));
   }
 
   console.log(failures ? `\n${failures} check(s) FAILED` : "\nall checks passed");

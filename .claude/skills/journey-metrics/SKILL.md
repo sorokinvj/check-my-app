@@ -15,6 +15,14 @@ Both are opinions. That is the point: "signing up costs your user eleven
 actions" is a judgement about someone's product that only an outside observer
 makes, and it is worth more than another green check mark.
 
+**Neither is analytics.** You are not looking these up, and there is nothing to
+look them up in: no funnel events, no dashboard, no labels in the UI. You count
+what you watched a person have to do, and you judge how many would finish. So
+"not tracked" is never an answer here, and neither is 0 actions — a journey is
+something a person does, so it costs at least one. If you genuinely cannot tell,
+say so in the note and give your best judgement anyway; a number with a doubt
+beside it is useful, a zero is a false statement about someone's product.
+
 ## Counting the price
 
 One action is one thing the person does. Count on the shortest path the product
