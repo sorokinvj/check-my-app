@@ -26,8 +26,18 @@ await assert.rejects(stopWithConfirmation({
  stop: control('End session'),
  confirm: { waitFor: async () => { time += 3000; }, click: async () => { lateClicks++; } },
  stopped: control('panel'), now: () => time,
-}), /expired/);
+}), /expired before the dialog was visible.*waitFor=3000ms/s);
 assert.equal(lateClicks, 0, 'An expired confirmation must not re-arm Stop');
+
+// Run 7 (2026-09-14): the dialog became visible in time but the click on it
+// timed out — CHE follow-up. The failure must carry a timing breakdown
+// (which sub-step burned the budget) instead of a bare "expired", since the
+// bare message left it undiagnosable which step was slow.
+await assert.rejects(stopWithConfirmation({
+ stop: control('End session'),
+ confirm: { waitFor: async () => { time += 20; }, click: async () => { throw new Error('Timeout 1573ms exceeded'); } },
+ stopped: control('panel'), now: () => time,
+}), /expired clicking Confirm.*stopClick=\d+ms.*click=\d+ms.*elapsed=\d+ms\/2800ms.*visibleAfter=\d+ms.*Timeout 1573ms exceeded/s);
 let attemptedStop = false;
 await assert.rejects(stopWithConfirmation({
  stop: { click: async options => { if (options.trial) throw new Error('Stop is obstructed'); attemptedStop = true; } },

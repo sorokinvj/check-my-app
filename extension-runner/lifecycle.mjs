@@ -12,10 +12,33 @@ export async function stopWithConfirmation({ stop, confirm, stopped, now = Date.
   await stop.click({ trial: true, timeout: 10_000 });
   const startedAt = now();
   await stop.click({ timeout: 1500 });
+  const stopClickDoneAt = now();
   const confirmedAt = startedAt;
-  await confirm.waitFor({ state: 'visible', timeout: Math.max(1, windowMs - (now() - confirmedAt)) });
-  if (now() - confirmedAt >= windowMs) throw new Error('Stop confirmation expired');
-  await confirm.click({ timeout: Math.max(1, windowMs - (now() - confirmedAt)) });
+  // Run 7 (2026-09-14) threw here with 1573ms of windowMs=2800 left at the
+  // confirm click — we could not tell whether that was consumed by the stop
+  // click, the visibility wait, or the click itself, because the error
+  // carried none of the split. Every branch below reports the same
+  // breakdown so the next real failure is diagnosable from its message
+  // alone, without re-instrumenting. windowMs models the extension's own
+  // confirmation-dialog lifetime (server.mjs's "three-second window"
+  // comment), not a budget we are free to widen without evidence it is
+  // actually the extension that is slow — see docs/extension-verification.md
+  // (a clean run showed End→Confirm as close as 486ms), so the fix for a
+  // timeout here is diagnosis, not a bigger number.
+  const budgetAt = label => `stopClick=${stopClickDoneAt - startedAt}ms ${label}=${now() - stopClickDoneAt}ms elapsed=${now() - confirmedAt}ms/${windowMs}ms`;
+  let confirmVisibleAt;
+  try {
+    await confirm.waitFor({ state: 'visible', timeout: Math.max(1, windowMs - (now() - confirmedAt)) });
+    confirmVisibleAt = now();
+  } catch (error) {
+    throw new Error(`Stop confirmation expired waiting for the dialog to appear (${budgetAt('waitFor')}): ${error.message}`);
+  }
+  if (now() - confirmedAt >= windowMs) throw new Error(`Stop confirmation expired before the dialog was visible (${budgetAt('waitFor')})`);
+  try {
+    await confirm.click({ timeout: Math.max(1, windowMs - (now() - confirmedAt)) });
+  } catch (error) {
+    throw new Error(`Stop confirmation expired clicking Confirm (${budgetAt('click')}, visibleAfter=${confirmVisibleAt - stopClickDoneAt}ms): ${error.message}`);
+  }
   const clickedAt = now();
   await stopped.waitFor({ state: 'hidden', timeout: 15_000 });
   return { stopClickedAt: startedAt, confirmClickedAt: clickedAt, stoppedAt: now(), applicationStopObserved: true };
