@@ -49,6 +49,8 @@ interface Row {
 interface Entry extends JourneyCandidate {
   id: string;
   aliases: string[];
+  /** How often each wording was used — the canonical title is the commonest. */
+  wordings: Map<string, number>;
   status: string | null;
   lastRunId: string | null;
   lastRunNumber: number | null;
@@ -94,6 +96,7 @@ for (const row of rows) {
       key: journeyKey(title, catalog.map((c) => c.key)),
       title,
       aliases: [title],
+      wordings: new Map(),
       status: null,
       lastRunId: null,
       lastRunNumber: null,
@@ -116,8 +119,12 @@ for (const row of rows) {
       ` WHERE id=${q(row.id)};`,
   );
 
-  // The catalog row, as the rows go by in run order.
-  entry.title = title;
+  // The catalog row, as the rows go by in run order. The title is the wording
+  // this journey was given most often across its history — the live writer
+  // takes the last walk's wording, but a backfill can see all of them at once,
+  // and the commonest one is the one the owner will recognise.
+  entry.wordings.set(title, (entry.wordings.get(title) ?? 0) + 1);
+  entry.title = [...entry.wordings].sort((a, b) => b[1] - a[1])[0][0];
   entry.status = row.status;
   entry.lastRunId = row.runId;
   entry.lastRunNumber = row.runNumber;

@@ -22,12 +22,21 @@
 //      trail: every wording we merged stays visible.
 //   3. Anchorless titles ("Practice an interview with the AI coach") are
 //      matched on the overlap of their content tokens — at least two shared
-//      tokens, and at least half of the shorter title's tokens. One shared word
+//      tokens, and at least 60% of the shorter title's tokens. (Half was too
+//      loose: two shared words out of four dragged "Start a live AI coaching
+//      session" into "Review past coaching sessions".) One shared word
 //      never merges two journeys.
 //
 // Everything here is crude on purpose: a 40-line stemmer and a table of
 // intents beat an LLM at this because it gives the same answer every run,
 // which is the entire point.
+
+/**
+ * How much of the shorter anchorless title must be shared for two titles to be
+ * the same journey. Two shared words are always required on top of it, so a
+ * single common noun can never merge two journeys.
+ */
+const OVERLAP = 0.6;
 
 /** The intents we recognise, in table order (used only to break a positional tie). */
 const ANCHORS: Array<{ key: string; pattern: RegExp }> = [
@@ -52,9 +61,11 @@ const ANCHORS: Array<{ key: string; pattern: RegExp }> = [
       /\b(pricing|plans?|purchase|purchasing|buy|checkout|payment|pay|upgrade|subscribe|subscription|billing|invoice|minute packs?|credits?)\b/,
   },
   {
+    // Not bare "personalisation": a title like "Build a story library with AI
+    // personalization" is about the library, and letting that word carry the
+    // settings intent filed it under Settings.
     key: "settings",
-    pattern:
-      /\b(settings|preferences|configure|configuring|configuration|personalis[ae]|personaliz[ae]|personalisation|personalization)\b/,
+    pattern: /\b(settings|preferences|configure|configuring|configuration)\b/,
   },
   {
     key: "tutorials",
@@ -195,7 +206,7 @@ export interface JourneyCandidate {
  *   - two different anchors → no, whatever else they share;
  *   - same anchor → yes;
  *   - neither anchored → yes when they share at least two content tokens AND
- *     at least half of the shorter title's tokens.
+ *     at least 60% of the shorter title's tokens.
  * An anchored title never matches an anchorless one: an anchor is a stronger
  * statement about what the journey is than a word count.
  */
@@ -205,7 +216,7 @@ export function sameJourney(a: JourneySignature, b: JourneySignature): boolean {
   const shared = a.tokens.filter((t) => b.tokens.includes(t));
   if (shared.length < 2) return false;
   const smaller = Math.min(a.tokens.length, b.tokens.length);
-  return smaller > 0 && shared.length / smaller >= 0.5;
+  return smaller > 0 && shared.length / smaller >= OVERLAP;
 }
 
 /**
