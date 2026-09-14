@@ -38,6 +38,13 @@ const ENVIRONMENT_TERMS = [
   /\b(?:audio|microphone|account|session) preflight\b/i,
   /\b(?:applicationStopObserved|ownerRunId|targetTabId|runtimeFailed|billingCleanup)\b/i,
   /\bowned (?:expiry|deadline|lease|confirmation sequence|session tools)\b/i,
+  // How the executor died. A run that loses its container now says so in its
+  // internal error (src/agent/extension-exit.ts); "container" on its own is a
+  // customer's word — a logistics app, a Docker product — so these name the
+  // machinery phrasings, not the noun.
+  /\bthe container (?:is not running|just exited|crashed)\b/i,
+  /\bthe executor (?:stopped|exited|crashed|killed|disconnected)\b/i,
+  /\b(?:sigkill|sigsegv|sigterm)\b/i,
 ];
 
 // Phrases that hand the verification back to the customer.
