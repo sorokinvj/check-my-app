@@ -1,0 +1,9 @@
+{
+  "navModel": "deepseek/deepseek-v4-flash-vision-exp",
+  "navVision": "on",
+  "synthModel": "claude-opus-4-8",
+  "judgeModel": "claude-sonnet-4-6",
+  "harnessTier": "judge",
+  "updated": "2026-09-05",
+  "decidedBy": "CHE-168/169 — see COSTS.md 'DeepSeek nav spike' and Notion 'Экономика рана — Starter $29' section 9"
+}
