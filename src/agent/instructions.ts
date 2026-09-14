@@ -2,6 +2,7 @@ import { CUSTOMER_LANGUAGE_RULES } from "@/lib/verdict-language";
 import type { AppAnatomy } from "@/lib/types";
 import type { ProposedJourney } from "./discovery";
 import type { AppKnowledge } from "./knowledge";
+import { JOURNEY_METRICS_GUIDE, metricLine, type JourneyMetric } from "./journey-metrics";
 
 // System-prompt assembly. The worker's contract is textual: the standing
 // mission + the client's own instructions (scope hints, notes) compose into the
@@ -285,6 +286,50 @@ emit the JSON below. Always finish with the JSON, never with a plan to
   return lines.join("\n\n");
 }
 
+// CHE-235: the price/conversion contract, plus what these journeys cost last
+// time. The guide is shared verbatim with .claude/skills/journey-metrics —
+// scripts/verify-journey-metrics.ts fails if the two drift, so the rules a
+// coding agent reads and the rules our model is handed are one document.
+//
+// The stored numbers go in AFTER the guide on purpose: the guide's last section
+// is "changing a number", and the numbers it governs read directly under it.
+export function journeyMetricsBlock(known?: KnownMap | null): string {
+  const lines = [JOURNEY_METRICS_GUIDE];
+  const priced = (known?.journeys ?? []).filter((j) => j.metric || j.surface);
+  if (priced.length) {
+    lines.push(
+      `WHAT THESE JOURNEYS COST LAST TIME — answer for each one whether it changed:\n` +
+        priced
+          .map(
+            (j) =>
+              `- "${j.title}" [${j.surface ?? "surface not recorded"}] — ${metricLine(
+                asMetric(j.metric),
+              )}`,
+          )
+          .join("\n"),
+    );
+  }
+  lines.push(
+    `Give every journey you propose a "surface": "app" when it crosses the ` +
+      `product (sign up → first value), or the path of the page it belongs to ` +
+      `("/settings") when it lives on one. A page can hold several journeys — ` +
+      `changing a preference, uploading a file and pairing a device on the same ` +
+      `settings page are three journeys, not three wordings of one.`,
+  );
+  return lines.join("\n\n");
+}
+
+// The stored metric arrives as the loose shape everything else uses; render it
+// only when it is actually a pair of numbers.
+function asMetric(metric: ProposedJourney["metric"]): JourneyMetric | null {
+  if (!metric || typeof metric.price !== "number" || typeof metric.conversion !== "number") return null;
+  return {
+    price: metric.price,
+    conversion: metric.conversion,
+    note: typeof metric.note === "string" ? metric.note : "",
+  };
+}
+
 // CHE-136: what the block shows of the app's history. Settled lines are
 // already capped by composeKnowledge; these bound the other two lists.
 export const KNOWLEDGE_CAPS = {
@@ -398,8 +443,11 @@ and forms (do not submit anything irreversible). Identify:
 
 ${known ? knownMapBlock(known) : EXPLORATION_BUDGET}
 
+${journeyMetricsBlock(known)}
+
 When done, respond with ONLY a JSON object, no prose:
-{"journeys":[{"title":"...","steps":["...", "..."]}],
+{"journeys":[{"title":"...","steps":["...", "..."],"surface":"app" | "/settings",
+  "price":6,"conversion":65,"metricNote":"..."}],
  "anatomy":{"pages":["/", ...],"actions":["...", ...],
   "services":[{"name":"...","role":"..."}],
   "tech":{"frontend":"...","hosting":"...","auth":"...","realtime":"..."}}}${focusBlock(run)}${

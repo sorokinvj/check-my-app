@@ -17,8 +17,15 @@
 // file decides what a journey IS — it only stores the answer.
 
 import { parseJson } from "@/lib/json";
-import { journeyKey, matchJourney, normalizeTitle, type JourneyCandidate } from "@/lib/journey-key";
+import {
+  journeyKey,
+  matchJourney,
+  normalizeSurface,
+  normalizeTitle,
+  type JourneyCandidate,
+} from "@/lib/journey-key";
 import type { AgentEnv } from "./env";
+import { decideMetric, type JourneyMetric, type RawMetric } from "./journey-metrics";
 
 /** The statuses that mean the journey is in good shape (partial.ts agrees). */
 const HEALTHY = new Set(["ok", "partial"]);
@@ -46,31 +53,40 @@ export async function resolveJourney(
   env: AgentEnv,
   run: { appId?: string | null },
   title: string,
+  surface?: string | null,
 ): Promise<ResolvedJourney> {
   const trimmed = title.trim();
+  const where = normalizeSurface(surface);
   if (!run.appId) {
-    return { appJourneyId: null, key: journeyKey(trimmed), isNew: false };
+    return { appJourneyId: null, key: journeyKey(trimmed, [], where), isNew: false };
   }
 
   const rows = await env.db.appJourney.findMany({
     where: { appId: run.appId },
     orderBy: { createdAt: "asc" },
-    select: { id: true, key: true, title: true, aliases: true },
+    select: { id: true, key: true, title: true, aliases: true, surface: true },
   });
   const candidates: Array<JourneyCandidate & { id: string }> = rows.map((r) => ({
     id: r.id,
     key: r.key,
     title: r.title,
     aliases: parseJson<string[]>(r.aliases) ?? [r.title],
+    surface: r.surface,
   }));
 
-  const hit = matchJourney(trimmed, candidates) as (JourneyCandidate & { id: string }) | null;
+  const hit = matchJourney(trimmed, candidates, where) as (JourneyCandidate & { id: string }) | null;
   if (hit) return { appJourneyId: hit.id, key: hit.key, isNew: false };
 
-  const key = journeyKey(trimmed, candidates.map((c) => c.key));
+  const key = journeyKey(trimmed, candidates.map((c) => c.key), where);
   try {
     const created = await env.db.appJourney.create({
-      data: { appId: run.appId, key, title: trimmed, aliases: JSON.stringify([trimmed]) },
+      data: {
+        appId: run.appId,
+        key,
+        title: trimmed,
+        aliases: JSON.stringify([trimmed]),
+        ...(where ? { surface: where } : {}),
+      },
     });
     return { appJourneyId: created.id, key, isNew: true };
   } catch {
@@ -105,13 +121,24 @@ export async function recordWalk(
     status: string;
     /** Step labels this walk produced, in order. Empty = keep the stored plan. */
     plan: string[];
+    /** CHE-235: where the journey lives, when this run was told. */
+    surface?: string | null;
+    /** CHE-235: the price this run may record — already judged by journeyMetric. */
+    metric?: JourneyMetric | null;
     at?: Date;
   },
 ): Promise<void> {
   if (!args.appJourneyId) return;
   const row = await env.db.appJourney.findUnique({
     where: { id: args.appJourneyId },
-    select: { aliases: true, consecutiveBad: true, failingSince: true },
+    select: {
+      aliases: true,
+      consecutiveBad: true,
+      failingSince: true,
+      surface: true,
+      price: true,
+      conversion: true,
+    },
   });
   if (!row) return;
 
@@ -119,6 +146,7 @@ export async function recordWalk(
   const walked = args.status !== "skipped";
   const healthy = HEALTHY.has(args.status);
   const consecutiveBad = !walked ? row.consecutiveBad : healthy ? 0 : row.consecutiveBad + 1;
+  const metric = metricUpdate(row, args, at);
 
   await env.db.appJourney.update({
     where: { id: args.appJourneyId },
@@ -132,12 +160,79 @@ export async function recordWalk(
         ? { lastWalkedAt: at, lastWalkedRunId: args.runId, walkCount: { increment: 1 } }
         : {}),
       ...(args.plan.length ? { plan: JSON.stringify(args.plan) } : {}),
+      // A surface we have been told sticks; one we have not been told never
+      // overwrites what we know.
+      ...(normalizeSurface(args.surface) && !row.surface
+        ? { surface: normalizeSurface(args.surface) }
+        : {}),
       consecutiveBad,
       failingSince: consecutiveBad === 0 ? null : (row.failingSince ?? at),
       // A journey that walked again is a journey the product still has.
       ...(walked ? { retiredAt: null, retiredReason: null } : {}),
+      ...metric,
     },
   });
+}
+
+/**
+ * CHE-235 — what this run may say a journey costs its user.
+ *
+ * The one place the rule is applied: what the model offered, judged against
+ * what the catalog holds (journey-metrics.ts `decideMetric`). A changed number
+ * whose note names no change is refused here, so the per-run row and the
+ * catalog can never disagree about it — they both take this answer.
+ *
+ * Returns null when nothing should be written at all: a run with no numbers to
+ * offer (every partial run, every model that skipped the field) leaves the
+ * journey's price exactly as it was.
+ */
+export async function journeyMetric(
+  env: AgentEnv,
+  appJourneyId: string | null,
+  raw: RawMetric | null | undefined,
+): Promise<JourneyMetric | null> {
+  if (!raw) return null;
+  const previous = appJourneyId ? await storedMetric(env, appJourneyId) : null;
+  const decision = decideMetric(raw, previous);
+  console.log(`[journey] metric ${decision.kept ? "kept" : "taken"}: ${decision.reason}`);
+  // A kept decision means "the stored value stands" — there is nothing new to
+  // write, and writing the old value again would stamp it with today's run.
+  return decision.kept ? null : decision.value;
+}
+
+async function storedMetric(env: AgentEnv, appJourneyId: string): Promise<JourneyMetric | null> {
+  const row = await env.db.appJourney.findUnique({
+    where: { id: appJourneyId },
+    select: { price: true, conversion: true, metricNote: true },
+  });
+  if (!row || row.price === null || row.conversion === null) return null;
+  return { price: row.price, conversion: row.conversion, note: row.metricNote ?? "" };
+}
+
+/**
+ * The price/conversion half of a catalog update, from an answer `journeyMetric`
+ * has already accepted. It never overwrites prevPrice/prevConversion when the
+ * number did not actually move — so "6 → 8" survives a later run that merely
+ * confirmed 8.
+ */
+function metricUpdate(
+  row: { price: number | null; conversion: number | null },
+  args: { metric?: JourneyMetric | null; runId: string },
+  at: Date,
+): Record<string, unknown> {
+  const metric = args.metric;
+  if (!metric) return {};
+  const moved = row.price !== metric.price || row.conversion !== metric.conversion;
+  return {
+    price: metric.price,
+    conversion: metric.conversion,
+    metricNote: metric.note.slice(0, 300),
+    metricRunId: args.runId,
+    metricAt: at,
+    ...(moved && row.price !== null && row.conversion !== null
+      ? { prevPrice: row.price, prevConversion: row.conversion }
+      : {}),
+  };
 }
 
 /**
@@ -191,18 +286,41 @@ export async function journeysForMap(
   env: AgentEnv,
   appId: string,
   maxSteps: number,
-): Promise<Array<{ title: string; steps: string[] }> | null> {
+): Promise<Array<{
+  title: string;
+  steps: string[];
+  surface: string | null;
+  metric: JourneyMetric | null;
+}> | null> {
   const rows = await env.db.appJourney.findMany({
     where: { appId, retiredAt: null },
     orderBy: [{ walkCount: "desc" }, { lastWalkedAt: "desc" }],
-    select: { title: true, status: true, plan: true },
+    select: {
+      title: true,
+      status: true,
+      plan: true,
+      surface: true,
+      price: true,
+      conversion: true,
+      metricNote: true,
+    },
   });
   const journeys = rows
     .filter((j) => j.status !== "skipped")
     .map((j) => {
       const plan = (parseJson<string[]>(j.plan) ?? []).filter((s) => typeof s === "string" && s.trim());
-      // A title is a worse plan than real steps and a much better one than none.
-      return { title: j.title, steps: plan.length ? plan.slice(0, maxSteps) : [j.title] };
+      return {
+        title: j.title,
+        // A title is a worse plan than real steps and a much better one than none.
+        steps: plan.length ? plan.slice(0, maxSteps) : [j.title],
+        surface: j.surface,
+        // CHE-235: what it cost last time, so the model answers "did this
+        // change?" instead of inventing a number from scratch every run.
+        metric:
+          j.price !== null && j.conversion !== null
+            ? { price: j.price, conversion: j.conversion, note: j.metricNote ?? "" }
+            : null,
+      };
     });
   return journeys.length ? journeys : null;
 }

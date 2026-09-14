@@ -12,8 +12,14 @@
 // scripts/verify-journey-identity.ts can drive it from Node against the real
 // production titles.
 //
-// Three stages, cheapest and most certain first:
+// Four stages, cheapest and most certain first:
 //
+//   0. Two journeys that live in different places are different journeys
+//      (CHE-235). A page holds several — joblander's /settings has coach
+//      preferences, the resume upload and the extension pairing — so the rules
+//      below only ever compare journeys on the same surface. An unknown surface
+//      is compatible with everything, so nothing is split off from its own
+//      history for want of an answer.
 //   1. The same normalised title is the same journey. Always right, no rules.
 //   2. An ANCHOR — the first recognisable intent in the title ("sign up",
 //      "log in", "install the extension", "pricing"). One anchor, one journey
@@ -198,6 +204,47 @@ export interface JourneyCandidate {
   title: string;
   /** Every title ever seen for this journey, the canonical one included. */
   aliases?: string[];
+  /**
+   * CHE-235: "app" for a journey that crosses the product, or the path of the
+   * page it belongs to ("/settings"). Undefined/null = not known.
+   */
+  surface?: string | null;
+}
+
+/**
+ * Two journeys can only be the same journey if they live in the same place.
+ * A page holds several journeys — joblander's /settings has coach preferences,
+ * the resume upload and the extension pairing — and without this they would all
+ * be filed under one "settings" intent.
+ *
+ * An unknown surface on either side is compatible with everything: a journey
+ * that predates the column must not be split off from its own history, and a
+ * proposal that forgot to say where it lives is not thereby a new journey.
+ */
+export function sameSurface(a: string | null | undefined, b: string | null | undefined): boolean {
+  const x = normalizeSurface(a);
+  const y = normalizeSurface(b);
+  if (!x || !y) return true;
+  return x === y;
+}
+
+/** Lower-cased path with no trailing slash, or "app". Null when absent. */
+export function normalizeSurface(surface: string | null | undefined): string | null {
+  if (typeof surface !== "string") return null;
+  const trimmed = surface.trim().toLowerCase();
+  if (!trimmed) return null;
+  if (trimmed === "app" || trimmed === "app-wide" || trimmed === "*") return "app";
+  let path = trimmed;
+  try {
+    // A full URL is accepted and reduced to its path: the model is as likely to
+    // answer "https://app.test/settings" as "/settings".
+    if (/^https?:\/\//.test(path)) path = new URL(path).pathname;
+  } catch {
+    // Not a URL after all — fall through and treat it as a path.
+  }
+  if (!path.startsWith("/")) path = `/${path}`;
+  path = path.replace(/\/+$/, "");
+  return path || "/";
 }
 
 /**
@@ -227,16 +274,20 @@ export function sameJourney(a: JourneySignature, b: JourneySignature): boolean {
 export function matchJourney(
   title: string,
   candidates: JourneyCandidate[],
+  surface?: string | null,
 ): JourneyCandidate | null {
   const sig = signatureOf(title);
+  // Only journeys that live in the same place can be the same journey
+  // (CHE-235). Unknown on either side stays compatible.
+  const here = candidates.filter((c) => sameSurface(surface, c.surface));
   // An alias is a title we have already resolved to this entry; trust it over
   // any rule below, so a merge (or a correction) never silently reverses.
   const normalized = sig.normalized;
-  for (const c of candidates) {
+  for (const c of here) {
     const aliases = c.aliases ?? [c.title];
     if (aliases.some((a) => normalizeTitle(a) === normalized)) return c;
   }
-  for (const c of candidates) {
+  for (const c of here) {
     if (sameJourney(sig, signatureOf(c.title))) return c;
   }
   return null;
@@ -248,13 +299,24 @@ export function matchJourney(
  * within the app — a suffix is the honest way to say "same shape, different
  * journey", and it only ever happens for anchorless titles.
  */
-export function journeyKey(title: string, taken: Iterable<string> = []): string {
+export function journeyKey(
+  title: string,
+  taken: Iterable<string> = [],
+  surface?: string | null,
+): string {
   const sig = signatureOf(title);
   const base =
     sig.anchor ??
     (sig.tokens.length ? sig.tokens.slice(0, 3).join("-") : slugFallback(sig.normalized));
   const used = new Set(taken);
   if (!used.has(base)) return base;
+  // Taken by a journey somewhere else in the product: say where this one lives
+  // rather than counting. "settings-account" reads; "settings-2" does not.
+  const page = normalizeSurface(surface);
+  if (page && page !== "app") {
+    const scoped = `${base}-${page.replace(/^\//, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`;
+    if (scoped !== base && !used.has(scoped)) return scoped;
+  }
   for (let n = 2; n < 100; n += 1) {
     const candidate = `${base}-${n}`;
     if (!used.has(candidate)) return candidate;

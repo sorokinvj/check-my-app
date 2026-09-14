@@ -31,7 +31,8 @@ import { classifyGap, gapEvidenceText } from "./gap-classes";
 import { cutUndrivenClaims, type GateStep } from "./findings-gate";
 import { summaryFallback } from "@/lib/verdict-language";
 import { summarizeWalk } from "./summary";
-import { recordWalk, resolveJourney } from "./journey-catalog";
+import { journeyMetric, recordWalk, resolveJourney } from "./journey-catalog";
+import { normalizeSurface } from "@/lib/journey-key";
 import { ExtensionRuntimeError } from "./extension-error";
 import { extensionAccountingStep, extensionProductFailureStep } from "./extension-evidence";
 
@@ -133,10 +134,16 @@ export async function walkOneJourney(args: {
     // a single step is written. The identity rules are in lib/journey-key.ts;
     // a run with no App row gets the key and no catalog row. Never fatal: a
     // catalog we could not read costs this journey its history, not its walk.
-    const identity = await resolveJourney(env, run, proposed.title).catch((err) => {
+    const identity = await resolveJourney(env, run, proposed.title, proposed.surface).catch((err) => {
       console.warn(`[journey] identity unresolved for "${proposed.title}": ${errText(err)}`);
       return { appJourneyId: null, key: null, isNew: false };
     });
+
+    // CHE-235: what this check says the journey is worth to its user. Decided
+    // against the stored value, so a number only moves when the model named
+    // what changed; `null` when this run had nothing to say (a re-walk, a
+    // model that skipped the field).
+    const metric = await journeyMetric(env, identity.appJourneyId, proposed.metric);
 
     const journey = await env.db.journey.create({
       data: {
@@ -146,6 +153,9 @@ export async function walkOneJourney(args: {
         status: "ok",
         appJourneyId: identity.appJourneyId,
         journeyKey: identity.key,
+        surface: normalizeSurface(proposed.surface),
+        price: metric?.price ?? null,
+        conversion: metric?.conversion ?? null,
       },
     });
 
@@ -424,6 +434,8 @@ export async function walkOneJourney(args: {
         title: proposed.title,
         status: journeyStatus(stepStatuses),
         plan: walkedSteps.map((s) => s.label).filter(Boolean),
+        surface: proposed.surface,
+        metric,
       }).catch((err) => console.warn(`[journey] catalog not updated: ${errText(err)}`));
     } catch (err) {
       // Per-journey isolation: one failure must not abort the rest of the run.
@@ -449,6 +461,8 @@ export async function walkOneJourney(args: {
         title: proposed.title,
         status: abortedStatus,
         plan: walkedSteps.map((s) => s.label).filter(Boolean),
+        surface: proposed.surface,
+        metric,
       }).catch((e) => console.warn(`[journey] catalog not updated: ${errText(e)}`));
     } finally {
       await closeAgentContext(browser, context);

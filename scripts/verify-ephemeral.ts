@@ -594,6 +594,10 @@ async function main() {
       // know when this was walked", never as "walked".
       "AppJourney.lastRunId",
       "AppJourney.lastWalkedRunId",
+      // CHE-235: which run last moved the journey's price. Same reasoning, and
+      // the same rule for a reader: a run it cannot find means "we do not know
+      // when this number was set", never "it was set today".
+      "AppJourney.metricRunId",
     ];
     const handled = new Set([...DELETED, ...DETACHED]);
     const expected = owned;
