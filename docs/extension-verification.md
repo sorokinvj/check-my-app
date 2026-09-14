@@ -219,6 +219,23 @@ vCPU/12 GiB) in both `wrangler-agent.jsonc` and the probe config. At
 roughly $0.07 to $0.20 — small next to the run's LLM cost, and the only one
 of the two numbers that was ever the constraint.
 
+**Rolled out and re-smoked, 2026-09-14 17:30 UTC.** The probe's container
+application reports `vcpu: 4`, `memory_mib: 12288`, `active_rollout_id:
+null`, and the executor still boots the same way on it: JobLander 3.26.1,
+artifact SHA-256 `5e52e2eb…`, `identityKeyRestored: true`, Chrome
+145.0.7632.6, service worker and target tab up, disposal clean
+(`disposed: true`, `closeReason: "requested"`, no sessions) in seven
+seconds. The production `wrangler-agent.jsonc` carries the same instance
+type but is not deployed — this feature has never been on production
+CheckMyApp.
+
+What this does **not** prove: that the Stop confirmation now lands. Nothing
+here ran a paid session, so the starved-renderer theory stays a theory with
+a strong log behind it until a combined-scenario run confirms under real
+load. That is the next paid run's job, and the timing breakdown added to
+`stopWithConfirmation` will say which sub-step the budget went to if it
+fails again.
+
 ## Previous checkpoint — 2026-09-14 10:47 UTC
 
 PR #81 remains on `feat/chrome-extension-targets`; pushed head `c904293` has
