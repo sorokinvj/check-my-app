@@ -1,7 +1,9 @@
 import { Container } from "@cloudflare/containers";
+import type { StopParams } from "@cloudflare/containers";
 import type { AgentBindings } from "./env";
 import type { ExtensionRunnerInput, ExtensionSession } from "./extension-contract";
 import { extensionArtifactEvidence } from "./extension-artifact";
+import { describeExecutorExit, type ExecutorExit } from "./extension-exit";
 interface Lease {
   token: string;
   expiresAt: number;
@@ -42,9 +44,25 @@ export class ExtensionRunner extends Container<AgentBindings> {
       await this.ctx.storage.put("identity", session);
       return session;
     } catch (error) {
+      const exit = await this.ctx.storage.get<ExecutorExit>("lastExit");
       await this.expire().catch(() => {});
-      throw error;
+      throw new Error(describeExecutorExit(error, exit));
     }
+  }
+
+  // The executor's own death is the one fact a "the container is not running"
+  // message never carries. Without the exit code every such failure reads the
+  // same, and reading it as anything about the extension is exactly the
+  // confusion rule 8 exists to prevent (CHE-233: five identical runs, no cause).
+  override async onStop(params: StopParams): Promise<void> {
+    const exit: ExecutorExit = { exitCode: params.exitCode, reason: params.reason, at: Date.now() };
+    console.log(`[extension-runner] executor stopped: exitCode=${exit.exitCode} reason=${exit.reason}`);
+    await this.ctx.storage.put("lastExit", exit).catch(() => {});
+  }
+
+  override onError(error: unknown): unknown {
+    console.error(`[extension-runner] executor error: ${error instanceof Error ? `${error.name}: ${error.message}` : String(error)}`);
+    return error;
   }
 
   override async fetch(request: Request): Promise<Response> {
