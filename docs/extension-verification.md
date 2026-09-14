@@ -2,7 +2,7 @@
 
 Source: [Extension verification PRD](https://app.notion.com/p/3d97bac6430a81a1b09fdacc72d609c6).
 
-## Current state — 2026-09-14 12:22 UTC
+## Current state — 2026-09-14 12:25 UTC
 
 PR #81 is still on `feat/chrome-extension-targets`; CI passed for `8b6aff4`.
 CheckMyApp production has not been merged or deployed. The hourly heartbeat
@@ -25,8 +25,43 @@ exact placeholder/label/role matching while refusing unidentified or ambiguous
 fields. The generated-code acceptance test exercises placeholder sign-in,
 missing/ambiguous field refusal before Start and mandatory disposal. Prisma,
 both typechecks, lint (three existing warnings) and all 55 acceptance scripts
-pass. A current-generator replay of the same recorded plan is in progress;
-it is not yet a fresh verdict-UI download. No full Run 7 has been submitted.
+pass. The current-generator replay of the same recorded plan passed in 4.7 minutes:
+138/136 seconds, fresh combined result, both UI Stops, six consumed minutes,
+73.872 seconds of stable balance and confirmed disposal. Minute attribution is
+still inconclusive. Evidence:
+`/tmp/checkmyapp-current-generator-combined18-cleanup.json`. This is a replay of
+the recorded plan, not yet a fresh verdict-UI download. Full Run 7
+(`cmu17u7wv0012rq1353pm79e0`, public `cmu17u7wv0013rq13lw7lprtx`)
+was submitted through the local owner dashboard with frozen Workflow SHA-256
+`cae60ebc84e2a27ee3c950e6491957f3ac47a83b434782551a29de6cd8e8275b`.
+
+**Run 7 failed.** Discovery on Sonnet: 56 calls, $0.30005985. Interview
+(~179s) and standalone practice (~168s) both returned fresh results with
+confirmed spend stop. The combined scenario's extension confirmation failed:
+`locator.click: Timeout 1573ms exceeded ... waiting for getByRole('button',
+{ name: 'Confirm end session', exact: true })`. Practice stopped through the
+UI; the extension's Stop stayed `unverified`. The executor recorded
+`application-stop-unverified` and closed the browser at 12:52:10 UTC. The
+Run received `failed`; no verdict was published (correct per CLAUDE.md rule
+4/8 — an unverified cleanup is our own defect, not a customer finding). The
+two remaining scenarios were not run. This is a repeat of the same
+Stop-confirmation timeout despite the earlier standalone replay passing —
+the fix is not stable. A post-stop balance check (no new paid sessions)
+showed 1504 before the failed combined scenario, 1497 after, then unchanged
+for 81.465s; the profile was released. A stable balance does not make an
+unverified UI Stop a pass.
+
+**Work halted after Run 7, by owner order (2026-09-14).** Separately, the
+local test stand's `ANTHROPIC_NAV_MODEL`/`ANTHROPIC_SYNTH_MODEL` were found
+still pointed at `claude-sonnet-4-6`/`claude-opus-4-8` — production has run
+DeepSeek nav since 2026-09-05 (CHE-168/169) — so none of the runs above
+validated against the actual production model pipeline. That drift is now
+fixed on `main` (PR #82/#83, `src/agent/model-tier.recommended.json` +
+`scripts/verify-model-config.mjs`) but not yet on this branch. Resuming
+requires, in order: rebase onto `main` and remove every explicit
+Sonnet/Opus override this branch's own setup introduced, root-cause and fix
+the Stop-confirmation timeout above, then one accepted full Run on DeepSeek
+before any release decision.
 
 ## Previous checkpoint — 2026-09-14 10:47 UTC
 
