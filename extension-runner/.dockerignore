@@ -6,6 +6,7 @@
 !health.mjs
 !lifecycle.mjs
 !observation.mjs
+!progress.mjs
 !server.mjs
 !store.mjs
 !surface.mjs
@@ -19,5 +20,3 @@
 !targets.mjs
 !native.py
 !redaction.py
-!fixtures/
-!fixtures/**
