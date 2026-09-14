@@ -214,6 +214,15 @@ model AppJourney {
   // The plan: ordered step labels from the last walk that produced any, JSON
   // string[]. What discovery is asked to confirm and what a re-walk starts from.
   plan    String @default("[]")
+  // CHE-235: where the journey lives. "app" for one that crosses the product
+  // (sign up → first value), or the path of the surface it belongs to
+  // ("/settings"). A page can hold several journeys — joblander's /settings has
+  // coach preferences, the resume upload and the extension pairing, and they
+  // are three journeys, not three wordings of one. Identity is matched WITHIN a
+  // surface for exactly that reason (src/lib/journey-key.ts). NULL means we
+  // have not been told yet, and matches anything rather than splitting a
+  // journey off from its own history.
+  surface String?
 
   // Current state, updated by every run that walks it. status is the same
   // StepStatus roll-up the per-run row carries.
@@ -232,6 +241,24 @@ model AppJourney {
   // Everything this journey has cost us, summed over its checks. The journey is
   // the unit of work, so it is also the unit of spend.
   costUsd         Float @default(0)
+
+  // CHE-235 — what the journey costs the PERSON walking it, which is a
+  // different question from what it costs us and a far more interesting one.
+  // price: how many actions they perform. conversion: of 100 who start, how
+  // many finish. Both opinionated, both assigned by the model at discovery
+  // against the stored value, both policed by src/agent/journey-metrics.ts —
+  // a changed number whose note names no change is refused and the stored one
+  // stands. prev* is the value before the last move, so "6 → 8 actions" is
+  // readable without joining the run history.
+  price          Int?
+  conversion     Int?
+  prevPrice      Int?
+  prevConversion Int?
+  // The model's one sentence: what changed, or why this is the first value.
+  // Internal — never rendered into a verdict or an email as written.
+  metricNote     String?
+  metricRunId    String?
+  metricAt       DateTime?
   // A journey the product no longer has. Kept, never deleted (it is the record
   // of what the app used to do) and never walked again.
   retiredAt     DateTime?
@@ -262,6 +289,11 @@ model Journey {
   appJourney   AppJourney? @relation(fields: [appJourneyId], references: [id], onDelete: SetNull)
   appJourneyId String?
   journeyKey   String?
+  // CHE-235: "app" or the path this journey belongs to, and what this check
+  // said the journey costs its user — price in actions, conversion out of 100.
+  surface      String?
+  price        Int?
+  conversion   Int?
   // What this check cost: the walking loop plus its judge, the same number that
   // lands in LlmUsage for this journey. Null on a carried journey — nothing was
   // spent walking it — and on rows written before the column.

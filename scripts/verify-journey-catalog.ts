@@ -20,6 +20,7 @@
 import type { AgentEnv } from "@/agent/env";
 import { parseJson } from "@/lib/json";
 import {
+  journeyMetric,
   journeysForKnowledge,
   journeysForMap,
   recordCarry,
@@ -220,6 +221,48 @@ async function main() {
   const { env: fresh } = stubDb();
   await resolveJourney(fresh, APP, "Sign up for a new account");
   check("a journey nothing has walked yet is not offered as knowledge", (await journeysForKnowledge(fresh, "app_1", 5)).length === 0);
+}
+
+// 8 — the price the user pays, on the catalog (CHE-235).
+{
+  const { env, appJourney } = stubDb();
+  const j = await resolveJourney(env, APP, "Sign up for a new account", "app");
+  check("a journey remembers where it lives", appJourney[0].surface === "app", String(appJourney[0].surface));
+
+  const first = await journeyMetric(env, j.appJourneyId, { price: 6, conversion: 65, note: "five fields and a late password rule" });
+  await recordWalk(env, { appJourneyId: j.appJourneyId, runId: "r1", runNumber: 1, title: "Sign up for a new account", status: "ok", plan: ["open /signup"], metric: first, at: day(1) });
+  check("the first price lands on the journey", appJourney[0].price === 6 && appJourney[0].conversion === 65);
+  check("…with nothing behind it yet", appJourney[0].prevPrice === undefined || appJourney[0].prevPrice === null);
+  check("…and the run that set it", appJourney[0].metricRunId === "r1");
+
+  const moved = await journeyMetric(env, j.appJourneyId, { price: 8, conversion: 45, note: "two fields added and an email code is now required" });
+  await recordWalk(env, { appJourneyId: j.appJourneyId, runId: "r2", runNumber: 2, title: "Sign up for a new account", status: "ok", plan: ["open /signup"], metric: moved, at: day(2) });
+  check("a named change moves the number", appJourney[0].price === 8 && appJourney[0].conversion === 45);
+  check("…and keeps what it was before", appJourney[0].prevPrice === 6 && appJourney[0].prevConversion === 65, `${appJourney[0].prevPrice}/${appJourney[0].prevConversion}`);
+
+  const silent = await journeyMetric(env, j.appJourneyId, { price: 9, conversion: 40, note: "" });
+  check("an unexplained change is not even offered to the catalog", silent === null);
+  await recordWalk(env, { appJourneyId: j.appJourneyId, runId: "r3", runNumber: 3, title: "Sign up for a new account", status: "ok", plan: ["open /signup"], metric: silent, at: day(3) });
+  check("…so the stored number stands", appJourney[0].price === 8 && appJourney[0].conversion === 45);
+  check("…and so does the run that really set it", appJourney[0].metricRunId === "r2", String(appJourney[0].metricRunId));
+
+  const confirmed = await journeyMetric(env, j.appJourneyId, { price: 8, conversion: 45, note: "" });
+  await recordWalk(env, { appJourneyId: j.appJourneyId, runId: "r4", runNumber: 4, title: "Sign up for a new account", status: "ok", plan: ["open /signup"], metric: confirmed, at: day(4) });
+  check("confirming a number does not erase what it moved from", appJourney[0].prevPrice === 6 && appJourney[0].prevConversion === 65, `${appJourney[0].prevPrice}/${appJourney[0].prevConversion}`);
+
+  // A page with more than one journey on it — the owner's case.
+  const second = await resolveJourney(env, APP, "Upload your resume", "/settings");
+  const third = await resolveJourney(env, APP, "Pair the Chrome extension", "/settings");
+  check("two journeys on one page are two journeys", second.appJourneyId !== third.appJourneyId && appJourney.length === 3, `${appJourney.length} rows`);
+  const again = await resolveJourney(env, APP, "Upload a resume file", "/settings");
+  check("…and a reworded one rejoins its own", again.appJourneyId === second.appJourneyId);
+
+  // An anonymous run has no catalog row to compare against — it still prices
+  // the journey for its own row, as a first value.
+  check(
+    "a run with no catalog still prices the journey for its own row",
+    (await journeyMetric(env, null, { price: 3, conversion: 90, note: "an anonymous check still counts actions" }))?.price === 3,
+  );
 }
 
 // Aliases: bounded, deduped on the normalised form, newest last.

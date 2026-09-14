@@ -19,6 +19,7 @@ import {
 import { discoveryLeanEnabled, harnessMode, putScreenshot, type AgentEnv } from "./env";
 import { discoveryLoopMode } from "./discovery-mode";
 import type { AppKnowledge } from "./knowledge";
+import type { RawMetric } from "./journey-metrics";
 import { emptyUsage, mergeUsage, type LlmConfig, type UsageTotals } from "./llm";
 import { credentialsAlreadyRejected, recordCredentialRejection } from "./credentials";
 
@@ -43,6 +44,23 @@ export interface ProposedJourney {
   title: string;
   steps: string[];
   extensionScenario?: "interview" | "practice" | "practice-extension";
+  // CHE-235: "app" for a journey that crosses the product, or the page it
+  // belongs to ("/settings"). A page holds several journeys, and identity is
+  // matched within a surface, so this is part of what the journey IS rather
+  // than decoration. Absent on a re-walk proposal — the catalog already knows.
+  surface?: string | null;
+  // CHE-235: what the model says this journey costs its user, before any of it
+  // is believed (journey-metrics.ts decides what may be stored). Concrete types
+  // rather than `unknown`: this object crosses a Workflow step boundary and has
+  // to survive being serialised.
+  metric?: ProposedMetric | null;
+}
+
+/** A price/conversion answer as it arrives from the model, coerced, not judged. */
+export interface ProposedMetric {
+  price: number | null;
+  conversion: number | null;
+  note: string;
 }
 
 // CHE-133: the map from the last full check of a watched app, and the two
@@ -260,7 +278,15 @@ export async function discoverApp(args: {
 }
 
 interface RawDiscovery {
-  journeys?: Array<{ title?: string; steps?: string[] }>;
+  journeys?: Array<{
+    title?: string;
+    steps?: string[];
+    // CHE-235: where the journey lives, and what it costs its user.
+    surface?: unknown;
+    price?: unknown;
+    conversion?: unknown;
+    metricNote?: unknown;
+  }>;
   anatomy?: {
     pages?: unknown;
     actions?: unknown;
@@ -272,6 +298,12 @@ interface RawDiscovery {
 }
 
 type ShapedDiscovery = Omit<DiscoveryResult, "transcript" | "costUsd" | "usage" | "notes">;
+
+// A model may answer "6", 6 or nothing at all; anything else is nothing.
+function numberOrNull(value: unknown): number | null {
+  const n = typeof value === "string" ? Number(value) : typeof value === "number" ? value : NaN;
+  return Number.isFinite(n) ? Math.round(n) : null;
+}
 
 function techToRecord(tech: unknown): Record<string, string> {
   const out: Record<string, string> = {};
@@ -299,7 +331,19 @@ function shapeDiscovery(raw: RawDiscovery): ShapedDiscovery {
     journeys: (raw.journeys ?? [])
       .filter((j) => j.title)
       .slice(0, 5)
-      .map((j) => ({ title: String(j.title), steps: (j.steps ?? []).map(String) })),
+      .map((j) => ({
+        title: String(j.title),
+        steps: (j.steps ?? []).map(String),
+        // CHE-235: passed through as the model wrote them. Nothing is trusted
+        // here — journey-metrics.ts decides what may be stored, against what
+        // the catalog already holds.
+        surface: typeof j.surface === "string" ? j.surface : null,
+        metric: {
+          price: numberOrNull(j.price),
+          conversion: numberOrNull(j.conversion),
+          note: typeof j.metricNote === "string" ? j.metricNote : "",
+        },
+      })),
     anatomy: {
       pages: (Array.isArray(a.pages) ? a.pages : []) as AppAnatomy["pages"],
       actions: (Array.isArray(a.actions) ? a.actions : []) as AppAnatomy["actions"],
@@ -360,10 +404,18 @@ function errText(err: unknown): string {
 const JOURNEY_ITEM_SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["title", "steps"],
+  // CHE-235: price/conversion/surface are required so the model answers for
+  // every journey rather than for the easy ones. What it answers is then
+  // policed by journey-metrics.ts — a changed number with no named change is
+  // refused — so "required" costs nothing in trust.
+  required: ["title", "steps", "surface", "price", "conversion", "metricNote"],
   properties: {
     title: { type: "string" },
     steps: { type: "array", items: { type: "string" } },
+    surface: { type: "string" },
+    price: { type: "integer" },
+    conversion: { type: "integer" },
+    metricNote: { type: "string" },
   },
 };
 
