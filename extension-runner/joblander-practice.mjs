@@ -55,22 +55,27 @@ export async function startPractice(page) {
   return { control, at: Date.now() };
 }
 
+export async function positionPracticeInsights(page) {
+  const panel = page.locator('#joblander-extension-host');
+  const collapse = panel.getByRole('button', { name: 'Collapse insights', exact: true });
+  if (await collapse.isVisible()) await collapse.click({ timeout: 10_000 });
+  const header = panel.locator('header[role="status"]');
+  if (!await header.isVisible()) return false;
+  if (await header.count() !== 1) throw new Error('The interview assistance header is ambiguous');
+  const bounds = await header.boundingBox();
+  if (!bounds || bounds.width < 300 || bounds.height < 20) throw new Error('The interview assistance header is unavailable');
+  // The observed draggable header keeps capture active when collapsed. Move
+  // its empty grab area above practice's controls, using ordinary pointer
+  // input; a CSS rewrite would hide the real obstruction from the check.
+  await page.mouse.move(bounds.x + 230, bounds.y + bounds.height / 2);
+  await page.mouse.down();
+  try { await page.mouse.move(250, 65, { steps: 12 }); }
+  finally { await page.mouse.up(); }
+  return true;
+}
+
 export async function preparePracticeStart(page, combined) {
-  if (combined) {
-    const panel = page.locator('#joblander-extension-host');
-    await panel.getByRole('button', { name: 'Collapse insights', exact: true }).click({ timeout: 3000 });
-    const header = panel.locator('header[role="status"]');
-    if (await header.count() !== 1) throw new Error('The interview assistance header is ambiguous');
-    const bounds = await header.boundingBox();
-    if (!bounds || bounds.width < 300 || bounds.height < 20) throw new Error('The interview assistance header is unavailable');
-    // The observed draggable header keeps capture active when collapsed. Move
-    // its empty grab area above practice's controls, using ordinary pointer
-    // input; a CSS rewrite would hide the real obstruction from the check.
-    await page.mouse.move(bounds.x + 230, bounds.y + bounds.height / 2);
-    await page.mouse.down();
-    try { await page.mouse.move(250, 65, { steps: 12 }); }
-    finally { await page.mouse.up(); }
-  }
+  if (combined && !await positionPracticeInsights(page)) throw new Error('The interview assistance header is unavailable');
   // Trial input cannot start a call. Ownership is registered only after the
   // intended Start is reachable, so an overlay cannot create a phantom meter.
   await page.getByRole('button', { name: 'Start call', exact: true }).click({ trial: true, timeout: 3000 });
@@ -87,9 +92,31 @@ export class PracticeStartRejected extends Error {}
 
 export async function stopPractice(page) {
   if (new URL(page.url()).origin !== 'https://joblander.app' || !/\/practice\/?$/.test(new URL(page.url()).pathname)) throw new Error('The owned practice page changed');
+  // A failed extension Stop can leave its expanded panel over practice's Stop.
+  // Move it through its actual controls before ending this independent meter.
+  // A changed overlay must not prevent a reachable practice Stop; the trial
+  // below still refuses a button that remains obstructed.
+  const insightsPositioned = await positionPracticeInsights(page).catch(() => false);
   const control = practiceStopControl(await practiceControls(page));
-  const stopClickedAt = Date.now();
-  await page.locator('button').nth(control.index).click({ timeout: 1500 });
+  const button = await page.locator('button').nth(control.index).elementHandle();
+  if (!button) throw new Error('The practice Stop control disappeared');
+  const stillStop = () => button.evaluate(node => {
+    const candidates = [...document.querySelectorAll('button')].filter(candidate => {
+      const rect = candidate.getBoundingClientRect();
+      return !candidate.disabled && !candidate.innerText.trim() && !candidate.getAttribute('aria-label')
+        && Boolean(candidate.querySelector('svg.lucide-x')) && rect.width > 0 && rect.height > 0
+        && getComputedStyle(candidate).visibility !== 'hidden';
+    });
+    return node.isConnected && node.getRootNode() === document && candidates.length === 1 && candidates[0] === node;
+  });
+  let stopClickedAt;
+  try {
+    if (!await stillStop()) throw new Error('The practice Stop control changed');
+    await button.click({ trial: true, timeout: 10_000 });
+    if (!await stillStop()) throw new Error('The practice Stop control changed');
+    stopClickedAt = Date.now();
+    await button.click({ timeout: 1500 });
+  } finally { await button.dispose(); }
   // Practice first shows its completion/rating surface. Returning to practice
   // happens only after that positive completion signal, without rating it.
   if (!await page.getByRole('button', { name: 'Start call', exact: true }).isVisible()) {
@@ -97,7 +124,7 @@ export async function stopPractice(page) {
     await page.goto('https://joblander.app/practice', { waitUntil: 'domcontentloaded', timeout: 15_000 });
   }
   await page.getByRole('button', { name: 'Start call', exact: true }).waitFor({ state: 'visible', timeout: 20_000 });
-  return { stopClickedAt, stoppedAt: Date.now(), applicationStopObserved: true, control };
+  return { stopClickedAt, stoppedAt: Date.now(), applicationStopObserved: true, control, insightsPositioned };
 }
 
 export async function readPractice(page) {

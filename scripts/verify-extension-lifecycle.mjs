@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { SessionLedger, stopWithConfirmation, sessionStopDeferred } from '../extension-runner/lifecycle.mjs';
+import { SessionLedger, stopWithConfirmation, sessionStopDeferred, settleSessionCleanup } from '../extension-runner/lifecycle.mjs';
 
 const active = [{ state: 'active', startedAt: 0 }];
 assert.equal(sessionStopDeferred(active, 120, 94_000), true, 'Normal completion must preserve the two-minute observation window');
@@ -13,12 +13,13 @@ assert.throws(() => sessionStopDeferred(active, -1), /Invalid/);
 let time = 0;
 const calls = [];
 const control = name => ({
- click: async () => { calls.push(name); time += 20; },
+ click: async options => { calls.push(name + (options?.trial ? ':ready' : '')); time += options?.trial ? 4000 : 20; },
  waitFor: async () => { calls.push(`${name}:observed`); time += 20; },
 });
 const stopped = await stopWithConfirmation({ stop: control('End session'), confirm: control('Confirm end session'), stopped: control('panel'), now: () => time });
-assert.deepEqual(calls, ['End session', 'Confirm end session:observed', 'Confirm end session', 'panel:observed']);
+assert.deepEqual(calls, ['End session:ready', 'End session', 'Confirm end session:observed', 'Confirm end session', 'panel:observed']);
 assert.equal(stopped.applicationStopObserved, true);
+assert.equal(stopped.stopClickedAt, 4000, 'Slow reachability checks must finish before starting the confirmation clock');
 assert.ok(stopped.confirmClickedAt - stopped.stopClickedAt < 2800);
 let lateClicks = 0;
 await assert.rejects(stopWithConfirmation({
@@ -27,6 +28,12 @@ await assert.rejects(stopWithConfirmation({
  stopped: control('panel'), now: () => time,
 }), /expired/);
 assert.equal(lateClicks, 0, 'An expired confirmation must not re-arm Stop');
+let attemptedStop = false;
+await assert.rejects(stopWithConfirmation({
+ stop: { click: async options => { if (options.trial) throw new Error('Stop is obstructed'); attemptedStop = true; } },
+ confirm: control('Confirm end session'), stopped: control('panel'),
+}), /obstructed/);
+assert.equal(attemptedStop, false, 'A failed readiness check must not arm the confirmation');
 await assert.rejects(stopWithConfirmation({
  stop: control('End session'), confirm: control('Confirm end session'),
  stopped: { waitFor: async () => { throw new Error('panel still present'); } },
@@ -49,6 +56,14 @@ failed.register({ id: 'unknown-stop', targetId: 'tab', maxSeconds: 600, stop: as
 await failed.endAll();
 assert.equal(failed.clean, false, 'Disposing a browser never proves application Stop');
 assert.equal(failed.snapshot()[0].state, 'unverified');
+const settlements = [];
+const handlers = { failed: () => settlements.push('close-browser'), stopped: () => settlements.push('read-balance-after-stop') };
+settleSessionCleanup([{ state: 'active' }], handlers);
+assert.deepEqual(settlements, []);
+settleSessionCleanup([{ state: 'unverified' }, { state: 'active' }], handlers);
+assert.deepEqual(settlements, ['close-browser'], 'A failed Stop must trigger disposal while the other meter is still active');
+settleSessionCleanup([{ state: 'stopped' }, { state: 'not-started' }], handlers);
+assert.deepEqual(settlements, ['close-browser', 'read-balance-after-stop']);
 console.log('Extension lifecycle: local confirmation, deadlines, ownership and cleanup proof verified');
 
 const timed = new SessionLedger('deadline-run');

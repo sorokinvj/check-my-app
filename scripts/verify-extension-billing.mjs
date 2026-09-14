@@ -28,6 +28,16 @@ assert.equal(assessUiBilling(both).twoMinuteSteps, true);
 const blocked = new BillingObservation({ baseline, readBalance: () => new Promise(() => {}), readSnapshot: () => new Promise(() => {}), finishTimeoutMs: 5 });
 blocked.start();
 assert.equal((await blocked.finish(sessions)).assessment.cleanupConfirmed, false, 'A stalled balance read cannot prevent bounded cleanup or produce a pass');
+let reads = 0, historyReads = 0;
+const canceled = new BillingObservation({ baseline,
+  readBalance: async () => { reads++; return baseline; },
+  readSnapshot: async () => { historyReads++; return baseline; }, intervalMs: 60_000 });
+canceled.start();
+await new Promise(resolve => setTimeout(resolve, 0));
+canceled.cancel();
+await canceled.task;
+assert.equal(reads, 1);
+assert.equal(historyReads, 0, 'Failed Stop disposal must not begin the post-Stop minute wait');
 console.log('Extension billing: displayed balance, independent rounding, live minute steps, attribution and cessation gates pass');
 
 const missingMeter = assessUiBilling({ ...both, later: { ...both.later, history: [practice] } });

@@ -71,6 +71,11 @@ try {
   await assert.rejects(extension.call('/state'), ExtensionRuntimeError, 'The deadline covers an incomplete response body too');
   assert.equal(signal?.aborted, true);
 } finally { globalThis.setTimeout = realTimeout; }
+Object.assign(extension, { popup: false, replayActions: [], browser: { isConnected: () => true },
+  runner: { fetch: async () => Response.json({ runtimeFailed: true, complete: true, sessions: [] }) } });
+Object.assign(extension.identity, { allowSessions: true, scenario: 'interview' });
+await assert.rejects(executeTool(env, 'extension_observe_session', {}), ExtensionRuntimeError,
+  'The native failure flag must abort immediately, even when the cleanup response is complete');
 console.log("Extension tools: product-only observations, observed links and fatal runtime propagation pass");
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

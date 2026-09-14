@@ -7,6 +7,9 @@ export function sessionStopDeferred(sessions, minimumSeconds, now = Date.now()) 
 }
 
 export async function stopWithConfirmation({ stop, confirm, stopped, now = Date.now, windowMs = 2800 }) {
+  // Native Stop timed out while scrolling in the combined call. Establish
+  // reachability without clicking before the short confirmation window starts.
+  await stop.click({ trial: true, timeout: 10_000 });
   const startedAt = now();
   await stop.click({ timeout: 1500 });
   const confirmedAt = startedAt;
@@ -16,6 +19,11 @@ export async function stopWithConfirmation({ stop, confirm, stopped, now = Date.
   const clickedAt = now();
   await stopped.waitFor({ state: 'hidden', timeout: 15_000 });
   return { stopClickedAt: startedAt, confirmClickedAt: clickedAt, stoppedAt: now(), applicationStopObserved: true };
+}
+
+export function settleSessionCleanup(entries, { failed, stopped }) {
+  if (entries.some(entry => entry.state === 'unverified')) return failed();
+  if (entries.length && entries.every(entry => ['stopped', 'not-started'].includes(entry.state))) return stopped();
 }
 
 export class SessionLedger {

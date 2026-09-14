@@ -48,7 +48,7 @@ export class BillingObservation {
     })();
   }
   async finish(sessions) {
-    this.stopping = true; clearTimeout(this.timer); this.wake?.();
+    this.cancel();
     let timeout;
     try {
       return await Promise.race([this.finishObservations(sessions), new Promise(resolve => {
@@ -56,6 +56,7 @@ export class BillingObservation {
       })]);
     } finally { clearTimeout(timeout); }
   }
+  cancel() { this.stopping = true; clearTimeout(this.timer); this.wake?.(); }
   async finishObservations(sessions) {
     await this.task;
     try {

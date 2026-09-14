@@ -2,7 +2,46 @@
 
 Source: [Extension verification PRD](https://app.notion.com/p/3d97bac6430a81a1b09fdacc72d609c6).
 
-## Current state — 2026-09-13 23:33 UTC
+## Current state — 2026-09-14 10:47 UTC
+
+PR #81 remains on `feat/chrome-extension-targets`; pushed head `c904293` has
+green CI. CheckMyApp production has not been merged, migrated or deployed.
+The explicit repository merge prohibition remains in force.
+
+Run 6 (`cmu0fj66c000srq13nzoajdfp`, public `cmu0fj66c000trq13t4cph76e`)
+**failed without a verdict**. Discovery produced all five journeys; interview
+and standalone practice passed at 151/168 seconds, three minutes each, both live
+minute steps, fresh responses, UI Stop and confirmed cessation. The combined
+journey failed to establish Stop: the first click timed out during scrolling,
+and the expanded extension panel intercepted practice Stop. Both entries stayed
+unverified. The old callback nevertheless waited for post-Stop billing before
+closing the browser. No further paid scenario was started.
+
+Independent account-UI recovery in a fresh unpaid Cloudflare profile observed
+balance 1522 unchanged for 77.421 seconds; the failed combined attempt used 12
+minutes and exposed a 337-second practice history row. The audit profile is
+also disposed. This recovery confirms no continuing debit at that observation;
+it does not turn the failed attempt into a Stop or product-result pass.
+Evidence: `/tmp/checkmyapp-workflow-run6-walk-2-final.json`,
+`/tmp/checkmyapp-run6-recovery-first.json`, and
+`/tmp/checkmyapp-run6-recovery-later.json`.
+
+The cleanup correction passes all 55 acceptance scripts, both typechecks, Prisma generation and lint (three existing warnings). Actual Claude review findings were addressed; its final follow-up found no remaining P1/P2. Native executor version 18 is being deployed to the isolated probe. Changes: establish Stop reachability with a non-mutating
+trial before starting the confirmation clock; collapse/move the extension
+panel before practice Stop; pin and revalidate the exact practice Stop element;
+dispatch disposal immediately after any unverified meter; cancel the billing
+wait when Stop is missing. The client propagates the executor's runtime failure
+immediately. A fresh executor rollout, focused combined replay and a new full
+Workflow remain required before release. Run 6 stays immutable failure evidence.
+
+Public extension pixels and raw diagnostics are private, including legacy
+paths. Desktop and 390px progress UI checks passed without a raw preview or
+horizontal overflow. The first two Run 6 tests were downloaded through the real
+API: no resume filename, personal name or test email; credentials remain
+placeholders. The native executor's version 17 had separately passed the exact
+Run 4 interview export, missing-input refusal and active cancellation.
+
+## Previous checkpoint — 2026-09-13 23:33 UTC
 
 [PR #81](https://github.com/sorokinvj/check-my-app/pull/81) remains on
 `feat/chrome-extension-targets`. No CheckMyApp production merge, migration

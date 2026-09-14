@@ -8,7 +8,7 @@ import WebSocket, { WebSocketServer } from 'ws';
 import { installFromStore } from './store.mjs';
 import { Cdp } from './cdp.mjs';
 import { pageForTarget } from './targets.mjs';
-import { SessionLedger, stopWithConfirmation, sessionStopDeferred } from './lifecycle.mjs';
+import { SessionLedger, stopWithConfirmation, sessionStopDeferred, settleSessionCleanup } from './lifecycle.mjs';
 import { NativeSurface, popupCrop } from './surface.mjs';
 import { SessionObservation, readExtensionPanel } from './observation.mjs';
 import { childIsRunning, ownedProtocolAction, disconnectInspectionClients } from './health.mjs';
@@ -93,7 +93,14 @@ async function start(input) {
   const stimulus = stimulusFor(input.stimulusMode);
   initializing = true;
   ledger = new SessionLedger(input.ownerRunId, Date.now, entries => {
-    if (entries.length && entries.every(e => ['stopped', 'unverified', 'not-started'].includes(e.state))) void finalizeBilling().catch(() => {});
+    settleSessionCleanup(entries, {
+      failed: () => {
+        if (session) session.runtimeFailure = { kind: 'application-stop-unverified', at: new Date().toISOString() };
+        // Dispatch without awaiting: disposal joins this ledger's cleanup tail.
+        void closeBrowser('application-stop-unverified').catch(() => {});
+      },
+      stopped: () => { void finalizeBilling().catch(() => {}); },
+    });
   });
   const deadlineMs = Math.min(1200, Math.max(60, Number(input.maxDurationSeconds) || 600)) * 1000;
   const expiresAt = Date.now() + deadlineMs;
@@ -225,7 +232,7 @@ async function startExtensionSession() {
   if (session.scenario === 'practice') throw new Error('The practice-only scenario does not authorize extension capture');
   if (!session.audioPreflight?.passed) throw new Error('Audio fixture preflight must pass before starting a session');
   if (!session.accountBaseline) throw new Error('A fresh account balance and history are required before a paid session');
-  if (Date.now() + session.maxSessionSeconds * 1000 + 120_000 > Date.parse(session.expiresAt)) throw new Error('The browser lease has insufficient time for this session, Stop and the balance recheck');
+  if (Date.now() + session.maxSessionSeconds * 1000 + 240_000 > Date.parse(session.expiresAt)) throw new Error('The browser lease has insufficient time for this session, Stop and the balance recheck');
   if (session.extensionId !== 'hafhjepjihcimcljkdphpinannbdmnhf') throw new Error('No verified Stop sequence for this extension');
   const targets = (await cdp.send('Target.getTargets')).targetInfos;
   const popup = targets.find(t => t.targetId === session.popupTargetId && t.url === `chrome-extension://${session.extensionId}/${session.popupPath}`);
@@ -288,6 +295,16 @@ async function startExtensionSession() {
 
 async function finalizeBilling() {
   if (!billing) return null;
+  if (!ledger.clean) {
+    // Waiting for post-Stop balance while Stop itself had failed prolonged the
+    // combined call. Preserve the failure and let disposal close the browser.
+    billing.cancel();
+    detachPracticeRequests?.();
+    session.billing = { baseline: billing.baseline, samples: billing.samples,
+      assessment: { status: 'inconclusive', cleanupConfirmed: false, reason: 'Owned application Stop is missing' } };
+    session.billingCleanup = 'unverified';
+    return null;
+  }
   billingFinal ??= billing.finish(ledger.snapshot().filter(s => s.state !== 'not-started')).then(result => {
     session.billing = result;
     session.billingCleanup = result.assessment.cleanupConfirmed ? 'confirmed' : 'unverified';
@@ -312,7 +329,7 @@ async function startPracticeSession() {
   if (!session?.allowSessions || closed || closing || !session.practicePreflight || !session.audioPreflight?.passed || !session.accountBaseline || session.popupTargetId) throw new Error('Practice requires session permission, account, audio and page preparation');
   if (!['practice', 'practice-extension'].includes(session.scenario)) throw new Error('This scenario does not authorize practice');
   if (session.scenario === 'practice-extension' && !ledger.snapshot().some(s => s.id === 'extension-capture' && s.state === 'active')) throw new Error('Start the extension before its simultaneous practice');
-  if (Date.now() + session.maxSessionSeconds * 1000 + 120_000 > Date.parse(session.expiresAt)) throw new Error('The practice lease has insufficient time for Stop and minute accounting');
+  if (Date.now() + session.maxSessionSeconds * 1000 + 240_000 > Date.parse(session.expiresAt)) throw new Error('The practice lease has insufficient time for Stop and minute accounting');
   const stop = async () => {
     const browser = await chromium.connectOverCDP(upstream);
     try {

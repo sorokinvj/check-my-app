@@ -242,7 +242,8 @@ export class ExtensionBrowser {
 
   private sessionReading(raw: unknown) {
     const view = raw as { sessions: Array<{ name: string; state: string; elapsedSeconds?: number; applicationStopObserved: boolean }>;
-      questionAndAnswers: unknown[]; practiceConversation?: unknown[]; minuteAccounting: string; minutesUsed?: number; complete: boolean };
+      questionAndAnswers: unknown[]; practiceConversation?: unknown[]; minuteAccounting: string; minutesUsed?: number; complete: boolean; runtimeFailed?: boolean };
+    if (view.runtimeFailed) throw new ExtensionRuntimeError("The owned extension runtime failed during session cleanup");
     return { sessions: view.sessions.map(s => `${s.name}: ${s.applicationStopObserved ? "ended with confirmation" : s.state}${s.elapsedSeconds === undefined ? "" : ` after ${s.elapsedSeconds} seconds`}.`),
       answers: view.questionAndAnswers,
       practiceConversation: view.practiceConversation ?? [],
