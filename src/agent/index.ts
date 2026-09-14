@@ -9,6 +9,7 @@ import type { CheckRunParams } from "./workflow";
 import { CheckRunWorkflow } from "./workflow";
 
 export { CheckRunWorkflow };
+export { ExtensionRunner } from "./extension-runner";
 
 export default {
   async fetch(req: Request, env: AgentBindings): Promise<Response> {

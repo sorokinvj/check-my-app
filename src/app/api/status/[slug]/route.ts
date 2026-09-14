@@ -23,7 +23,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ slug: s
   if (!app) return NextResponse.json({ error: "App not found" }, { status: 404 });
 
   const run = await db.run.findFirst({
-    where: { appId: app.id, status: "completed" },
+    where: { appId: app.id, status: { in: ["completed", "partial"] }, verdict: { not: null } },
     orderBy: { completedAt: "desc" },
     select: { verdict: true, runNumber: true, completedAt: true, publicId: true },
   });

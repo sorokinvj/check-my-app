@@ -59,6 +59,9 @@ export async function createRecheckRun(
     select: {
       id: true,
       targetUrl: true,
+      targetKind: true,
+      extensionId: true,
+      extensionConfig: true,
       appSlug: true,
       testEmail: true,
       testPasswordEnc: true,
@@ -84,6 +87,12 @@ export async function createRecheckRun(
   // CHE-94. Everything below is about the ANONYMOUS path: the caller proved
   // nothing except that they have the link.
   const isAnonymous = !prev.ownerId;
+  if (prev.targetKind === "extension" && prev.ownerId && !opts.full) {
+    // Extension checks always open a fresh installed product. They cannot use
+    // the unmetered website survey path to bypass the on-demand allowance.
+    const gate = await assertCanStartRun(prisma, { id: prev.ownerId, plan: (prev.owner?.plan ?? "free") as UserPlan }, null, { siteCap: deps.siteCap() });
+    if (!gate.ok) return { kind: "quota", reason: gate.reason };
+  }
   if (isAnonymous) {
     // A full walk is the expensive mode and exists for owners who just shipped
     // something. Nobody holding a public link gets to spend that.
@@ -126,15 +135,23 @@ export async function createRecheckRun(
     remaining = gate.remaining;
   }
 
+  // On-demand runs discard their password after completion. Only the same
+  // owner's saved extension may supply credentials for the next explicit run.
+  const saved = prev.targetKind === "extension" && prev.appId && prev.ownerId
+    ? await prisma.app.findFirst({ where: { id: prev.appId, ownerId: prev.ownerId, targetKind: "extension", extensionId: prev.extensionId },
+      select: { testEmail: true, testPasswordEnc: true, extensionConfig: true, userNotes: true } }) : null;
   const run = await prisma.run.create({
     data: {
       runNumber: await nextRunNumber(prisma),
       targetUrl: prev.targetUrl,
+      targetKind: prev.targetKind,
+      extensionId: prev.extensionId,
+      extensionConfig: saved?.extensionConfig ?? prev.extensionConfig,
       appSlug: prev.appSlug,
-      testEmail: prev.testEmail,
-      testPasswordEnc: prev.testPasswordEnc,
+      testEmail: saved ? saved.testEmail : prev.testEmail,
+      testPasswordEnc: saved ? saved.testPasswordEnc : prev.testPasswordEnc,
       scopeHints: prev.scopeHints,
-      userNotes: prev.userNotes,
+      userNotes: saved ? saved.userNotes : prev.userNotes,
       focusAreas: prev.focusAreas,
       notifyEmail: prev.notifyEmail,
       watchId: prev.watchId,

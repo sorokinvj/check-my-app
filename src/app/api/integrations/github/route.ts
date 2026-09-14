@@ -28,7 +28,7 @@ export async function POST(req: Request) {
 
   const run = await db.run.findUnique({
     where: { publicId: parsed.data.runId },
-    select: { id: true, ownerId: true, appSlug: true, targetUrl: true, ephemeral: true },
+    select: { id: true, ownerId: true, appId: true, appSlug: true, targetUrl: true, targetKind: true, extensionId: true, extensionConfig: true, ephemeral: true },
   });
   if (!run) return NextResponse.json({ error: "Run not found" }, { status: 404 });
   if (run.ownerId && run.ownerId !== user.id) {
@@ -67,6 +67,9 @@ export async function POST(req: Request) {
       orgId: user.clerkOrgId ?? null,
       targetUrl: run.targetUrl,
       appSlug: run.appSlug,
+      targetKind: run.targetKind,
+      extensionId: run.extensionId,
+      extensionConfig: run.extensionConfig,
     },
   });
 
@@ -84,7 +87,7 @@ export async function POST(req: Request) {
   });
 
   // Adopt the source run so the verdict page renders as owned from now on.
-  if (!run.ownerId) {
+  if (!run.ownerId || run.appId !== app.id) {
     await db.run.update({ where: { id: run.id }, data: { ownerId: user.id, appId: app.id } });
   }
 

@@ -1,0 +1,1154 @@
+# Extension verification
+
+Source: [Extension verification PRD](https://app.notion.com/p/3d97bac6430a81a1b09fdacc72d609c6).
+
+## Current state — 2026-09-14 12:25 UTC
+
+PR #81 is still on `feat/chrome-extension-targets`; CI passed for `8b6aff4`.
+CheckMyApp production has not been merged or deployed. The hourly heartbeat
+`chrome-extensions` is paused in the authoritative automation configuration.
+
+Native executor v18 completed its Cloudflare rollout at 11:37:40 UTC
+(Worker `24d06419-c119-4785-b9b8-c826ea7741f5`, image SHA-256
+`6b9b260cb4a17813034240f46c5f4484b3390cdd0140545158647f5b99f7a69f`).
+Its focused combined attempt stopped both owned sessions through the UI after
+150/149 seconds, disposed the browser and observed 73.601 seconds of unchanged
+balance. Six minutes were consumed. Precise attribution remains inconclusive;
+practice returned a fresh response, but the extension showed no fresh question
+or answer. This is cleanup evidence, not a complete combined-scenario pass.
+Private evidence: `/tmp/checkmyapp-cloudflare-combined18-cleanup.json`.
+
+The unchanged Run 4 combined export stalled before paid Start on a
+placeholder-only email field. Its unpaid attempt was explicitly disposed.
+The generator now bounds connection, action and navigation waits, and supports
+exact placeholder/label/role matching while refusing unidentified or ambiguous
+fields. The generated-code acceptance test exercises placeholder sign-in,
+missing/ambiguous field refusal before Start and mandatory disposal. Prisma,
+both typechecks, lint (three existing warnings) and all 55 acceptance scripts
+pass. The current-generator replay of the same recorded plan passed in 4.7 minutes:
+138/136 seconds, fresh combined result, both UI Stops, six consumed minutes,
+73.872 seconds of stable balance and confirmed disposal. Minute attribution is
+still inconclusive. Evidence:
+`/tmp/checkmyapp-current-generator-combined18-cleanup.json`. This is a replay of
+the recorded plan, not yet a fresh verdict-UI download. Full Run 7
+(`cmu17u7wv0012rq1353pm79e0`, public `cmu17u7wv0013rq13lw7lprtx`)
+was submitted through the local owner dashboard with frozen Workflow SHA-256
+`cae60ebc84e2a27ee3c950e6491957f3ac47a83b434782551a29de6cd8e8275b`.
+
+**Run 7 failed.** Discovery on Sonnet: 56 calls, $0.30005985. Interview
+(~179s) and standalone practice (~168s) both returned fresh results with
+confirmed spend stop. The combined scenario's extension confirmation failed:
+`locator.click: Timeout 1573ms exceeded ... waiting for getByRole('button',
+{ name: 'Confirm end session', exact: true })`. Practice stopped through the
+UI; the extension's Stop stayed `unverified`. The executor recorded
+`application-stop-unverified` and closed the browser at 12:52:10 UTC. The
+Run received `failed`; no verdict was published (correct per CLAUDE.md rule
+4/8 — an unverified cleanup is our own defect, not a customer finding). The
+two remaining scenarios were not run. This is a repeat of the same
+Stop-confirmation timeout despite the earlier standalone replay passing —
+the fix is not stable. A post-stop balance check (no new paid sessions)
+showed 1504 before the failed combined scenario, 1497 after, then unchanged
+for 81.465s; the profile was released. A stable balance does not make an
+unverified UI Stop a pass.
+
+**Work halted after Run 7, by owner order (2026-09-14).** Separately, the
+local test stand's `ANTHROPIC_NAV_MODEL`/`ANTHROPIC_SYNTH_MODEL` were found
+still pointed at `claude-sonnet-4-6`/`claude-opus-4-8` — production has run
+DeepSeek nav since 2026-09-05 (CHE-168/169) — so none of the runs above
+validated against the actual production model pipeline. That drift is now
+fixed on `main` (PR #82/#83, `src/agent/model-tier.recommended.json` +
+`scripts/verify-model-config.mjs`) but not yet on this branch. Resuming
+requires, in order: rebase onto `main` and remove every explicit
+Sonnet/Opus override this branch's own setup introduced, root-cause and fix
+the Stop-confirmation timeout above, then one accepted full Run on DeepSeek
+before any release decision.
+
+## Running the stand
+
+Runs 1-7 were driven from a stand whose middle hop was never committed: the
+local Workflow calls `http://127.0.0.1:19092`, and the process that answered
+there — the one holding the probe's bearer token — lived only in the agent's
+shell. When that shell closed the stand became unreproducible, with every
+committed half still pointing at a dead port. The broker is
+`spikes/extension-browser-run/proxy.mjs` now, and the sequence is:
+
+1. **The Cloudflare probe** (`spikes/extension-browser-run/wrangler-native-cloudflare.jsonc`)
+   is already deployed as `checkmyapp-extension-native-probe` at
+   `https://checkmyapp-extension-native-probe.frosty-fog-32a2.workers.dev`.
+   Verify rather than assume — it answers `401` unauthenticated and
+   `{"disposed":false}` with the bearer token:
+   ```
+   curl -H "Authorization: Bearer $PROBE_ACCESS_TOKEN" \
+     https://checkmyapp-extension-native-probe.frosty-fog-32a2.workers.dev/attempt/proxy-smoke-0001/evidence
+   ```
+   Redeploy with `npx wrangler deploy --config spikes/extension-browser-run/wrangler-native-cloudflare.jsonc`
+   after changing anything under `extension-runner/`; the container image is
+   rebuilt from that Dockerfile on deploy.
+
+   **Without a working Docker on this machine**, that deploy cannot build.
+   `docker pull mcr.microsoft.com/playwright:v1.58.2-noble` fails here with
+   `context deadline exceeded` — the same registry-reachability problem the
+   local-infra notes record. A config-only change (instance type, instances,
+   bindings) does not need a build at all: `image` also accepts a Cloudflare
+   registry URI, so point it at the image already pushed —
+   ```
+   "image": "registry.cloudflare.com/<account>/checkmyapp-extension-native-probe-extensionrunner:<tag>"
+   ```
+   read the current one out of
+   `GET /accounts/{account}/containers/applications/{app}` — deploy, then put
+   the Dockerfile path back. A change to `extension-runner/` code still needs
+   a real build and cannot ship this way; the deployed image then lags the
+   branch, which the deploy output makes visible. Config changes roll out
+   gradually: the application keeps reporting the old `vcpu`/`memory_mib`
+   until `active_rollout_id` stops `progressing`.
+
+2. **The broker**, holding the only copy of the token:
+   ```
+   PROBE_ACCESS_TOKEN=... node spikes/extension-browser-run/proxy.mjs
+   ```
+   It forwards only `/attempt/{owner}/…`, replaces any inbound Authorization
+   header with its own, and binds loopback only. `PROBE_ACCESS_TOKEN` is in
+   Notion (Progress Log, keys section) and in the untracked local `.env`; the
+   secret on the Worker is write-only, so a lost copy is rotated with
+   `wrangler secret put`, not recovered. Rules covered by
+   `scripts/verify-extension-proxy.mjs`.
+
+3. **The local Workflow** (`spikes/extension-browser-run/wrangler-workflow.jsonc`,
+   port 8787) subclasses the production `CheckRunWorkflow` and swaps only the
+   `EXTENSION_RUNNER` binding for the broker. Its env comes from
+   `/tmp/checkmyapp-workflow.env` — which must name the **production** model
+   tier, not the Sonnet/Opus defaults that invalidated runs 1-7; run
+   `node scripts/verify-model-config.mjs` before spending anything.
+   ```
+   npx wrangler d1 migrations apply checkmyapp --local \
+     --config spikes/extension-browser-run/wrangler-workflow.jsonc
+   npx wrangler dev --config spikes/extension-browser-run/wrangler-workflow.jsonc \
+     --env-file /tmp/checkmyapp-workflow.env     # /health answers {"ok":true}
+   ```
+   The D1 and R2 it binds are the **local** miniflare replicas under
+   `spikes/extension-browser-run/.wrangler/state`, not production — despite
+   the production database id in the config, which `--local` ignores. That
+   replica starts empty: runs 1-7 left nothing behind in it, so the seed
+   (owner, App with `extensionConfig`, encrypted credentials, counters) has
+   to be created through the dashboard in step 4 each time the state
+   directory is new.
+
+4. **The local product** (`npm run dev`, port 3107 per the Workflow's
+   `APP_URL`) serves the owner dashboard a run is submitted through.
+
+The honest boundary, unchanged: this drives the real cloud executor against
+the real JobLander production extension, but it is not production CheckMyApp
+end-to-end. A verdict produced here is evidence about the executor, not proof
+of the shipped product.
+
+### Executor smoke test — 2026-09-14 15:30 UTC, passed
+
+`allowSessions: false` boots the whole executor while
+`extensionToolAllowed()` refuses every paid tool, so the container half can
+be proven alive for the price of a few container-seconds and no session at
+all. Worth running first whenever the stand has been rebuilt: a failure here
+is infrastructure, and reading it as a product defect is exactly the
+confusion rule 8 exists to prevent.
+
+```
+curl -X POST http://127.0.0.1:19092/attempt/<owner-id>/session \
+  -H "X-CMA-Spike: 1" -H "Content-Type: application/json" \
+  -d '{"scenario":"interview","ownerRunId":"<owner-id>","extensionId":"hafhjepjihcimcljkdphpinannbdmnhf",
+       "targetUrl":"fixture:interview","maxDurationSeconds":300,"allowSessions":false,"maxSessionSeconds":60}'
+curl -X DELETE http://127.0.0.1:19092/attempt/<owner-id>/session -H "X-CMA-Spike: 1"
+```
+
+What it returned, through the restored broker: the Store build installed
+(JobLander 3.26.1, manifest v3, artifact SHA-256
+`5e52e2eb824a6e3fa223ad3f2a6c288b4e73da66d913e7690badcc75d38a97b3` — the
+same artifact recorded earlier in this document), `identityKeyRestored:
+true`, Chrome 145.0.7632.6, the service worker and target tab up, and both
+audio fixtures loaded. Disposal answered `disposed: true`,
+`closeReason: "requested"`, `applicationCleanup: "not-started"` and no
+sessions — 11 seconds of container time, nothing paid.
+
+So the executor, the container image, the Store install path and the
+identity restoration all still work. What remains unproven is the
+Stop-confirmation reliability under the combined scenario, which needs a
+paid run, and the seed the dashboard builds for it.
+
+### Root cause of the Stop-confirmation failure — 2026-09-14
+
+Run 7's full Playwright call log, recovered from
+`/tmp/checkmyapp-workflow-run7-walk-2-final.json`, settles what two rounds of
+reasoning about UI timing could not:
+
+```
+locator.click: Timeout 1573ms exceeded.
+Call log:
+  - waiting for getByRole('button', { name: 'Confirm end session', exact: true })
+    - locator resolved to <button … aria-label="Confirm end session" …>
+  - attempting click action
+    - waiting for element to be visible, enabled and stable
+    - element is visible, enabled and stable
+    - scrolling into view if needed
+    - done scrolling
+    - performing click action
+```
+
+The log ends there. Every actionability check **passed** — the button was
+visible, enabled and stable, and Playwright never reported another element
+intercepting pointer events. What did not finish is the click dispatch
+itself: the renderer did not acknowledge it inside the remaining budget.
+
+That rules out the two explanations the code was written to defend against.
+It is not a moving or animating target (the panel is expanded by
+`restorePracticeInsights` before this point), and it is not the overlay
+problem `positionPracticeInsights` exists for — Playwright says so in its
+own words. It is the machine: at that moment the container is running a live
+WebRTC practice call, the extension's tab capture, Xvfb and Playwright, all
+on the **1 vCPU** of `standard-2`. A saturated renderer main thread does not
+answer a click within the extension's hard ~2.8s confirmation window.
+
+Which is why this failure only ever appeared in the combined scenario, why
+an isolated session confirms in 486ms, and why a standalone replay of the
+same recorded plan passed: nothing else was competing for the core. It is a
+provisioning defect of ours, not a defect of the product under test — rule 8
+in its purest form, and it would have been filed against the customer if the
+call log had not been read.
+
+**Fix: `instance_type` `standard-2` → `standard-4`** (1 vCPU/6 GiB → 4
+vCPU/12 GiB) in both `wrangler-agent.jsonc` and the probe config. At
+`max_instances: 3` that is 12 vCPU and 36 GiB against account ceilings of
+100 vCPU and 400 GiB, and it moves container cost for a ~28-minute run from
+roughly $0.07 to $0.20 — small next to the run's LLM cost, and the only one
+of the two numbers that was ever the constraint.
+
+**Rolled out and re-smoked, 2026-09-14 17:30 UTC.** The probe's container
+application reports `vcpu: 4`, `memory_mib: 12288`, `active_rollout_id:
+null`, and the executor still boots the same way on it: JobLander 3.26.1,
+artifact SHA-256 `5e52e2eb…`, `identityKeyRestored: true`, Chrome
+145.0.7632.6, service worker and target tab up, disposal clean
+(`disposed: true`, `closeReason: "requested"`, no sessions) in seven
+seconds. The production `wrangler-agent.jsonc` carries the same instance
+type but is not deployed — this feature has never been on production
+CheckMyApp.
+
+What this does **not** prove: that the Stop confirmation now lands. Nothing
+here ran a paid session, so the starved-renderer theory stays a theory with
+a strong log behind it until a combined-scenario run confirms under real
+load. That is the next paid run's job, and the timing breakdown added to
+`stopWithConfirmation` will say which sub-step the budget went to if it
+fails again.
+
+### The same defect again, one step earlier: account preflight — 2026-09-14
+
+The first combined attempt after the CPU change never reached a paid meter.
+`/account/preflight` failed with `page.waitForFunction: Timeout 20000ms
+exceeded` — the web sign-in showed neither the minute balance nor a
+credential rejection inside its budget. Four measurements, same account,
+same build, taken rather than assumed:
+
+| Where | Sign-in to balance |
+|---|---|
+| Operator's machine, plain Chromium | **0.8s** |
+| Inside an idle executor container | **2.1s** |
+| Inside a container running the combined scenario | **7.0s** |
+| Whole `/account/preflight`, idle container (sign-in + balance + history + practice discovery) | **9s** |
+| Whole `/account/preflight`, combined scenario | **timed out at 20s, twice** |
+
+The product is fine: the login form is unchanged, the credentials are the
+ones the popup signs in with, and the balance reads 1497 — the same number
+Run 7 ended on, which also confirms none of today's probes started a paid
+meter. It is our budget that is wrong, tuned against the idle case with
+2.2× headroom and spent by the combined one.
+
+This is the Stop failure's class, one step earlier in the same run: **fixed
+timeouts inside the executor, measured in a quiet scenario, fail in the
+loaded one and read as product defects.** Worth checking the rest of this
+path against it — `readAccountBalance` and `readHistory` wait 15s each on
+the same page under the same load — though neither has failed yet and
+neither is changed here on that basis alone.
+
+**Fix: the sign-in budget goes 20s → 60s** (`SIGN_IN_BUDGET_MS`,
+`extension-runner/joblander-account.mjs`). Unlike the extension's ~2.8s
+confirmation window, this number models nothing on the product's side — it
+is only our patience. The page either shows the balance or shows a
+credential rejection; waiting longer for one of those cannot hide a defect,
+while timing out before either appears invents one.
+
+**Deployed 2026-09-14 ~18:40 UTC.** The Docker failure turned out to be the
+memory pressure, not the registry: with Docker stopped the manifest answers
+in 0.3s from the host, and after freeing memory the pull, build and push all
+succeeded. Image `d9187aa5` is live on `standard-4` with both the 60s
+sign-in budget and the Stop timing breakdown in it.
+
+### First paid Stop after the fixes — confirmed, but only one meter
+
+Combined attempt on the rebuilt image, 2026-09-14 ~18:50 UTC. The account
+preflight that had timed out twice **passed**, and the extension's paid
+session started (`captureStarted: true`, 130s limit). The driver then lost
+its connection to the probe on `/practice/preflight` (`ECONNRESET`), so the
+second meter never started and its own `finally` could not dispose either.
+
+Asking the executor directly afterwards is what the run is worth:
+
+```json
+{"disposed": true, "closeReason": "requested",
+ "applicationCleanup": "ui-stop-observed", "billingCleanup": "confirmed",
+ "sessions": [{"id": "extension-capture", "state": "stopped",
+               "stopObserved": true, "error": null}]}
+```
+
+So a paid session started and **stopped with its UI confirmation observed
+and billing cessation confirmed** — the exact outcome Run 7 could not reach,
+and proof that a paid cycle survives end to end on the new image.
+
+What it is **not**: the combined case. Only one meter ran, and extension-only
+Stop never failed before either. The starved-renderer explanation still
+needs a run with a live practice call beside the capture to be more than a
+well-evidenced inference.
+
+Open, new: why `/practice/preflight` reset the connection while a paid
+session was running. `preparePractice` polls for the call controls and can
+take tens of seconds, so an edge timeout on a long Durable Object call is
+the first suspect — unmeasured, and not to be fixed by guessing.
+
+## Previous checkpoint — 2026-09-14 10:47 UTC
+
+PR #81 remains on `feat/chrome-extension-targets`; pushed head `c904293` has
+green CI. CheckMyApp production has not been merged, migrated or deployed.
+The explicit repository merge prohibition remains in force.
+
+Run 6 (`cmu0fj66c000srq13nzoajdfp`, public `cmu0fj66c000trq13t4cph76e`)
+**failed without a verdict**. Discovery produced all five journeys; interview
+and standalone practice passed at 151/168 seconds, three minutes each, both live
+minute steps, fresh responses, UI Stop and confirmed cessation. The combined
+journey failed to establish Stop: the first click timed out during scrolling,
+and the expanded extension panel intercepted practice Stop. Both entries stayed
+unverified. The old callback nevertheless waited for post-Stop billing before
+closing the browser. No further paid scenario was started.
+
+Independent account-UI recovery in a fresh unpaid Cloudflare profile observed
+balance 1522 unchanged for 77.421 seconds; the failed combined attempt used 12
+minutes and exposed a 337-second practice history row. The audit profile is
+also disposed. This recovery confirms no continuing debit at that observation;
+it does not turn the failed attempt into a Stop or product-result pass.
+Evidence: `/tmp/checkmyapp-workflow-run6-walk-2-final.json`,
+`/tmp/checkmyapp-run6-recovery-first.json`, and
+`/tmp/checkmyapp-run6-recovery-later.json`.
+
+The cleanup correction passes all 55 acceptance scripts, both typechecks, Prisma generation and lint (three existing warnings). Actual Claude review findings were addressed; its final follow-up found no remaining P1/P2. Native executor version 18 is being deployed to the isolated probe. Changes: establish Stop reachability with a non-mutating
+trial before starting the confirmation clock; collapse/move the extension
+panel before practice Stop; pin and revalidate the exact practice Stop element;
+dispatch disposal immediately after any unverified meter; cancel the billing
+wait when Stop is missing. The client propagates the executor's runtime failure
+immediately. A fresh executor rollout, focused combined replay and a new full
+Workflow remain required before release. Run 6 stays immutable failure evidence.
+
+Public extension pixels and raw diagnostics are private, including legacy
+paths. Desktop and 390px progress UI checks passed without a raw preview or
+horizontal overflow. The first two Run 6 tests were downloaded through the real
+API: no resume filename, personal name or test email; credentials remain
+placeholders. The native executor's version 17 had separately passed the exact
+Run 4 interview export, missing-input refusal and active cancellation.
+
+## Previous checkpoint — 2026-09-13 23:33 UTC
+
+[PR #81](https://github.com/sorokinvj/check-my-app/pull/81) remains on
+`feat/chrome-extension-targets`. No CheckMyApp production merge, migration
+or deployment has occurred. The repository explicitly forbids merging.
+Prisma generation, both typechecks, lint and all 55 acceptance scripts pass
+on the current source (three existing lint warnings). Actual Codex and Claude
+reviews found publication, privacy and retention issues; their corrections
+pass the acceptance registry. The follow-up confirmed the prior fixes and found one remaining public phase-artifact path. New phase records now stay private, the legacy public path returns 404, and a final focused Claude review found no remaining P1/P2 in that correction. All required checks pass after it.
+
+Run 5 (`cmu0dooq1000irq13b6a6wj1z`, public
+`cmu0dooq1000jrq1342cbicya`) failed without publishing a verdict after an
+observation response stalled in the local bridge. The Workflow eventually hit
+its 25-minute limit. Independent final evidence confirms its only paid session
+stopped after 178.79 seconds, application Stop and stable balance were observed,
+and its lease was disposed. No fresh response was established; silence did not
+become a product finding. Observation requests now have a 45-second bound that
+covers headers and body even when the transport ignores AbortSignal.
+
+Run 6 (`cmu0fj66c000srq13nzoajdfp`, public
+`cmu0fj66c000trq13t4cph76e`) was submitted through the real local owner dashboard.
+It uses local CheckMyApp Workflow/D1/R2 and the actual Cloudflare native executor
+against production JobLander. Its frozen Workflow bundle SHA-256 is
+`583354cb7e41c5bc8af4cad24bf6dc20c4caa88952a2e8e7f4ce1857df3d2617`.
+Discovery produced all five journeys. Interview completed with a fresh relevant answer, 151 seconds, three minutes, both live debit steps, observed Stop and stable balance. AI practice completed at 168 seconds with a fresh response, three minutes, both live minute steps and confirmed Stop/cessation. The combined journey is in progress. This is not a CheckMyApp production Run.
+
+Current native executor version 17 (`b6c8e5e7-f6cb-404a-a500-da570e681c4b`)
+passed the exact interview spec downloaded from Run 4's verdict UI: 179 seconds,
+three minutes, two live minute steps, a fresh relevant answer, UI Stop and
+68.753 seconds of unchanged balance. The exported file was used unchanged.
+Evidence: `/tmp/checkmyapp-run4-export-current17-cleanup.json`.
+
+Two independent native checks also passed. An injected silent microphone on our
+own audio fixture caused preflight refusal with RMS zero and no paid session.
+An active interview session deferred ordinary Stop before 120 seconds, but
+immediate cancellation stopped it before that minimum and confirmed stable
+balance and disposal. Evidence: `/tmp/checkmyapp-cloudflare-no-input-cleanup.json`
+and `/tmp/checkmyapp-cloudflare-cancel-cleanup.json`.
+
+A live screenshot check then found a selected resume filename still visible in
+native popup pixels. All extension captures now stay private, independent of
+popup state; the public evidence proxy denies legacy extension images and the
+live feed omits their URLs. The checking agent still receives images internally.
+New desktop and 390px public UI captures confirmed that no raw preview is offered. The extension progress screen keeps the existing feed and current action, without a frame placeholder. Long Store links wrap; the 390px document width is exactly 390px.
+The actual evidence/stream routes are covered by acceptance tests, all required
+checks pass, and a focused Claude review approved the correction.
+
+The public verdict and review APIs now hide draft/failed extension observations;
+actual HTTP requests for failed Run 5 returned no journeys or findings. Private
+R2 evidence returned HTTP 404. Original checker-gap observations remain private
+and actionable through an internal evidence reference; missing-access gaps are
+preserved. Partial published results participate in status reporting, distinct
+extension alerts retain distinct deduplication identities, and run-owned private
+artifacts and native PNGs are included in ephemeral expiry.
+
+Run 4's LLM ledger totals $1.9482585: Sonnet 4.6 discovery $0.3016491,
+Sonnet 4.6 walking $1.5428694, and Opus 4.8 synthesis $0.10374. Its Run.costUsd
+field reports $1.7738805 because it omits intermediate walk-summary calls; that
+existing bookkeeping discrepancy remains separate from this extension change.
+The current structured JobLander publisher needs no Opus synthesis call.
+
+Remaining: finish and inspect Run 6's public report and actual UI exports,
+complete current-source review and PR CI, obtain an explicit exception to the
+merge prohibition, then deploy through the normal pipeline and verify a fresh
+Run through CheckMyApp production. Production QA sign-in is already verified;
+no production Run or QA-plan mutation has occurred.
+
+## Previous checkpoint — 2026-09-13 22:20 UTC
+
+PR #81 remains on the feature branch. No CheckMyApp production merge,
+migration or deployment has occurred; the repository explicitly forbids merging.
+All 55 acceptance scripts, both typechecks, Prisma generation and lint pass
+(three existing lint warnings). A new actual Codex review is running.
+
+Full Run 4 (`cmu09ocae0008rq13x4esc715`, public
+`cmu09ocae0009rq13vcdne11m`) completed against production JobLander using
+local CheckMyApp Workflow/D1/R2 and the Cloudflare native executor version 16.
+Interview, practice and combined use returned fresh relevant responses.
+Interview charged three minutes, practice three and combined use six. All
+seven phase leases were disposed; the three session journeys confirmed UI
+Stop and stable balance for more than one minute. Sign-in/history started no
+paid sessions. Exact live debits/rounding remain inconclusive for practice and
+combined use. Five actual UI-exported specs were downloaded.
+
+The Run 4 verdict is **not accepted**: its summary retained a dropped billing
+allegation, called an unstarted panel confusing, and repeated resume details.
+That immutable Run is retained as failure evidence. The current implementation
+builds JobLander's public report from confirmed executor observations, records
+minute precision as a checker coverage gap, stores companion captures and raw
+transcripts under a private prefix, and refuses those objects through the public
+evidence route. Draft/failed extension reports cannot expose raw journey text.
+New acceptance exercises positive errors, neutral gaps, missing provenance,
+private content exclusion, and the actual public evidence/verdict routes.
+
+Native executor version 17 (`b6c8e5e7-f6cb-404a-a500-da570e681c4b`) completed
+its rollout at 21:23:51 UTC with three healthy instances. Run 5 uses a separately
+frozen Workflow bundle SHA-256
+`ff03fab0c5508a318d7e93b1d249dbd4c1300140d13b7271e70fe3c3645610cb`.
+Current full-run publication, exported replay, active cancellation and missing
+audio-input checks remain pending. Production owner sign-in has been verified
+without submitting a production Run or changing the production QA plan.
+
+## Previous checkpoint — 2026-09-13 20:17 UTC
+
+[PR #81](https://github.com/sorokinvj/check-my-app/pull/81) is ready for review,
+branch `feat/chrome-extension-targets`. No CheckMyApp production migration,
+deployment or merge. The explicit repository instruction prohibits merging.
+
+The first Codex review's nine findings and both Claude findings have been
+addressed. A second Codex review found partial-run recovery, GitHub adoption
+metadata, and missing native vision images; those are addressed too. Recovery
+now starts a new run after a partial result, GitHub adoption preserves target
+identity/settings and links owned one-off runs, and the actual agent loop
+receives native PNG images with their correct media type. Extension rechecks
+also respect the on-demand allowance. Public progress APIs hide internal
+extension diagnostics; the failure screen makes no retry-email promise.
+A real HTTP response and rendered failure screen verified that boundary.
+
+Prisma generation, both typechecks, lint and all 54 acceptance scripts pass.
+Three pre-existing lint warnings remain. The new acceptance script exercises
+the actual GitHub adoption route with isolated external boundaries; existing
+harness checks exercise native popup and companion-panel images through the
+real agent loop in always-on, requested and text-only modes. Current-head
+review and CI will rerun after this checkpoint.
+
+The isolated native executor's version 14 rollout completed. A further revision
+is being rolled out before Run 4, including two review corrections: affirmative
+recovery alerts remain non-failures, and spoken prompts need no question mark.
+Both native login and settings screenshots were verified live on version 13:
+cropped product controls remain visible; account inputs and document names
+are masked; no paid session was started for those screenshot checks.
+
+Full Run 3 (`cmu07twfw00112u136r00vpkl`, public
+`cmu07twfw00122u13mjvi6rp6`) finished without a verdict. Its frozen Workflow
+used local CheckMyApp D1/R2 and actual Cloudflare sessions against production
+JobLander. Discovery completed and returned the three session journeys plus
+sign-in and account history. Interview passed at 178 seconds (three minutes,
+two live debit steps); practice passed at 121 seconds (three minutes, stable
+balance; live debit steps inconclusive). Both combined sessions stopped at
+178/177 seconds and charged six minutes with confirmed cessation, but the
+old fixed-word matcher rejected real answers to the coach's paraphrased
+questions. The immutable Run remains failed; re-evaluating its saved evidence
+is a regression check, not a new live pass. All seven phase leases are disposed
+and every started session has observed application Stop and stable balance.
+Evidence: `/tmp/checkmyapp-workflow-run3-walk-0-final.json` through
+`/tmp/checkmyapp-workflow-run3-walk-4-final.json`.
+
+The corrected matcher correlates fresh extension answers with actually observed
+coach prompts after the controlled candidate input. Negative cases exclude
+missing input, later coach speech and unrelated questions. Account-history
+walking also exposed an unnecessary extra paid capture: only the three explicit
+session journeys now receive session permission. Discovery/sign-in/history
+retain account inspection but cannot start a paid process. Run 4 is prepared
+with a new frozen Workflow and will use the fully applied native revision.
+This is not yet a deployed CheckMyApp production Run.
+
+Full Run 1 failed during discovery cleanup; no paid scenario or verdict.
+Run `cmtzwjnm0000h2u1399cdot4d`, public `cmtzwjnm0000i2u13pip5zpo8`.
+The original HTTP 500 cause remains unknown. Native phases now explicitly use
+zero retries and 25-minute timeouts.
+Full Run 2 (`cmu06woha000r2u13t8opj32h`) ended its only session at 94 local
+seconds / 96 history seconds, then a Wrangler reload interrupted the local
+controller. Explicit cleanup confirmed UI Stop, stable balance and disposal;
+its local QA row records failure. No verdict was published. The executor now
+refuses premature normal Stop until every active meter has run 120 seconds;
+expiry, cancellation and failure disposal remain immediate. Generated replays
+respect that minimum and clean up even if disconnect throws.
+
+Cloudflare deploy success means a rollout started, not that the target image
+has replaced every instance: [rollout contract](https://developers.cloudflare.com/containers/configuration/rollouts/).
+Early unpaid screenshot probes reached the previous image or were interrupted
+by replacement; those remain unverified attempts, never paid-session passes.
+
+Remaining: finish the frozen full Run and generated replay, verify active
+cancellation against the final native image, obtain current-source review and
+CI, then resolve release authorization and verify the deployed product.
+
+### Prior live evidence and billing policy — 14:25 UTC
+
+- Home and dashboard accept official Store links, save separate extension
+  settings and offer an on-demand check in the existing design. Desktop and
+  390px owner flows were exercised, including encrypted test-account settings.
+- The full production Workflow implementation was submitted through the local
+  dashboard at 14:21 UTC. Run `cmtzwjnm0000h2u1399cdot4d`, public ID
+  `cmtzwjnm0000i2u13pip5zpo8`, Workflow instance
+  `2db55e3f-9ae0-4908-b756-36c79a15d35c`. It uses local product D1/R2 and real
+  native sessions in the isolated Cloudflare executor against production
+  JobLander. This is not a CheckMyApp production deployment.
+- Actual Cloudflare discovery completed earlier with five product journeys and
+  no paid sessions. The generated interview spec also passed against Cloudflare:
+  149-second history, three minutes, both live minute transitions, relevant
+  answer, timely confirmation and unchanged balance after Stop.
+- Cloudflare practice probe 8 ran for 147 UI-history seconds, used three minutes
+  (1589 → 1586), reached native Stop and a stable balance for 73.454 seconds.
+  Its DOM exposed a named candidate and Aria; the transcript adapter now reads
+  those observed rows and normalizes the candidate without retaining the name.
+- Combined probe 3 (`7229638d-4359-47bf-a455-04e25365141e`, 14:07–14:11 UTC)
+  produced both a relevant extension answer and a relevant coach follow-up.
+  Both sessions stopped after about 148 locally observed seconds, the practice
+  history showed 147 seconds, and balance 1583 → 1577 remained stable. Only the
+  practice history row appeared; independent extension rounding is inconclusive.
+- The PRD explicitly permits partial billing coverage when customer-visible
+  history lacks precision. Cleanup now requires positive application Stop plus
+  a stable post-Stop balance, independently of exact rounding. Missing minute
+  evidence creates a skipped accounting Step, a partial journey and the distinct
+  `extension_minute_accounting` capability gap. It cannot become a billing PASS
+  or a product defect. All three core scenarios still require fresh results,
+  at least two observed minutes per session and confirmed cleanup.
+- The combined adapter now collapses and drags the observed extension header
+  through ordinary pointer input before Start call, then restores Insights.
+  A trial click proves reachability before registering the practice meter.
+  Scenario-specific tool availability prevents unrelated session controls from
+  tainting a successful walk. Disposal errors are typed non-retryable failures.
+- Current isolated Cloudflare version:
+  `70bef50e-b4f9-4ff1-80c1-c2a79d16a0cb`. Required Prisma generation, web and
+  agent typechecks, lint and all 52 acceptance scripts passed on this source.
+  Lint retains three existing warnings. An independent Codex review is running.
+- GitHub CI passed on `588bc87`; Claude's action failed before inference and
+  produced no review. Two tool-free API review attempts were inspected; a valid
+  cleanup retry issue was corrected, but their contradictory findings do not
+  constitute a clean review. Current-source review and current-head CI remain.
+
+Evidence: `/tmp/checkmyapp-cloudflare-practice-8-cleanup.json`,
+`/tmp/checkmyapp-cloudflare-combined-3-cleanup.json`,
+`/tmp/checkmyapp-cloudflare-walk-cleanup.json`,
+`/tmp/checkmyapp-cloudflare-discovery-cleanup.json`, and
+`/tmp/checkmyapp-cloudflare-replay-cleanup.json`. These are internal local proof;
+public artifacts exclude unrelated history, documents, credentials and URLs.
+
+Remaining: complete the current UI-submitted Workflow and generated replay,
+resolve actual review findings, verify cancellation, finish current-head CI,
+then authorized production release and an outside production check.
+
+### Previous checkpoint — 21:17 UTC
+
+Branch `feat/chrome-extension-targets` has commits `98c0c9a`, `22e23ac` and
+`674bb45`. Further practice, cleanup and artifact changes are in progress.
+CheckMyApp production has not been migrated or deployed; no push, PR or merge.
+
+- The native executor is now deployed in an isolated Cloudflare Worker,
+  `checkmyapp-extension-native-probe`, with its own R2 bucket and no application
+  D1, scheduler, notification service or LLM credentials. It requires a secret
+  bearer token. Docker builds use the existing meeting-lab host over SSH.
+- The exact generated Playwright artifact passed against Cloudflare Containers
+  in 4.4 minutes. Session `b527bda2-1118-4fad-9d32-46a80debc3ed`, version
+  3.26.1 and original CRX digest unchanged. At 20:37–20:41 UTC it received a new
+  relevant answer, confirmed End in 226 ms, observed a 149-second history row,
+  balance 1599 → 1596, both live minute steps and unchanged balance 71.374 seconds
+  later. Browser disposal, UI Stop, accounting and product result all passed.
+  Evidence: `/tmp/checkmyapp-cloudflare-replay-cleanup.json` and
+  `/tmp/checkmyapp-extension-cloudflare-replay-2.log`.
+- The first Cloudflare allocation failed while provisioning. A later rollout
+  hit the probe's one-instance limit. The probe now uses the production limit
+  of three; instance acquisition is bounded at 60 seconds. These were executor
+  failures, with no product verdict or paid session started.
+- The 390px owner UI was checked again after entry animations settled. Adding
+  a Store link, saving, seeing the on-demand card and opening settings passed.
+  Removing an extension now uses extension-specific copy. Current disposable
+  local App: `cmtyuj4jq000pwc13ie4dd0kt`; no Watch and no Run check submitted.
+- Public cleanup artifacts now retain only this attempt's result, session
+  durations and minute assessment. Prior account history and private history
+  links stay out of the artifact. The original recovery record remains durable.
+- Practice probes exposed differences from the PRD's earlier UI: the unnamed
+  Stop button has a transparent hit area with a lucide-x icon; its dimensions
+  vary with layout. Stop first shows SESSION COMPLETE and a rating surface.
+  The practice microphone is an accessibility checkbox, not necessarily an
+  input element. The adapter changes are still being verified live.
+- Two early practice probes did not establish UI Stop. A fresh account audit
+  found one 61-second and one 62-second practice row, each charged two minutes,
+  and balances 1594 and 1592 respectively stayed unchanged for 84.847 and
+  83.313 seconds. Those probes remain failures, not successful practice tests.
+  The next probe reached SESSION COMPLETE after one second, but the microphone
+  operation failed and durable cleanup returned no confirmed final record.
+  Its subsequent account audit saw balance 1592, no new row and Start call.
+- The owner class now coalesces concurrent cleanup requests, marks a lease
+  closed only after durable evidence and disposal, preserves existing proof
+  across restarts and removes its completed expiry schedule. A self-contained
+  test exercises the actual class with a transport double. Live verification
+  of this update is still pending.
+- Discovery now reads practice's available controls through the account UI and
+  proposes separate interview, practice and simultaneous journeys. Scenario
+  metadata reaches each fresh executor; practice-only cannot start extension
+  capture, and the simultaneous case must start capture first. The native
+  exported spec includes these actions. Publication requires evidence for all
+  three JobLander scenarios. Practice output requires candidate text followed
+  by a relevant new coach response, not a greeting or timer alone.
+
+All five required validation groups now pass in order, including 52 acceptance
+scripts. Lint has only its three existing warnings. The current account audit
+kept balance 1592 unchanged for 79.045 seconds, with no new history row. The next
+practice attempt was explicitly refused by the product UI because a practice
+was already running in another tab. This is contaminated by our prior failed
+cleanup, not a customer finding. Its complete internal final record was retained
+and the browser was disposed; product cleanup/accounting remain unverified.
+Current Cloudflare probe version: `4ce981df-ecd3-45da-9d55-2675bc58de01`.
+A new read-only workerd discovery through the actual Cloudflare executor is
+running; no paid practice is active in that discovery. Remaining: successful practice-only
+and simultaneous runs, integrated discovery/walk replay with current changes,
+full submission and Workflow, review/CI, production release and outside check.
+
+### Previous checkpoint — 20:25 UTC
+
+New work since `22e23ac` adds bounded session observation for the agent,
+product-grounded extension discovery, native replay spec generation, readable
+extension names and the home/dashboard UI path. These changes are not deployed.
+
+- Discovery #3 completed in 163 seconds / 38 calls, session
+  `71bb0be3-ea51-4cf8-9902-137bf3dad98d`, with no paid sessions and confirmed
+  disposal. Fixture content and guessed domains were absent, but extraction
+  still invented internal services and treated Insights as a harmless toggle.
+  The deterministic extension map now derives anatomy from observed controls
+  and includes the interview answer → Stop → minutes journey whenever the
+  observed JobLander start control exists. This is a proposed journey, not a
+  claim that discovery itself ran it.
+- Real workerd agent walk #1 reached a fresh answer and local Stop. Session
+  `fae92bae-8d2e-47ce-845b-79ddbf6b1e4b`, UI meeting
+  `fe1bf92a-7699-4028-9542-6ea908d5c267` at 19:55, 149 seconds, three minutes
+  used, two live minute steps, balance unchanged 69.808 seconds later. The
+  agent then failed on a disconnected inspection connection. No verdict was
+  published. `/tmp/checkmyapp-walk-cleanup-1.json` preserves the executor result.
+- Walk #2 completed with actual local D1 Steps and a GeneratedTest through
+  `walkOneJourney`, using the installed Cloudflare Playwright fork and production
+  JobLander. Run `worker-bridge-1789243551337`, session
+  `6e0842a3-6319-4ff4-8049-346805715508`, 43 tool calls. A new relevant answer
+  appeared. UI meeting `d052ffd4-aac5-40c6-ba24-dbde28daf772` at 20:07 lasted
+  149 seconds; balance 1605 → 1602, expected debit 3, two minute steps,
+  unchanged 71.044 seconds later. End/Confirm took 303 ms. Both cleanup gates
+  passed and the browser was disposed. This replaces the DO transport with
+  loopback and uses local D1; it is not a deployed CheckMyApp Workflow.
+- That walk still spent extra turns looking for accounting: Stop returned only
+  its ledger, and stale inspection transports blocked later popup invocation.
+  Stop now returns the settled account observation, duplicate popup-close calls
+  do not create extra connections, and the executor closes its own inspection
+  transports before opening another native popup. These corrections still need
+  a new integrated replay. Tool trace: `/tmp/checkmyapp-walk-tools-2.json`.
+- The final account observation is now persisted as its own product-facing
+  Step, even when the agent wraps up before accounting settles. Native tool
+  responses and the shared language gate remove internal lifecycle fields,
+  preflight and lease terminology from customer text.
+- The native test is generated from successful observed actions after cleanup,
+  pins the installed version/digest, requires explicit replay session permission,
+  and asserts application Stop plus minute accounting in `finally`. It uses a
+  fresh isolated native executor endpoint; popup.html never becomes a page tab.
+  The actual generated artifact passed in 4.4 minutes with no model. Fresh
+  session `9495c4cd-8411-4e60-9d56-3916dafe7b1e`, 3.26.1 and unchanged original
+  CRX digest: new relevant output, End/Confirm in 360 ms, UI history
+  `dae3cec4-74d0-4ac8-8886-90b9204acd95` at 20:20 with duration 149 seconds,
+  balance 1602 → 1599, two live minute steps, unchanged 72.407 seconds later.
+  Both cleanup gates and product result passed. Evidence:
+  `/tmp/checkmyapp-export-replay-cleanup.json` and
+  `/tmp/checkmyapp-extension-export-replay.log`.
+- Actual owner UI with the existing Clerk QA account: dashboard → Add extension
+  → Store link → save → on-demand card → settings passed locally. The App has
+  targetKind=extension and no Watch. Current disposable local App:
+  `cmtytirxc000ewc13gle3d2gz`. Desktop and 390px settings screenshots are in
+  `/tmp/checkmyapp-extension-{dashboard-desktop,settings-mobile}.png`.
+  The first assertion missed the existing labels suffix; it was a test selector
+  error, not a failed save. Its own earlier App was removed via the normal UI.
+- Home form matches the current production typography, cards and accent. A
+  Store link selects extension options; session permission reveals test-login
+  fields. Mobile settings had no horizontal overflow. Full-page screenshots
+  should disable entry animations before the final visual check.
+
+All five required validation groups pass in order, including all 49 acceptance
+scripts; lint has only its three existing warnings. Remaining: practice-only and
+practice+extension scenarios, final native replay/recovery acceptance, public
+submission through the complete Workflow, current-head review/CI and production
+release/verification. No push, PR, merge, production migration or deploy yet.
+The additive extension migration is now 0030; only the two disposable local
+D1 migration registries were renamed to match, after discovering main already
+contained other migrations numbered 0028 and 0029.
+
+### Previous checkpoint — 19:35 UTC
+
+Commit `98c0c9a` contains the native runner and Workflow routing; `22e23ac`
+adds the following validated changes, which are not deployed:
+local session observation, native screenshot/filename redaction, fatal runtime
+propagation, product-only discovery extraction, per-phase Run evidence links,
+independent audio stimuli, UI-based minute accounting, and a JobLander core-flow
+publication gate. The extension-aware exported spec and practice scenarios are
+still outstanding. No push, PR, merge, production migration or deploy has run.
+
+Fresh live evidence:
+
+- Real LLM discovery through workerd and the installed Cloudflare Playwright
+  fork completed in 177 seconds with 37 tool calls. Native email/password input
+  reached the signed-in popup. Session `95d89b7b-a13e-4c19-bf14-2d8167f8b8e9`,
+  Store/installed 3.26.1, original digest unchanged. Cleanup: not-started,
+  sessions=[], browser disposed. This still replaces only the DO transport.
+- That discovery incorrectly included the synthetic page/audio and guessed
+  domains in its anatomy. It was not published as a product result. Extraction
+  now receives only recorded product reads; fixture body/screenshots/actions and
+  unobserved links cannot enter that path. A new discovery must verify this
+  correction. Local transcript: `/tmp/checkmyapp-discovery-transcript-2.json`.
+- Earlier discovery lost Chrome and kept calling failed tools. The runner now
+  records signalled exits, rejects commands to a dead browser with 410, and the
+  loop propagates executor/transport failure without a verdict. CDP clients may
+  not dispose the owned browser or target before cleanup. The cause of that
+  earlier exit is not established; the successful replay recorded no
+  intercepted Browser.close commands. It is not evidence for that hypothesis.
+- Capture `01a0965f-capture-observation-1`, session
+  `b0977e8d-fe27-49b3-93c0-9968e21fa99a`: 148.112 seconds from visible Start to
+  End, Confirm after 427 ms, 148 locally collected panel samples. A fresh answer
+  addressed the interviewer audio's technical-challenge question. Chrome still
+  requested microphone permission, so this does not prove that microphone
+  branch. The account UI subsequently showed our 18:50 meeting with duration
+  2m 29s. No before-start balance was taken; billing remained unverified.
+- Capture `01a0965f-microphone-billing-1`, session
+  `a043ea47-d892-4ca7-8e12-aee5999ba105`: microphone-only, tab audio paused,
+  microphone RMS 0.3380207406. The distinct Maple/database-query question was
+  transcribed under You, Mirror mode appeared, and the answer listed query
+  profiling, indexing, caching, batching and performance monitoring. The
+  positive question and answer were observed in the actual extension panel.
+- That session ran 148.613 seconds before End; Confirm followed after 486 ms.
+  The independently refreshed dashboard showed 1614 → 1613 → 1612, then 1611
+  after Stop. Its new history row, meeting
+  `91ca8bfe-4d83-47d4-bd8c-f909e4f1bf18`, displays 19:18 UTC and 149 seconds.
+  The expected ceil(149/60)=3 equals the visible debit. A fresh read 73.087
+  seconds later remained 1611. Both live minute steps, UI Stop and billing
+  cessation passed. No customer database, logs or source were used.
+  Local evidence: `/tmp/checkmyapp-microphone-billing-1.json` and
+  `/tmp/checkmyapp-microphone-billing-1.png`; remote copy in the task-owned
+  `~/checkmyapp-extension-preflight/` directory.
+- The DOM read in that capture identified the real `data-testid="question"`
+  and its answer card. Subsequent code records these separately from the timer
+  and requires a fresh, relevant answer in the active interval.
+- Capture `01a0965f-tab-billing-1`, session
+  `f7fdef8e-1718-410d-9dab-8ceee2d13500`: deliberately tab-only, microphone
+  RMS exactly 0, interviewer WAV playing. There were 146 local observations;
+  112 contained the actual question/answer card. The new machine result gate
+  confirmed the technical-challenge question and relevant prepared answer.
+  Native End/Confirm took 338 ms; history meeting
+  `ef6bf48d-45d9-4441-b4a8-8b4d0d0f2517` displays 19:31 UTC and 149 seconds.
+  Balance 1611 → 1608, both live minute steps observed, ceil(149/60)=3,
+  unchanged on a fresh read 71.456 seconds after Stop. Product result, UI Stop
+  and minute accounting all passed; browser disposed. Local evidence:
+  `/tmp/checkmyapp-tab-billing-1.json`.
+- A read-only account probe saw Start call on the practice page and no owned
+  practice was started. The container's independent deadline disposed that
+  browser with sessions=[] and cleanup=not-started.
+
+The current accounting observer reads only the customer-visible dashboard and
+history. It requires a baseline before Start, independent rounding per new
+owned history row, and another fresh balance at least 65 seconds after Stop.
+Ambiguous rows, missing UI or changed balance stay inconclusive. Container
+cleanup now reserves 120 seconds for the bounded read-only accounting follow-up.
+Neither a clock, a silent microphone, an old answer nor successful login alone
+can establish the JobLander core result.
+
+Validation at this checkpoint: all five required groups passed in order,
+including all 46 acceptance scripts. Lint retains only its three existing
+warnings. An earlier full run exposed a workerd-only import in the shared
+browser utility; that import now lives at the Workflow boundary, and the final
+complete registry includes both previously affected scripts (ephemeral and
+survey), the new audio, billing and result checks.
+
+### Earlier implementation checkpoint — 18:03 UTC
+
+The feature branch now routes extension checks through the isolated native
+executor in surface scan, discovery and journey walking. Website checks retain
+Browser Run. Store links never enter the website survey/smoke/partial ladder;
+each phase verifies the installed version and the original CRX digest against
+the scan. This is an implementation checkpoint, **not a production release**.
+
+Native popup operations now use an exact document URI and a single-use reference
+to an observed accessible control. The input path rechecks its role, name,
+position and document before a physical click/fill. It refuses stale references,
+cross-document references, control characters that could submit a field,
+repeated credential submissions and session/purchase controls outside the owned
+session tool. Credentials are substituted in the Worker and passed through stdin
+inside the runner; they are never placed in process arguments or tool transcripts.
+Missing access and undriven actions deterministically produce skipped steps.
+
+The Worker disconnects page inspection before native invocation and reconnects
+to the exact CDP target after popup dismissal. Page digests now include open
+shadow panels and accessible iframe documents. The Container owns a durable
+deadline, writes cleanup evidence to DO storage and R2 before disposal, and
+refuses a verdict when a started session lacks both application Stop and separate
+billing-cessation evidence. Runtime/cleanup failures file gaps on our own board.
+
+New live evidence in this checkpoint:
+
+- Native HTTP replay, session `d0c53492-5172-4df8-9b25-3afdb753e9dd`, JobLander
+  3.26.1: opened the native action, signed into the authorized test account with
+  native field input, observed Show JobLander Insights, and proved that an ordinary
+  native click cannot start capture. Zero owned paid sessions; cleanup not-started.
+  Repro: `scripts/replay-extension-native.mjs` with explicit local credential inputs.
+- Actual workerd + installed Cloudflare Playwright fork, via a temporary loopback
+  bridge to the isolated Linux executor: connected to the persistent profile,
+  read the native popup, returned to the exact target, and observed no DevTools
+  target. The initial and final page titles were Synthetic interview. This
+  replaces only the DO transport, not Chrome or the native controls; it does not
+  prove a deployed Cloudflare Container. Repro: `spikes/extension-browser-run/bridge.ts`.
+- Final bridge state: running=false, sessions=[], applicationCleanup=not-started.
+  The owned container was removed. The local bridge, SSH tunnel and Wrangler
+  dev server were stopped. Existing meeting-lab sessions were untouched.
+- The Worker bundles successfully with the new bindings using a dry run with
+  `--containers-rollout=none`; the container image builds successfully on the
+  Linux executor host. The ordinary local dry run cannot launch this Mac's
+  Docker CLI. No Worker, migration or container was deployed.
+- All five required check groups passed in order: Prisma generation, web
+  typecheck, agent typecheck, lint (three existing warnings), and 39 acceptance
+  scripts. Five of those scripts cover extension identity, consent, surfaces,
+  target ownership, local Stop and cleanup/step gates.
+
+Still required before shipping:
+
+1. Replay product-only LLM discovery and walk the core journeys through the
+   integrated path. The first completed discovery still mixed fixture facts
+   into its map; no Workflow-to-production result has been published.
+2. Exercise the structured result and accounting gates through the full agent
+   path. Independent microphone and tab-audio production captures now both
+   have two-minute UI accounting; the tab run also exercised the new result gate.
+3. Implement and run the three PRD scenarios for at least two full minutes each,
+   with user-visible balance/history, rounding, cessation and no active practice
+   left behind. Billing cleanup intentionally remains unverified until measured.
+4. Exercise the new per-phase evidence, core-flow publication gate and redacted
+   native screenshots in the integrated path. Add an extension-aware executable
+   test export; the current generated-spec path is still website-oriented.
+5. Exercise lease expiry/retry/cancel recovery, native picker/permissions and
+   unsupported surfaces. Verify UI appearance and both public/owner flows, run
+   review/CI, then resolve the repository's no-merge boundary before release.
+
+The historical notes below preserve the measurements and corrections that led
+to this checkpoint; their older “not integrated yet” statements are superseded.
+
+## Delivery and acceptance
+
+- [x] Read product rules, current execution path, PRD and meeting-lab runbook.
+- [x] Inspect the production form and preserve its existing visual language.
+- [x] Create an isolated worktree from origin/main (5725423).
+- [x] Prove Store installation, installed identity, native popup, active tab,
+  Shadow DOM and synthetic audio in a disposable Linux profile.
+- [x] Add Store links to the public submission and owner onboarding, with
+  separate extension identity, companion URL and bounded session permission.
+- [ ] Run discovery and journeys through the existing agent and verdict path.
+- [x] Persist version, actions, stimulus, result and verified cleanup evidence.
+- [ ] Verify three JobLander scenarios, negative cases and cancellation.
+- [x] Pass Prisma generation, both typechecks, lint and the acceptance registry (52 scripts).
+- [ ] Commit to the feature branch and obtain current-head review and green CI.
+- [ ] Deploy and run the complete production flow against the Store build.
+
+## Constraints
+
+Extension runs are on demand by default. A Store page is metadata, never proof
+that the installed extension works. Store version and installed version remain
+separate. No green result without observed effects and confirmed cleanup.
+Credentials use the existing encrypted storage and substitution boundary.
+Customer product judgments use external UI evidence, never the customer's logs
+or repository. Extension failures, fixture failures and checker failures remain
+distinct. The first release accepts official Chrome Web Store URLs; custom
+artifact uploads need an additional build-source contract.
+
+## Executor research, 2026-09-12 UTC
+
+Cloudflare Browser Rendering (now named Browser Run) is managed headless Chrome,
+not a static HTML renderer. The Worker runs the agent; a separate remote browser
+runs the product. Playwright's Cloudflare fork sends CDP over a binding-backed
+WebSocket. The installed package is 1.3.0, based on Playwright 1.58.2.
+
+Browser Run supports tabs, isolated contexts, cookies/storage state, CDP, active
+session reuse and reconnect. The inactivity timeout is 60 seconds by default,
+configurable to 10 minutes; active sessions have no fixed maximum lifetime.
+Session persistence is not a provisioned OS profile with installable software.
+The actual WorkersLaunchOptions expose keep_alive, recording and lab, with no
+extension artifact, browser executable, launch arguments or WAV device input.
+launchPersistentContext and launchServer are explicitly unsupported by the
+installed Cloudflare package. Official documentation supplies no native toolbar
+or extension-installation interface. This is a limitation of the supported
+service contract, not a claim that headless Chromium itself cannot run extensions.
+
+A direct API capability probe could not acquire a session: the configured
+account token is active (200 from /accounts/:id/tokens/verify), but the Browser
+Rendering API returns 401 / code 10000. No live CDP capability claim follows
+from that failure. The existing production Worker binding is a separate path.
+
+### What meeting-lab actually supplies
+
+The deployed service is FastAPI on 127.0.0.1:8765, reached through SSH. POST
+/meetings launches a Node/Puppeteer process under Xvfb. Its launcher selects
+/snap/bin/chromium and an on-disk profile, installs an unpacked extension with
+Chrome launch flags, and supplies WAV/Y4M through native fake-device flags.
+Hosts use a platform profile; every guest uses the same guest profile. The API
+has no profile-selection or profile-lease mechanism. State and screenshots live
+in one session directory. DELETE signals only that session's process group.
+
+The predecessor ~/jl-harness has a relevant production experiment in
+prod-mirror-vm.js. It established native toolbar activation before tabCapture;
+opening popup.html as a tab was used for login only. The native popup was a
+separate CDP target rather than a Puppeteer Page. Stored verdict-A/B/C artifacts
+record successful real capture and one socket: silent start, audible start,
+and silent-to-audible transition (530 ms, one transition event). These are
+historical, narrow results on Store 3.25.0, not current JobLander acceptance.
+Their wire/devlog assertions and direct tabCapture probe are diagnostic aids;
+they cannot replace CheckMyApp's external user-result verdict.
+
+check-fakeaudio.js separately measured RMS from getUserMedia before trusting
+audio fixtures. Its historical README records Linux fake-WAV success and macOS
+failure; fresh platform verification is required. A live timer, audible flag,
+or nonzero RMS alone does not establish recognition or a relevant AI result.
+
+The newer meeting API only loads the extension. It does not authenticate it,
+open its popup, activate capture or prove Stop. Its cleanup closes the browser,
+which does not prove that a paid application session stopped. The dwell timer
+begins after joining, so it is not an absolute whole-session deadline.
+
+For session 20260912-115012-98273a, the saved state reports a prejoin failure,
+while meet-joined.png visibly shows the in-call toolbar including Leave call.
+The deployed detector catches evaluation failures as false and uses only a
+nonzero bounding box for visibility. The artifact confirms disagreement; the
+exact failing predicate is not established. Keep this as fixture failure,
+never a JobLander regression.
+
+### Implementation consequences
+
+Keep website checks on Browser Run. Provide the extension executor with the
+Linux/headful/native-action capabilities proven by the harness. Reuse
+meeting-lab's API for meeting fixtures. Add isolated per-run profile ownership,
+an absolute lifetime, explicit popup/target-tab identities, bounded local
+sequences and independently verified application cleanup. Keep store package
+identity separate from installation identity. A container on the existing
+Cloudflare platform is a candidate deployment mechanism; it is distinct from
+Browser Run and still needs a real JobLander preflight.
+
+Meeting fixtures use the existing meeting-lab API. Preflight on 2026-09-12 UTC
+found two pre-existing Teams hosts, 20260727-110754-700e2c and
+20260725-131341-a2e067. Neither belongs to this task. No meeting was created.
+
+Repository rules prohibit merging and pushing main. Prepare the complete,
+reviewable change before resolving that production delivery boundary.
+
+## References
+
+- https://playwright.dev/docs/chrome-extensions
+- https://developer.chrome.com/docs/extensions/reference/api/tabCapture
+- https://developer.chrome.com/docs/extensions/reference/api/commands
+- https://github.com/JobLander-app/meeting-lab/blob/main/skill/SKILL.md
+
+## Fresh isolated preflight evidence
+
+2026-09-12 16:38–16:43 UTC, disposable container `cma-extension-01a0965f`
+on the existing VM; loopback-only control port, 2 GB/2 CPU limit, unique profile,
+10-minute absolute browser deadline. No meeting fixture or paid session started.
+
+- Official Store package and loaded runtime agree: ID
+  `hafhjepjihcimcljkdphpinannbdmnhf`, version `3.26.1`.
+- Original CRX SHA-256:
+  `5e52e2eb824a6e3fa223ad3f2a6c288b4e73da66d913e7690badcc75d38a97b3`.
+- Installed browser: Chrome for Testing `145.0.7632.6` (Playwright 1.58.2 image).
+- Runtime identity must be polled after attaching to the service worker;
+  its target can appear before `chrome.runtime` initializes.
+- Native accessibility requires `ACCESSIBILITY_ENABLED=1` in addition to
+  `--force-renderer-accessibility=complete` in this image. Chrome's toolbar
+  action is named `open`, not `click`. Both discoveries concern the executor.
+- Fresh AT-SPI lookup opened the Chrome extension menu and selected JobLander.
+  The resulting popup was a `page` CDP target in this build (the historical
+  harness had seen `other`). Playwright could read it and click its email-login
+  control. A settled desktop screenshot confirms the actual floating popup
+  anchored to the toolbar over the recorded companion tab, not a popup URL tab.
+- Screenshots and target IDs are diagnostic preflight evidence only; this does
+  not yet prove capture, stimulus recognition, billing or application Stop.
+
+Additional primary references:
+- https://developers.cloudflare.com/browser-run/playwright/
+- https://developers.cloudflare.com/browser-run/limits/
+- https://developers.cloudflare.com/browser-run/features/reuse-sessions/
+- https://developers.cloudflare.com/containers/
+- https://www.chromium.org/developers/accessibility/testing/automated-testing/ax-inspect/
+- https://chromium.googlesource.com/chromium/src/+/9360d08502357e2ea00f4f052bb6a8ca9277e27a/chrome/test/fuzzing/atspi_in_process_fuzzer.cc
+
+### Live Browser Run binding probe
+
+A second probe used the real `BROWSER` Worker binding through Wrangler's remote
+binding (2026-09-12 16:47 UTC). Unlike the direct REST-token probe, it acquired a
+browser and closed it in `finally`. The production-compatible launch path
+(no `lab` option) returned:
+
+```json
+{
+  "product": "Chrome/128.0.6613.137",
+  "protocolVersion": "1.3",
+  "Extensions.getExtensions": "Protocol error: method wasn't found",
+  "Extensions.loadUnpacked": "Protocol error: method wasn't found"
+}
+```
+
+This is evidence for the browser actually supplied to this account/binding at
+that time, not a prediction about every future Browser Run engine. The probe
+is reproducible under `spikes/extension-browser-run/`, uses no customer URL,
+accepts a single POST per reload and always disposes its own session. The
+installed local workerd supports dates through 2026-06-18, so the probe uses
+the agent's existing 2025-09-15 compatibility date. `keep_alive` is milliseconds
+in this API: 60000, not 60 (the live API requires at least 10000).
+
+The native JobLander popup also accepted the existing test account's credentials
+on the first attempt and displayed its signed-in controls. No subscription,
+resume, meeting, capture or paid session was created or changed by that check.
+
+### Invocation correction after the capture preflight
+
+The first capture attempt on the owned synthetic interview page did not produce
+an End session control. Its lease remains `unverified`; there is no green result.
+Fresh UI inspection showed an empty extension shadow root and the popup back at
+Show JobLander Insights. It also revealed an extension DevTools window. This
+invalidates treating the AT-SPI default action as proof of the normal Chrome
+action invocation: popup availability and successful login were real, but
+capture activation was not established. `native.py` now uses a physical left
+click at the center of the freshly located named native control, matching the
+historical harness's proven mechanism. No guessed screen coordinates.
+
+A synthetic-microphone preflight on the same isolated Chrome measured RMS
+0.4137489668 over four seconds. Its English candidate phrase and WAV SHA-256
+are recorded separately from the interviewer/tab stimulus. Playback of the
+interviewer WAV was observed running; recognized output has not been proven.
+
+## Current implementation checkpoint
+
+The isolated worktree now contains additive extension identity/config columns,
+Store-link parsing, public-form target selection, on-demand dashboard onboarding,
+settings and a saved-app run action. Paid starts and rechecks carry extension
+configuration. These are draft changes: the Workflow is not yet routed to the
+new executor, so this branch must not be deployed as a completed feature.
+
+The runner prototype has a per-attempt browser lease, a synthetic microphone
+preflight, a local JobLander Stop sequence and a session ledger that keeps failed
+cleanup unverified. `ExtensionRunner` adds the Cloudflare Container/DO lifecycle,
+but is not bound/exported by the production Worker yet. Integration, generic
+surface tools, result/cleanup verdict gates and the three full production
+scenarios remain open.
+
+Validation so far: Prisma generation, both typechecks, lint (only three existing
+warnings), all 35 existing acceptance scripts including the new lifecycle
+script passed. The subsequently added extension-target acceptance script also
+passes; a final full check is still required after integration.
+
+
+The next physical-click attempt exposed the actual failure: a fresh desktop
+screenshot showed the popup's DevTools console reporting `No active tab found`.
+There were zero DevTools targets after login, and a DevTools window after the
+runner's target lookup. `pageForTarget` had called `context.newCDPSession` on
+every Page, including the popup. In this Chrome build that inspection moves the
+last-focused window. It now first filters by the root CDP target's observed URL;
+a popup requires a unique matching target and Page without another attachment.
+Normal page IDs are checked only against matching normal-page candidates. The
+old failed attempts remain unverified and produce no product finding.
+
+A further replay showed that removing the explicit per-popup CDP lookup alone
+was insufficient: opening a new Playwright connection while the native popup
+was present still produced the focused popup inspector and the same no-active-tab
+error. The capture command now uses the popup's freshly observed AT-SPI label
+and physical native input, dismisses the popup, confirms that its exact target
+has gone, then connects to the companion page. Authentication and reading a
+popup are not proof that its capture action preserves native tab activation.
+This correction still requires a successful live capture/Stop replay.
+
+### Successful native capture and Stop preflight
+
+Attempt `01a0965f-preflight-8`, Store/installed 3.26.1, Chrome for Testing
+145.0.7632.6, synthetic interview page owned by the container:
+
+- 17:19:03.938 UTC: owned capture lease registered, 60-second limit.
+- 17:19:05.249 UTC: native Show JobLander Insights click produced the visible
+  End session control on the exact target tab.
+- 17:20:04.145 UTC: independent local deadline clicked End session.
+- 17:20:04.374 UTC: Confirm end session clicked (229 ms from first click).
+- 17:20:04.382 UTC: the session controls were gone; ledger state `stopped`.
+- A subsequent read found the extension's shadow root empty and the controls
+  remained absent. No popup inspector was used for activation.
+
+This proves native capture UI activation and local application-UI Stop. It is
+not the two-full-minute acceptance run, and it does not establish billing
+cessation or recognition/answer quality. The attempted text sample arrived after
+the deadline and therefore records no recognized output. Future sampling must
+be local to the executor during the session, independent of agent latency.
+
+Final checkpoint for the executor research, 2026-09-12 17:25 UTC:
+all five required command groups passed in order, including all 37 acceptance
+scripts (three new extension scripts). Lint has only the three pre-existing
+anonymous-default-export warnings. The temporary Browser Run dev server is
+stopped. The owned Docker container/profile was removed after its Stop evidence
+and final state were saved outside the image context. Meeting-lab's existing
+sessions were not modified. `wrangler containers list` succeeds and reports no
+existing containers in this account; no production container was deployed.
+The primary checkout is still main at 4d0c719; its only new untracked directory
+is `.codex/`, which contains this task's isolated feature worktree.
+
+Next implementation steps, in order:
+1. Keep a structured native popup interface while it is active. Additional
+   Playwright connections to that popup can move focus; ordinary page tools
+   remain usable after the popup is closed. Bind each native operation to the
+   observed extension, window and exact target tab, and preserve credential
+   substitution/permission gates.
+2. Sample stimulus/result evidence locally during capture. Agent round-trip
+   latency must not cause the sample to arrive after the session deadline.
+3. Wire the extension Container and native surfaces into Workflow discovery and
+   journeys; never survey/replay the Store listing as a website. Keep website
+   Browser Run behavior intact and prevent cross-version results.
+4. Gate session actions with the local ledger, require positive Stop evidence,
+   keep billing cessation separate from UI Stop, and prohibit a green result
+   from missing/unverified session evidence. Persist evidence before disposal.
+5. Verify the public and owner UI, then run the three full JobLander scenarios
+   against production for two complete minutes with user-visible balance and
+   history checks. Commit/review on the feature branch; repository rules still
+   prohibit merging/main pushes, so resolve delivery only once reviewable.

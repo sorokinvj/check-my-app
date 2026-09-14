@@ -20,6 +20,7 @@ import type { PrismaClient } from "@/generated/prisma/client";
 // The Finding columns a ticket is built from — a structural subset so either
 // caller can pass its own query result.
 export interface TicketFinding {
+  anchor?: string | null;
   // CHE-103: recorded on the link so the finding is found by pointer, not by
   // re-hashing prose that a later cleanup may rewrite. Optional because the
   // tickets we file against ourselves have no Finding row behind them.
@@ -60,9 +61,13 @@ export interface TicketPolicyFields {
 // Param is the minimal subset the key actually hashes, so reconcile (CHE-61)
 // can re-key findings it loads without the evidence join.
 export function dedupKeyForFinding(
-  finding: Pick<TicketFinding, "title" | "category" | "severity" | "detail">,
+  finding: Pick<TicketFinding, "title" | "category" | "severity" | "detail" | "anchor">,
   run: Pick<TicketRun, "appSlug">,
 ): string {
+  const errorSignature = parseJson<{ errorSignature?: string }>(finding.anchor)?.errorSignature;
+  if (run.appSlug.startsWith("extension:") && typeof errorSignature === "string" && /^[a-f0-9]{64}$/.test(errorSignature)) {
+    return dedupKey({ journeyTitle: run.appSlug, stepLabel: errorSignature, failureSignature: "extension-alert" });
+  }
   const detail = parseJson<FindingDetail>(finding.detail) ?? {};
   // CHE-59: machine facts first. A finding that names a failing request keys on
   // (app, METHOD path status) — category/severity/prose all drift run-to-run,

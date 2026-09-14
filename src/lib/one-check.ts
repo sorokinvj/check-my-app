@@ -16,6 +16,7 @@ import type Stripe from "stripe";
 import type { PrismaClient } from "@/generated/prisma/client";
 import { decryptSecret } from "@/lib/crypto";
 import { appSlugFromUrl } from "@/lib/utils";
+import { readExtensionOptions } from "@/lib/extension-target";
 import { captureServer, serverDistinctId } from "@/lib/analytics-server";
 import { startCheck, type StartCheckDeps, type StartedCheck } from "@/lib/start-check";
 
@@ -70,6 +71,7 @@ export async function startPaidCheck(
       {
         input: {
           url: pending.targetUrl,
+          extension: readExtensionOptions(pending.extensionConfig),
           testEmail: pending.testEmail ?? "",
           testPassword: pending.testPasswordEnc ? decryptSecret(pending.testPasswordEnc) : "",
           userNotes: pending.userNotes ?? "",

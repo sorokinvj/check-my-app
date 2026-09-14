@@ -19,6 +19,7 @@
 // Usage: npx tsx --tsconfig tsconfig.json scripts/verify-harness.ts
 
 import type Anthropic from "@anthropic-ai/sdk";
+import { ExtensionBrowser } from "@/agent/extension-browser";
 import { finalizeStructured, LlmBudgetError, runAgentLoop } from "@/agent/core";
 import { harnessMode } from "@/agent/env";
 import { walkingVision } from "@/agent/harness";
@@ -235,6 +236,25 @@ const archiveStep: ReportedStep = {
 };
 
 async function main() {
+  for (const popup of [true, false]) for (const vision of ['always', 'requested', 'off'] as const) {
+    const png = Buffer.from('verified-redacted-png');
+    const panel = { count: async () => 1, isVisible: async () => true, screenshot: async () => png, locator: () => panel };
+    const extension = Object.assign(Object.create(ExtensionBrowser.prototype), {
+      popup, identity: { extensionId: 'hafhjepjihcimcljkdphpinannbdmnhf', targetUrl: 'http://127.0.0.1:9091/' },
+      browser: { isConnected: () => true }, page: { locator: () => panel },
+      runner: { fetch: async (request: Request) => {
+        check('native vision uses only the cropped popup', new URL(request.url).pathname === '/popup.png');
+        return new Response(png);
+      } },
+    }) as ExtensionBrowser;
+    const env = { extension, page: extension.page, networkLog: [], consoleLog: [], visionScreenshots: vision === 'always', visionTriggers: vision === 'requested' } as unknown as ToolEnv;
+    const nav = scriptedNav([{ name: popup ? 'extension_screenshot' : 'screenshot', input: { look: vision === 'requested' } }]);
+    const result = await runAgentLoop({ system: 't', task: 'inspect', env, llm: nav.llm, thinking: 'off' });
+    check(`native vision ${popup ? 'popup' : 'panel'} ${vision}: expected image in actual model input`, resultHasImage(result.messages, 'tu_1') === (vision !== 'off'));
+    const encoded = JSON.stringify(result.messages);
+    check('native vision preserves PNG media type', vision === 'off' || encoded.includes('"media_type":"image/png"') && encoded.includes(png.toString('base64')));
+    check('native vision consumes the image once', env.pendingScreenshotPngB64 === undefined);
+  }
   // 1 — HARNESS_TIER parsing: only the two exact tier names turn anything on.
   const mode = (v: string | undefined) => JSON.stringify(harnessMode({ HARNESS_TIER: v }));
   const off = JSON.stringify({ visionOnDemand: false, judge: false });

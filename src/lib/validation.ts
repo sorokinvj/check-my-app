@@ -1,4 +1,26 @@
 import { z } from "zod";
+import { isChromeStoreUrl, parseExtensionLink } from "./extension-target";
+
+export const extensionOptionsSchema = z.object({
+  companionUrl: z.string().trim().url().refine(u => {
+    try {
+      const url = new URL(u);
+      return url.protocol === "https:" && !url.username && !url.password && url.hostname.includes(".");
+    } catch { return false; }
+  }, "Enter the HTTPS address where your extension works").optional().or(z.literal("")),
+  expectedOutcome: z.string().trim().max(1000).optional(),
+  allowSessions: z.boolean().optional(),
+  maxSessionSeconds: z.number().int().min(60).max(600).optional(),
+});
+
+export function extensionOptionsFromForm(form: FormData) {
+  return extensionOptionsSchema.safeParse({
+    companionUrl: String(form.get("extensionCompanionUrl") ?? "").trim(),
+    expectedOutcome: String(form.get("extensionExpectedOutcome") ?? "").trim(),
+    allowSessions: form.get("extensionAllowSessions") === "yes",
+    maxSessionSeconds: Number(form.get("extensionMaxSessionSeconds") ?? 180),
+  });
+}
 
 // Bare domains ("theins.ru") are fine — we assume https:// for them.
 export function normalizeTargetUrl(raw: string): string {
@@ -19,13 +41,14 @@ export const createCheckSchema = z.object({
         .url("Doesn't look like a working URL")
         .refine((u) => {
           try {
-            return new URL(u).hostname.includes(".");
+            return new URL(u).hostname.includes(".") && (!isChromeStoreUrl(u) || Boolean(parseExtensionLink(u)));
           } catch {
             return false;
           }
         }, "Doesn't look like a working URL"),
     ),
   testEmail: z.string().email().optional().or(z.literal("")),
+  extension: extensionOptionsSchema.optional(),
   testPassword: z.string().optional().or(z.literal("")),
   scopeHints: z.string().max(2000).optional().or(z.literal("")),
   userNotes: z.string().max(2000).optional().or(z.literal("")),

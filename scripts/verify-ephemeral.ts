@@ -398,6 +398,37 @@ async function main() {
       noBucket.runs === 1 && noBucket.evidence === 0 && w2.run.length === 0, JSON.stringify(noBucket));
   }
 
+  // Extension captures stay private and are owned by a run even after the
+  // public report replaces its draft steps. Expiry must retain that ownership.
+  {
+    const w = world();
+    w.run.push({ id: "extension_run", targetKind: "extension", ephemeral: true, expiresAt: new Date("2026-09-01T00:00:00.000Z"), transcriptUrl: null, liveScreenshotUrl: null });
+    const { db } = stubDb(w);
+    const keys = new Set([
+      "private/runs/extension_run/discovery.json", "private/runs/extension_run/screenshots/hash.png",
+      "private/extensions/extension_run_walk-0/cleanup.json", "extensions/extension_run_walk-0/cleanup.json",
+      "extensions/extension_run/screenshots/first.png", "extensions/extension_run/screenshots/second.png",
+      "private/runs/other_run/discovery.json", "private/extensions/other_run_walk-0/cleanup.json",
+    ]);
+    const deleted: string[] = [];
+    let unavailable = true;
+    const bucket = { list: async ({ prefix, cursor }: { prefix: string; cursor?: string }) => {
+      if (unavailable) throw new Error("Fixture storage outage");
+      const matches = [...keys].filter(key => key.startsWith(prefix));
+      const start = Number(cursor ?? 0), end = start + 1;
+      return { objects: matches.slice(start, end).map(key => ({ key })), truncated: end < matches.length, cursor: String(end) };
+    }, delete: async (batch: string[]) => { for (const key of batch) { deleted.push(key); keys.delete(key); } } } as unknown as R2Bucket;
+    const noBucket = await sweepExpiredEphemeralRuns(db, NOW);
+    check("extension expiry: missing R2 retains the run for a later sweep", noBucket.runs === 0 && w.run.length === 1);
+    let rejected = false;
+    try { await sweepExpiredEphemeralRuns(db, NOW, bucket); } catch { rejected = true; }
+    check("extension expiry: listing failure retains the run and its artifacts", rejected && w.run.length === 1 && deleted.length === 0);
+    unavailable = false;
+    const result = await sweepExpiredEphemeralRuns(db, NOW, bucket);
+    check("extension expiry: all private artifacts and native captures survive loss of draft step references", result.runs === 1 && result.evidence === 6 && deleted.length === 6 && w.run.length === 0);
+    check("extension expiry: other runs' private evidence survives", keys.size === 2 && [...keys].every(key => key.includes("other_run")));
+  }
+
   // 7 — the janitor's test-account sweeps skip an ephemeral run; the tick's
   // ephemeral sweep passes the bucket through.
   {

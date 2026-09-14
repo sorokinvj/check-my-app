@@ -2,6 +2,7 @@ import { getDbFromContext } from "@/lib/db";
 import { parseJson } from "@/lib/json";
 import { isTerminal } from "@/lib/status";
 import type { RunEvent } from "@/lib/types";
+import { publicRunError } from "@/lib/extension-target";
 
 export const dynamic = "force-dynamic";
 
@@ -22,6 +23,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
           where: { publicId: (await params).id },
           select: {
             status: true,
+            targetKind: true,
             events: true,
             verdict: true,
             errorMessage: true,
@@ -36,6 +38,8 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
         }
         const serialized = JSON.stringify({
           ...run,
+          errorMessage: publicRunError(run.targetKind, run.errorMessage),
+          liveScreenshotUrl: run.targetKind === "extension" ? null : run.liveScreenshotUrl,
           events: parseJson<RunEvent[]>(run.events),
         });
         if (serialized !== lastSerialized) {

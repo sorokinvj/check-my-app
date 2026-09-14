@@ -35,6 +35,9 @@ const ENVIRONMENT_TERMS = [
   /\bin\s+our\s+environment\b/i,
   /\bautomation\s+(context|environment)\b/i,
   /\b0\s+(network\s+)?requests?,\s*0\s+(dom\s+)?mutations?\b/i,
+  /\b(?:audio|microphone|account|session) preflight\b/i,
+  /\b(?:applicationStopObserved|ownerRunId|targetTabId|runtimeFailed|billingCleanup)\b/i,
+  /\bowned (?:expiry|deadline|lease|confirmation sequence|session tools)\b/i,
 ];
 
 // Phrases that hand the verification back to the customer.
@@ -558,6 +561,12 @@ export function environmentLeaks(text: string | null | undefined): string[] {
 
 export function hasEnvironmentLeak(text: string | null | undefined): boolean {
   return environmentLeaks(text).length > 0;
+}
+
+export function productStepLabel(text: string): string {
+  const label = text.replace(/\b(?:pre-session\s+)?account preflight\b/gi, "Session balance")
+    .replace(/\b(?:audio|microphone) preflight\b/gi, "Prepare the session");
+  return productProse(label, 0) ?? "Check this part of the product";
 }
 
 // Last-resort scrub: drop the sentences that name our machinery, cut the

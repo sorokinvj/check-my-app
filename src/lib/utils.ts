@@ -1,5 +1,6 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
+import { parseExtensionLink } from "./extension-target";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -8,6 +9,8 @@ export function cn(...inputs: ClassValue[]) {
 // Derive a stable app slug from a target URL host, e.g.
 // "https://joblander.app/dashboard" → "joblander.app".
 export function appSlugFromUrl(url: string): string {
+  const extension = parseExtensionLink(url);
+  if (extension) return `extension:${extension.id}`;
   try {
     return new URL(url).host.replace(/^www\./, "");
   } catch {

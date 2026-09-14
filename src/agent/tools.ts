@@ -17,15 +17,20 @@ import {
   NOT_DEFECT_FALLBACK,
   PROBLEM_FALLBACK,
   productProse,
+  productStepLabel,
   splitSentences,
   UNVERIFIABLE_FALLBACK,
 } from "@/lib/verdict-language";
 import { cutNullEffectClauses } from "./findings-gate";
 import { isSelfCheckRedirect, isSelfUrl, selfCheckRefusalIn } from "./self-hosts";
 import type { GapClass } from "./gap-classes";
+import type { ExtensionBrowser } from "./extension-browser";
+import { ExtensionRuntimeError } from "./extension-error";
+import { extensionToolAllowed } from "./extension-contract";
 
 export interface ToolEnv {
   page: Page;
+  extension?: ExtensionBrowser;
   // Origin the agent is allowed to touch. Credential substitution and
   // navigation are hard-refused off this origin (defence vs prompt injection).
   targetOrigin: string;
@@ -42,6 +47,7 @@ export interface ToolEnv {
   // Off for text-only nav models — the image would be rejected.
   visionScreenshots?: boolean;
   pendingScreenshotJpegB64?: string;
+  pendingScreenshotPngB64?: string;
   // CHE-169: vision on demand. With this on (and visionScreenshots off) the
   // screenshot tool parks no JPEG by itself; the harness parks one only at a
   // moment of judgment — an inert click or one that needed a fallback, an
@@ -160,18 +166,21 @@ export type RecordedAction =
       role?: string;
       name?: string;
       selector?: string;
-      outcome: { urlAfter: string; navigated: boolean; requests: number; mutations: number };
+      surface?: { kind: "native_popup"; extensionId: string; targetId: string };
+      outcome: { urlAfter: string; navigated: boolean | null; requests: number | null; mutations: number | null };
     }
   | {
       kind: "fill";
       label?: string;
       selector?: string;
       value: string;
+      surface?: { kind: "native_popup"; extensionId: string; targetId: string };
       outcome: { urlAfter: string };
     };
 
 function recordAction(env: ToolEnv, action: RecordedAction): void {
   env.actionTrail?.push(action);
+  env.extension?.recordPageAction(action);
 }
 
 // ─── CHE-214: a control our own hands could not drive ────────────────────────
@@ -434,8 +443,27 @@ const BROWSER_TOOLS_VISION_ON_DEMAND: Anthropic.Tool[] = BROWSER_TOOLS.map((t) =
   t.name === "screenshot" ? SCREENSHOT_TOOL_VISION_ON_DEMAND : t,
 );
 
-export function browserToolsFor(env: Pick<ToolEnv, "visionTriggers">): Anthropic.Tool[] {
-  return env.visionTriggers ? BROWSER_TOOLS_VISION_ON_DEMAND : BROWSER_TOOLS;
+const EXTENSION_TOOLS: Anthropic.Tool[] = [
+  ...[
+    ["extension_open", "Open the installed extension through Chrome's native action on the owned target tab; returns its current controls."],
+    ["extension_read", "Read the native popup and obtain fresh control references. References are consumed after one action."],
+    ["extension_screenshot", "Capture a redacted screenshot of the native extension popup."],
+    ["extension_close", "Close the native popup and return to its exact target tab for page tools."],
+    ["extension_audio_preflight", "Validate the synthetic microphone before a session. Run with the native popup closed."],
+    ["extension_account_preflight", "Read the test account's visible minute balance and session history before a paid session. Uses the saved test credentials, with the native popup closed."],
+    ["extension_start_session", "Start the extension session with an owned deadline and verified local Stop sequence. Requires explicit owner permission, a test account and audio preflight. Open the native popup first."],
+    ["extension_prepare_practice", "Prepare the practice page with the selected coach and language before any session. Requires account preflight and the native popup closed."],
+    ["extension_start_practice", "Start the prepared practice with its microphone on and an owned Stop deadline. In a combined scenario start the extension first, then start practice. Requires account and audio preflight and session permission."],
+    ["extension_observe_session", "Wait up to 25 seconds for the owned session and read its new question/answer, Stop and minute accounting. Repeat until complete. The local deadline ends and confirms the session automatically, allowing the full allotted duration and post-Stop balance check."],
+    ["extension_stop_sessions", "Stop every session owned by this attempt through its local confirmation sequence. Browser disposal is separate."],
+  ].map(([name, description]): Anthropic.Tool => ({ name, description, input_schema: { type: "object", properties: name === "extension_screenshot" ? { look: { type: "boolean", description: "Attach the redacted image for visual inspection when vision is available." } } : {}, required: [] } })),
+  { name: "extension_click", description: "Click a fresh native popup control by its observed reference. Session and purchase controls are guarded.", input_schema: { type: "object", properties: { ref: { type: "string" } }, required: ["ref"] } },
+  { name: "extension_fill", description: "Fill an observed native popup field. Use {{TEST_EMAIL}} / {{TEST_PASSWORD}} for credentials; substitution is confined to the installed extension.", input_schema: { type: "object", properties: { ref: { type: "string" }, value: { type: "string" } }, required: ["ref", "value"] } },
+];
+
+export function browserToolsFor(env: Pick<ToolEnv, "visionTriggers" | "extension">): Anthropic.Tool[] {
+  const base = env.visionTriggers ? BROWSER_TOOLS_VISION_ON_DEMAND : BROWSER_TOOLS;
+  return env.extension ? [...base, ...EXTENSION_TOOLS.filter(tool => extensionToolAllowed(env.extension!.identity, tool.name))] : base;
 }
 
 // ─── Executor ────────────────────────────────────────────────────────────────
@@ -446,6 +474,8 @@ export async function executeTool(
   input: Record<string, unknown>,
 ): Promise<string> {
   try {
+    const extensionResult = await env.extension?.tool(env, name, input);
+    if (extensionResult !== undefined) return extensionResult;
     switch (name) {
       case "navigate":
         return await navigate(env, String(input.url));
@@ -527,6 +557,7 @@ export async function executeTool(
         return `Unknown tool: ${name}`;
     }
   } catch (err) {
+    if (err instanceof ExtensionRuntimeError) throw err;
     return `Error: ${err instanceof Error ? err.message : String(err)}`;
   }
 }
@@ -847,6 +878,8 @@ async function click(env: ToolEnv, input: Record<string, unknown>): Promise<stri
     );
   }
   const target = (await resolveClickTarget(env.page, input)).first();
+  const sessionRefusal = await env.extension?.guardClick(target);
+  if (sessionRefusal) return sessionRefusal;
   // Never interact before hydration: a click landing before listeners attach
   // is indistinguishable from a dead button.
   await waitForHydration(env.page, 1_500);
@@ -1096,6 +1129,8 @@ async function fill(env: ToolEnv, input: Record<string, unknown>): Promise<strin
       : page.locator("input:visible");
 
   const field = locator.first();
+  const fixtureRefusal = await env.extension?.guardFixtureControl(field);
+  if (fixtureRefusal) return fixtureRefusal;
   // Same hydration gate as click: values typed before listeners attach are
   // silently dropped by controlled inputs.
   await waitForHydration(page, 1_000);
@@ -1226,7 +1261,7 @@ export function classifyUnverified(step: ReportedStep): void {
 // product-facing substitute, so a label made only of machinery words (never
 // seen in a run) stays as written.
 export function productizeStep(step: ReportedStep): void {
-  step.label = productProse(step.label, 0) ?? step.label;
+  step.label = productStepLabel(step.label);
   step.attempted = productProse(step.attempted) ?? step.label;
   step.observed = productProse(step.observed) ?? observedFallback(step);
 }
@@ -1655,12 +1690,31 @@ async function readPage(env: ToolEnv): Promise<string> {
   const digest = await env.page.evaluate(() => {
     const clip = (s: string | null | undefined, n = 80) =>
       (s ?? "").replace(/\s+/g, " ").trim().slice(0, n);
+    const roots: Array<Document | ShadowRoot> = [document];
+    const shadowText: string[] = [];
+    const frameUrls: string[] = [];
+    // Extension UI often lives in an open shadow root. Reading only document
+    // controls hides its result panel even though locators can click it.
+    for (let index = 0; index < roots.length && index < 50; index++) {
+      for (const element of Array.from(roots[index].querySelectorAll("*")).slice(0, 10_000)) {
+        if (element.shadowRoot) {
+          roots.push(element.shadowRoot);
+          const text = clip(element.shadowRoot.textContent, 4000);
+          if (text) shadowText.push(text);
+        }
+        if (element instanceof HTMLIFrameElement) {
+          if (element.src) frameUrls.push(element.src);
+          try { if (element.contentDocument) roots.push(element.contentDocument); } catch { /* A cross-origin frame remains separately identified. */ }
+        }
+      }
+    }
+    const select = (selector: string) => roots.slice(0, 50).flatMap(root => Array.from(root.querySelectorAll(selector)));
 
-    const headings = Array.from(document.querySelectorAll("h1,h2,h3"))
+    const headings = select("h1,h2,h3")
       .slice(0, 20)
       .map((h) => `${h.tagName.toLowerCase()}: ${clip(h.textContent)}`);
 
-    const anchors = Array.from(document.querySelectorAll("a[href]"));
+    const anchors = select("a[href]");
     const links = anchors
       .slice(0, 40)
       .map((a) => `"${clip(a.textContent, 50)}" → ${a.getAttribute("href")}`);
@@ -1669,17 +1723,15 @@ async function readPage(env: ToolEnv): Promise<string> {
     // 200th anchor is still published.
     const hrefs = Array.from(new Set(anchors.map((a) => (a as HTMLAnchorElement).href)));
 
-    const buttons = Array.from(
-      document.querySelectorAll('button,[role="button"],input[type="submit"]'),
-    )
+    const buttons = select('button,[role="button"],input[type="submit"]')
       .slice(0, 25)
       .map((b) => `"${clip(b.textContent || (b as HTMLInputElement).value, 50)}"${(b as HTMLButtonElement).disabled ? " (disabled)" : ""}`);
 
-    const fields = Array.from(document.querySelectorAll("input,textarea,select"))
+    const fields = select("input,textarea,select")
       .slice(0, 25)
       .map((i) => {
         const el = i as HTMLInputElement;
-        const labelEl = el.id ? document.querySelector(`label[for="${el.id}"]`) : null;
+        const labelEl = el.id ? (el.getRootNode() as Document | ShadowRoot).querySelector(`label[for="${CSS.escape(el.id)}"]`) : null;
         const label = clip(labelEl?.textContent ?? el.getAttribute("aria-label"), 50);
         const placeholder = clip(el.placeholder, 50);
         // Distinguish label vs placeholder — generated specs must target
@@ -1699,6 +1751,8 @@ async function readPage(env: ToolEnv): Promise<string> {
       hrefs,
       buttons,
       fields,
+      shadowText,
+      frameUrls,
     };
   });
   // CHE-171: the page read is published (it rendered), and so is everything
@@ -1713,6 +1767,8 @@ async function readPage(env: ToolEnv): Promise<string> {
     `LINKS:\n${digest.links.join("\n") || "(none)"}`,
     `BUTTONS:\n${digest.buttons.join("\n") || "(none)"}`,
     `FORM FIELDS:\n${digest.fields.join("\n") || "(none)"}`,
+    ...(digest.shadowText?.length ? [`SHADOW PANELS:\n${digest.shadowText.join("\n").slice(0, 8000)}`] : []),
+    ...(digest.frameUrls?.length ? [`FRAMES:\n${digest.frameUrls.join("\n")}`] : []),
   ].join("\n\n");
 }
 
@@ -1725,8 +1781,10 @@ async function readPage(env: ToolEnv): Promise<string> {
 const MUTATION_COUNTER_SCRIPT = `(() => {
   window.__cmaMutations = 0;
   try {
-    new MutationObserver((records) => { window.__cmaMutations += records.length; })
-      .observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
+    window.__cmaMutationObserver?.disconnect();
+    const observer = new MutationObserver((records) => { window.__cmaMutations += records.length; });
+    observer.observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
+    window.__cmaMutationObserver = observer;
   } catch (e) {}
 })();`;
 
@@ -1737,6 +1795,10 @@ const MUTATION_COUNTER_SCRIPT = `(() => {
 export async function prepareAgentPage(env: ToolEnv): Promise<void> {
   await env.page.addInitScript("window.__name = (fn) => fn;");
   await env.page.addInitScript(MUTATION_COUNTER_SCRIPT);
+  if (env.extension) {
+    await env.page.evaluate("window.__name = (fn) => fn;");
+    await env.page.evaluate(MUTATION_COUNTER_SCRIPT);
+  }
   attachLogCapture(env);
 }
 

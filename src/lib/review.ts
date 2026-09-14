@@ -23,6 +23,7 @@
 // capability, same as the verdict page.
 
 import type { PrismaClient } from "@/generated/prisma/client";
+import { extensionReportPublished } from "@/lib/extension-target";
 import { normalizeAnatomy } from "@/lib/anatomy";
 import { unreachedPages } from "@/lib/coverage";
 import { parseJson } from "@/lib/json";
@@ -152,6 +153,7 @@ export interface ReviewSource {
 // payload carries nothing it does not show — no credentials columns, no cost,
 // no transcript (those are ours; CHE-108).
 export const REVIEW_SELECT = {
+  targetKind: true,
   publicId: true,
   appSlug: true,
   status: true,
@@ -202,6 +204,7 @@ export async function loadReview(
   origin: string,
 ): Promise<Review | null> {
   const run = await prisma.run.findUnique({ where: { publicId }, select: REVIEW_SELECT });
+  if (run && !extensionReportPublished(run)) return buildReview({ ...run, verdict: null, bottomLine: null, anatomy: null, journeys: [], findings: [] }, origin);
   return run ? buildReview(run, origin) : null;
 }
 

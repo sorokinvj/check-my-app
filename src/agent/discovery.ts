@@ -7,7 +7,9 @@ import { decryptSecret } from "@/lib/crypto";
 import type { AppAnatomy } from "@/lib/types";
 import { runAgentLoop, finalizeStructured, type TranscriptEntry } from "./core";
 import { knownUrlsFrom, prepareAgentPage, type ToolEnv } from "./tools";
-import { newAgentContext } from "./browser";
+import { newAgentContext, newAgentPage, closeAgentContext } from "./browser";
+import { extensionBrowserFor } from "./extension-browser";
+import { shapeExtensionDiscovery } from "./extension-discovery";
 import {
   DISCOVERY_ITERATIONS,
   DISCOVERY_ITERATIONS_WITH_MEMORY,
@@ -40,6 +42,7 @@ export interface RunInput {
 export interface ProposedJourney {
   title: string;
   steps: string[];
+  extensionScenario?: "interview" | "practice" | "practice-extension";
 }
 
 // CHE-133: the map from the last full check of a watched app, and the two
@@ -124,11 +127,13 @@ export async function discoverApp(args: {
   // CHE-193: on our own hosts the context announces itself on the requests the
   // web half guards, and on nothing else (CHE-212; self-hosts.ts).
   const context = await newAgentContext(browser, run.targetUrl, env.bindings);
-  const page = await context.newPage();
+  const page = await newAgentPage(browser, context);
+  const extension = extensionBrowserFor(browser);
 
   const toolEnv: ToolEnv = {
     page,
-    targetOrigin: originOf(run.targetUrl),
+    extension,
+    targetOrigin: originOf(extension?.identity.targetUrl ?? run.targetUrl),
     // CHE-193: lets the click gate know which extra hosts are ours.
     selfCheckHosts: env.bindings.SELF_CHECK_HOSTS,
     visionScreenshots: mode.visionScreenshots,
@@ -146,17 +151,23 @@ export async function discoverApp(args: {
     onCredentialRejected: (signature) => recordCredentialRejection(env, run.id, signature),
     knownUrls: knownUrlsFrom(run.targetUrl, publishedUrls),
     onScreenshot: async (buffer) => {
-      const { storageUrl } = await putScreenshot(env, buffer);
-      await onLiveScreenshot?.(storageUrl);
+      if (extension && !run.id) throw new Error("Extension evidence requires a run owner");
+      const { storageUrl } = await putScreenshot(env, buffer, extension ? { privateRunId: run.id! } : "public");
+      if (!extension) await onLiveScreenshot?.(storageUrl);
       return storageUrl;
     },
   };
   await prepareAgentPage(toolEnv);
 
   try {
+    if (extension?.identity.extensionId === "hafhjepjihcimcljkdphpinannbdmnhf" && toolEnv.testEmail && toolEnv.testPassword && !toolEnv.credentials?.rejected) {
+      await extension.tool(toolEnv, "extension_account_preflight", {});
+    }
     const result = await runAgentLoop({
       system: discoverySystem(run, known, knowledge),
-      task: `Target app: ${run.targetUrl}\nStart by navigating there, read the page, then explore.`,
+      task: extension
+        ? `Target product: the installed extension ${extension.identity.name}. Begin with extension_open and explore its actual popup. The Store link is metadata. The target tab is ${extension.identity.targetUrl}; it may be a synthetic companion, whose content is not part of the product. Map both the extension controls and the behavior they add to its target page.`
+        : `Target app: ${run.targetUrl}\nStart by navigating there, read the page, then explore.`,
       env: toolEnv,
       llm,
       maxIterations: known ? DISCOVERY_ITERATIONS_WITH_MEMORY : DISCOVERY_ITERATIONS,
@@ -167,6 +178,12 @@ export async function discoverApp(args: {
 
     let costUsd = result.costUsd;
     const usage = result.usage;
+    // The first native discovery promoted the audio fixture and guessed web
+    // domains into product anatomy. Extraction receives only reads of product
+    // surfaces, excluding fixture diagnostics and the model's own speculation.
+    const extractionMessages = extension ? [{ role: "user" as const, content:
+      `Installed product: ${extension.identity.name}. Observed product surfaces:\n${extension.discoveryObservations()}`,
+    }] : result.messages;
 
     // Guaranteed structured extraction. The model frequently spends its whole
     // iteration budget exploring and never emits the closing JSON on its own —
@@ -181,7 +198,7 @@ export async function discoverApp(args: {
     try {
       const extracted = await finalizeStructured<RawDiscovery>(
         llm,
-        result.messages,
+        extractionMessages,
         "Based ONLY on what you actually explored above, output the discovery result: " +
           "3-5 concrete user journeys (each a title + ordered steps) covering the app's core " +
           "flows (e.g. sign up / log in, the primary value action, account/settings), plus the " +
@@ -198,7 +215,7 @@ export async function discoverApp(args: {
       note(`structured extraction failed: ${errText(err)}`);
     }
     if (!parsed) {
-      parsed = parseDiscoveryJson(result.finalText);
+      parsed = extension ? null : parseDiscoveryJson(result.finalText);
       note(
         parsed
           ? "fell back to the JSON in the model's free-text answer"
@@ -214,7 +231,7 @@ export async function discoverApp(args: {
       try {
         const j = await finalizeStructured<{ journeys?: RawDiscovery["journeys"] }>(
           llm,
-          result.messages,
+          extractionMessages,
           "You proposed no user journeys — that is wrong. Propose 3-5 user journeys a real " +
             "user would take, based only on what you saw. Each is a title plus ordered steps.",
           JOURNEYS_SCHEMA,
@@ -235,9 +252,10 @@ export async function discoverApp(args: {
     if (!parsed?.journeys.length) {
       note("no journeys could be extracted — this run walks nothing and verifies nothing");
     }
-    return { ...(parsed ?? empty), transcript: result.transcript, costUsd, usage, notes };
+    const shaped = extension ? shapeExtensionDiscovery(extension.identity, extension.discoveryObservations(), parsed?.journeys ?? []) : parsed ?? empty;
+    return { ...shaped, transcript: result.transcript, costUsd, usage, notes };
   } finally {
-    await context.close();
+    await closeAgentContext(browser, context);
   }
 }
 

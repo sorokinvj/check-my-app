@@ -29,10 +29,16 @@ import type { Verdict } from "@/lib/enums";
 import { normalizeAnatomy } from "@/lib/anatomy";
 import { coverageSentence, pagePaths, unreachedPages } from "@/lib/coverage";
 import { parseJson } from "@/lib/json";
+import { readExtensionOptions } from "@/lib/extension-target";
 import type { RunEvent, RunPhase } from "@/lib/types";
 import { discoveryMemoryEnabled, makeAgentEnv, putText, type AgentBindings, type AgentEnv } from "./env";
 import { makeLlm, type UsageTotals } from "./llm";
-import { launchAgentBrowser, newAgentContext, surfaceScan } from "./browser";
+import { launchAgentBrowser, closeAgentBrowser, newAgentContext, surfaceScan } from "./browser";
+import { extensionBrowserFor } from "./extension-browser";
+import { extensionStepConfig, isExtensionTarget } from "./extension-contract";
+import { ExtensionRuntimeError } from "./extension-error";
+import { extensionCoverageGap, completeExtensionAccessCheck } from "./extension-evidence";
+import { prepareExtensionPublication } from "./extension-publication";
 import { LlmBudgetError } from "./core";
 import { dedupKeyForFinding } from "@/lib/tracker/file";
 import { discoverApp, type KnownMap, type ProposedJourney, type RunInput } from "./discovery";
@@ -92,6 +98,7 @@ function rethrowBudgetNonRetryable(err: unknown): never {
   if (err instanceof LlmBudgetError) {
     throw new NonRetryableError(err.message, "LlmBudgetError");
   }
+  if (err instanceof ExtensionRuntimeError) throw new NonRetryableError(err.message, err.name);
   throw err as Error;
 }
 
@@ -109,6 +116,9 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
           publicId: true,
           runNumber: true,
           targetUrl: true,
+          targetKind: true,
+          extensionId: true,
+          extensionConfig: true,
           appSlug: true,
           testEmail: true,
           testPasswordEnc: true,
@@ -128,6 +138,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
       if (!r) throw new Error(`run ${runId} not found`);
       return r;
     });
+    const isExtension = isExtensionTarget(run);
 
     // Everything below is inside the failure handler: a run left in a
     // non-terminal status is worse than a failed one — the scheduler treats it
@@ -139,6 +150,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
       // other pre-flight rungs: a survey that could not run leaves the ladder
       // exactly as it was before this step existed, never a failed run.
       const survey = await step.do("survey", async (): Promise<SurveyOutcome> => {
+        if (isExtension) return NO_SURVEY;
         try {
           return await takeSnapshot(env, run);
         } catch (err) {
@@ -204,6 +216,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
       // the check are swallowed on purpose: a Browser Rendering hiccup during a
       // cheap pre-check must cost a full run, never the run itself.
       const smoke = await step.do("replay", async () => {
+        if (isExtension) return { taken: false as const, reason: "extension checks require the installed product" };
         // Full re-check (CHE-74): the owner explicitly asked to walk everything
         // — no shortcut may eat that request.
         if (run.forceFull) {
@@ -233,6 +246,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
       // swallow-and-fall-through contract as the smoke check — a planning error
       // costs a full run, never the run itself.
       const plan = await step.do("partial-plan", async (): Promise<PartialDecision> => {
+        if (isExtension) return { taken: false, reason: "extension checks require fresh native evidence" };
         if (run.forceFull) {
           return { taken: false, reason: "full re-check requested — walking everything" };
         }
@@ -277,7 +291,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
       // CHE-106: the budget is spent and the smoke pass could not carry the
       // verdict forward. Finish honestly rather than spend: the app was
       // checked for outages today, and the deep walk resumes tomorrow.
-      if (run.smokeOnly && mode.mode !== "smoke") {
+      if (run.smokeOnly && mode.mode !== "smoke" && !isExtension) {
         await step.do("budget-complete", async () => {
           await env.db.run.update({
             where: { id: runId },
@@ -373,7 +387,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
           where: { mark: "watch", run: { appSlug: run.appSlug, id: { not: run.id } } },
           orderBy: { createdAt: "desc" },
           take: 10,
-          select: { title: true, category: true, severity: true, detail: true, createdAt: true },
+          select: { title: true, category: true, severity: true, detail: true, anchor: true, createdAt: true },
         });
         if (rows.length === 0) return [];
         // CHE-109: a watch mark had no way to end. The query asked only "was
@@ -384,7 +398,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
         // priority. A signature marked fixed afterwards is finished.
         const settled = await env.db.finding.findMany({
           where: { mark: "fixed", run: { appSlug: run.appSlug } },
-          select: { title: true, category: true, severity: true, detail: true, createdAt: true },
+          select: { title: true, category: true, severity: true, detail: true, anchor: true, createdAt: true },
         });
         const key = (f: (typeof rows)[number]) => dedupKeyForFinding(f, { appSlug: run.appSlug });
         const done = new Map(settled.map((f) => [key(f), f.createdAt]));
@@ -410,7 +424,8 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
       // Reverse sync (CHE-61): fixes claimed Done in the tracker ride the same
       // priority channel, so the walker chases them specifically.
       const reverifyBlock = reverifyInstructions(reconciled.reverify);
-      const userNotes = [run.userNotes, reverifyBlock, watchNotes].filter(Boolean).join("\n\n") || null;
+      const expectedExtensionResult = isExtension ? readExtensionOptions(run.extensionConfig).expectedOutcome : null;
+      const userNotes = [run.userNotes, expectedExtensionResult ? `Expected extension result: ${expectedExtensionResult}` : null, reverifyBlock, watchNotes].filter(Boolean).join("\n\n") || null;
 
       // CHE-90: CRUD lifecycle checking is per-app and opt-in. The marker goes
       // into every record the agent creates so cleanup can only touch our own.
@@ -451,10 +466,16 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
       });
 
       // Phase 2 — Surface scan (deterministic).
-      const scan = await step.do("surface_scan", async () => {
+      const scan = await step.do("surface_scan", extensionStepConfig(isExtension), async () => {
         await transition(env, runId, "surface_scan", { icon: "info", text: `Loading ${run.targetUrl}` });
-        const browser = await launchAgentBrowser(env);
+        const browser = await launchAgentBrowser(env, { run, phase: "scan" }).catch(rethrowBudgetNonRetryable);
         try {
+          const extension = extensionBrowserFor(browser);
+          if (extension) {
+            await env.db.run.update({ where: { id: runId }, data: { extensionEvidence: JSON.stringify({ identity: extension.identity }) } });
+            await appendEvent(env, runId, "surface_scan", { icon: "ok", text: `${extension.identity.name} is ready to explore` });
+            return { status: null, techSignals: [], internalLinkCount: 0, screenshotUrl: null, extensionIdentity: extension.identity };
+          }
           const r = await surfaceScan(env, browser, run.targetUrl);
           if (r.screenshotUrl) {
             await env.db.run.update({ where: { id: runId }, data: { liveScreenshotUrl: r.screenshotUrl } });
@@ -473,9 +494,9 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
             icon: "ok",
             text: `Found ${r.internalLinkCount} internal links`,
           });
-          return r;
+          return { ...r, extensionIdentity: null };
         } finally {
-          await browser.close();
+          await closeAgentBrowser(browser, { env, runId, phase: "scan" }).catch(rethrowBudgetNonRetryable);
         }
       });
 
@@ -496,7 +517,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
           });
         });
       }
-      const discovery = plan.taken ? null : await step.do("discovery", async () => {
+      const discovery = plan.taken ? null : await step.do("discovery", extensionStepConfig(isExtension), async () => {
         // CHE-133: a watched app was mapped on its last full check; hand that
         // map to discovery so it confirms rather than redraws. Same swallow
         // contract as the other cheap rungs — a failure to load memory costs
@@ -514,7 +535,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
           icon: "info",
           text: known ? `Confirming the map from Run #${known.runNumber}` : "Mapping your app",
         });
-        const browser = await launchAgentBrowser(env);
+        const browser = await launchAgentBrowser(env, { run, phase: "discovery", expected: scan.extensionIdentity ?? undefined }).catch(rethrowBudgetNonRetryable);
         try {
           const d = await discoverApp({
             env,
@@ -529,7 +550,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
               ...pagePaths(known?.anatomy.pages ?? []).map((p) => p.path),
             ],
             onLiveScreenshot: (url) => setLive(env, runId, { liveScreenshotUrl: url }),
-            onProgress: (note) => setLive(env, runId, { currentAction: note }),
+            onProgress: (note) => setLive(env, runId, { currentAction: isExtension ? "Exploring extension controls" : note }),
           }).catch(rethrowBudgetNonRetryable);
           // Extraction trouble first, then the outcome — so "No journeys
           // mapped" always arrives with the reason it happened next to it.
@@ -545,7 +566,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
           await recordUsage(env, runId, "discovery", llm.navModel, d.usage);
           return d;
         } finally {
-          await browser.close();
+          await closeAgentBrowser(browser, { env, runId, phase: "discovery" }).catch(rethrowBudgetNonRetryable);
         }
       });
 
@@ -592,8 +613,8 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
 
       let walkCost = 0;
       for (const { order, proposed } of walkList) {
-        const jcost = await step.do(`walk-${order}`, async () => {
-          const browser = await launchAgentBrowser(env);
+        const jcost = await step.do(`walk-${order}`, extensionStepConfig(isExtension), async () => {
+          const browser = await launchAgentBrowser(env, { run, phase: `walk-${order}`, expected: scan.extensionIdentity ?? undefined, scenario: proposed.extensionScenario }).catch(rethrowBudgetNonRetryable);
           try {
             const r = await walkOneJourney({
               env,
@@ -606,7 +627,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
               // CHE-171: the survey's pages; the walk learns the rest itself.
               publishedUrls: surveyedUrls(survey),
               onLiveScreenshot: (url) => setLive(env, runId, { liveScreenshotUrl: url }),
-              onProgress: (note) => setLive(env, runId, { currentAction: note }),
+              onProgress: (note) => setLive(env, runId, { currentAction: isExtension ? "Checking extension controls" : note }),
             }).catch(rethrowBudgetNonRetryable);
             const journey = await env.db.journey.findFirst({
               where: { runId, order },
@@ -632,13 +653,13 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
             if (r.transcript.length) {
               await putText(
                 env,
-                `transcripts/${runId}-walk-${order}.json`,
+                isExtension ? `private/runs/${runId}/walk-${order}.json` : `transcripts/${runId}-walk-${order}.json`,
                 JSON.stringify(r.transcript, null, 2),
               );
             }
             return r.costUsd;
           } finally {
-            await browser.close();
+            await closeAgentBrowser(browser, { env, runId, phase: `walk-${order}` }).catch(rethrowBudgetNonRetryable);
           }
         });
         walkCost += jcost;
@@ -678,12 +699,21 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
       });
 
       // Phase 6 — Writing (LLM synthesis + findings + verdict).
-      const verdict = await step.do("writing", async () => {
+      const verdict = await step.do("writing", extensionStepConfig(isExtension), async () => {
+        let extensionEvidence: string | null = null;
+        if (isExtension) {
+          const evidence = await env.db.run.findUnique({ where: { id: runId }, select: { extensionEvidence: true, credentialsRejected: true } });
+          extensionEvidence = evidence?.extensionEvidence ?? null;
+          const gap = evidence?.credentialsRejected ? "missing_access" : extensionCoverageGap(run, evidence?.extensionEvidence);
+          if (gap === "missing_access") return completeExtensionAccessCheck(env, runId, (discovery?.costUsd ?? 0) + walkCost);
+          if (gap) throw new NonRetryableError("internal: the extension's core result and cleanup were not established; no verdict may be published", "ExtensionRuntimeError");
+        }
         await transition(env, runId, "writing", { icon: "info", text: "Writing your verdict" });
-        const synth = await synthesizeVerdict({ env, llm, runId, anatomy, knowledge }).catch(
+        const structured = extensionEvidence ? await prepareExtensionPublication(env, runId, extensionEvidence) : null;
+        const synth = structured ?? await synthesizeVerdict({ env, llm, runId, anatomy, knowledge }).catch(
           rethrowBudgetNonRetryable,
         );
-        await recordUsage(env, runId, "synthesis", llm.synthModel, synth.usage);
+        if (!structured) await recordUsage(env, runId, "synthesis", llm.synthModel, synth.usage);
         // CHE-188: a finding whose only evidence is a skipped step is dropped
         // before it becomes a row (run #153 wrote one off a step our own fill
         // could not drive). Same journey/step order synthesis numbered its
@@ -732,11 +762,15 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
         const transcript: TranscriptEntry[] = discovery?.transcript ?? [];
         let transcriptUrl: string | null = null;
         if (transcript.length) {
-          transcriptUrl = await putText(
+          const rawTranscriptUrl = await putText(
             env,
-            `transcripts/${runId}.json`,
+            isExtension ? `private/runs/${runId}/discovery.json` : `transcripts/${runId}.json`,
             JSON.stringify(transcript, null, 2),
           );
+          if (!isExtension) transcriptUrl = rawTranscriptUrl;
+        }
+        if (structured) {
+          transcriptUrl = await putText(env, `transcripts/${runId}.json`, JSON.stringify(structured.audit, null, 2));
         }
 
         // Coverage before opinion: a partial run's pill covers journeys nobody
@@ -759,6 +793,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
         // said so — run #128 knew about seven pages, built four journeys, and
         // the difference was visible only in the database.
         const bottomLine = await (async () => {
+          if (structured) return carriedAware;
           const pages = (anatomy.pages ?? []).filter(Boolean);
           if (pages.length === 0) return carriedAware;
           const steps = await env.db.step.findMany({
@@ -776,7 +811,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
         await env.db.run.update({
           where: { id: runId },
           data: {
-            status: "completed",
+            status: structured?.partial ? "partial" : "completed",
             verdict: checked.verdict,
             bottomLine,
             appLens: JSON.stringify(synth.appLens),
@@ -905,7 +940,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
       // sign-in replay needs it. Only journeys walked THIS run are measured: a
       // carried journey has nothing new to reproduce. Every failure ends up in
       // replayStatus, never in the run.
-      for (const { order } of walkList) {
+      for (const { order } of isExtension ? [] : walkList) {
         await step.do(`replay-audit-${order}`, async () => {
           try {
             await auditJourneyReplay(env, walkRun, order);
@@ -944,6 +979,16 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
               : msg,
           },
         });
+        if (isExtension && !budget) {
+          try {
+            for (const note of await fileCapabilityGaps(env, runId, { extraGaps: [{
+              label: "Extension check did not complete",
+              attempted: "Check the installed extension through its native controls and owned target tab",
+              observed: msg.slice(0, 500),
+              gapClass: /cleanup|Stop|billing/i.test(msg) ? "extension_session_cleanup" : "extension_runtime",
+            }] })) console.warn(`[extension-gap] ${note.text}`);
+          } catch (error) { console.warn(`[extension-gap] filing failed: ${String(error)}`); }
+        }
         if (budget) {
           console.error(`[budget] run ${runId} aborted: LLM provider refused for credit state`);
           await appendEvent(env, runId, "connecting", {
@@ -1352,7 +1397,7 @@ async function persistFindings(env: AgentEnv, runId: string, findings: Synthesiz
         run: { appSlug: run.appSlug, id: { not: runId } },
       },
       orderBy: { createdAt: "asc" },
-      select: { title: true, category: true, severity: true, detail: true, mark: true },
+      select: { title: true, category: true, severity: true, detail: true, anchor: true, mark: true },
     });
     for (const m of marked) {
       inheritedMarks.set(dedupKeyForFinding(m, { appSlug: run.appSlug }), m.mark);
@@ -1376,11 +1421,12 @@ async function persistFindings(env: AgentEnv, runId: string, findings: Synthesiz
       detail: JSON.stringify(f.detail),
     };
     const anchor = JSON.stringify({
+      ...(f.errorSignature ? { errorSignature: f.errorSignature } : {}),
       stepRef: step ? f.stepRef : null,
       hands: claimedHands(f),
       trail: trailPresent ? "present" : "absent",
     });
-    const mark = run ? inheritedMarks.get(dedupKeyForFinding(shaped, { appSlug: run.appSlug })) : undefined;
+    const mark = run ? inheritedMarks.get(dedupKeyForFinding({ ...shaped, anchor }, { appSlug: run.appSlug })) : undefined;
     await env.db.finding.create({
       data: {
         runId,

@@ -40,12 +40,14 @@ export function RunLive({
   runNumber,
   startedAt,
   notifyEmail,
+  isExtension = false,
 }: {
   publicId: string;
   appSlug: string;
   runNumber: number;
   startedAt: string;
   notifyEmail: string | null;
+  isExtension?: boolean;
 }) {
   const router = useRouter();
   const [snap, setSnap] = useState<Snapshot | null>(null);
@@ -83,12 +85,12 @@ export function RunLive({
   if (snap?.status === "failed") {
     return (
       <div className="card mx-auto max-w-xl space-y-3 p-8 text-center">
-        <p className="text-2xl">🪦</p>
-        <p className="text-lg font-medium">Something broke on our side.</p>
+        <p className="text-2xl">{isExtension ? "◌" : "🪦"}</p>
+        <p className="text-lg font-medium">{isExtension ? "Check interrupted" : "Something broke on our side."}</p>
         <p className="text-sm text-fg-muted">
-          We&apos;re looking at it. You&apos;ll get an email with a retry link.
+          {isExtension ? "The check ended without a result." : "We're looking at it. You'll get an email with a retry link."}
         </p>
-        {snap.errorMessage && (
+        {!isExtension && snap.errorMessage && (
           <p className="mono rounded-lg bg-ink-900 p-3 text-left text-status-broken/80">
             {snap.errorMessage}
           </p>
@@ -123,16 +125,15 @@ export function RunLive({
       {/* Phase banner */}
       <div className="rounded-xl border border-accent/30 bg-accent/10 px-5 py-4">
         <p className="font-medium text-fg">
-          {PHASE_BLURB[phase] ?? "Starting up…"}
+          {isExtension && phase === "surface_scan" ? "Opening your extension…" : isExtension && phase === "discovery" ? "Mapping your extension's user journeys…" : PHASE_BLURB[phase] ?? "Starting up…"}
         </p>
         <p className="mt-0.5 font-mono text-xs text-fg-muted">
           Phase {phaseIndex + 1} of {PHASE_ORDER.length} — {PHASE_LABELS[phase] ?? "Connecting"}
         </p>
       </div>
 
-      {/* Two columns: feed + agent's eyes */}
-      <div className="grid gap-4 lg:grid-cols-[1.2fr_1fr]">
-        <div className="card flex min-h-[320px] flex-col p-4">
+      <div className={`grid gap-4 ${isExtension ? "" : "lg:grid-cols-[1.2fr_1fr]"}`}>
+        <div className={`card flex min-h-[320px] flex-col p-4 ${isExtension ? "min-w-0" : ""}`}>
           <p className="section-label mb-3">What we&apos;re doing</p>
           <ul className="flex-1 space-y-0.5 overflow-y-auto">
             {events.length === 0 && (
@@ -142,7 +143,7 @@ export function RunLive({
               const icon = ICON[ev.icon];
               const last = i === events.length - 1;
               return (
-                <li key={i} className={`log-line ${last ? "text-fg" : ""}`}>
+                <li key={i} className={`log-line ${last ? "text-fg" : ""} ${isExtension ? "[overflow-wrap:anywhere]" : ""}`}>
                   <span className="mr-2 text-fg-faint">
                     {new Date(ev.at).toLocaleTimeString("en-GB", {
                       hour: "2-digit",
@@ -155,9 +156,14 @@ export function RunLive({
               );
             })}
           </ul>
+          {isExtension && snap?.currentAction && (
+            <p className="mt-3 rounded-lg bg-ink-900 p-3 text-sm text-fg-muted">
+              {snap.currentAction}
+            </p>
+          )}
         </div>
 
-        <div className="card flex flex-col p-4">
+        {!isExtension && <div className="card flex flex-col p-4">
           <p className="section-label mb-3">What the agent sees</p>
           <div className="relative aspect-[4/3] overflow-hidden rounded-lg border border-ink-700 bg-ink-900">
             {snap?.liveScreenshotUrl ? (
@@ -189,11 +195,11 @@ export function RunLive({
               </p>
             </div>
           )}
-        </div>
+        </div>}
       </div>
 
       <p className="text-center font-mono text-[13px] text-fg-faint">
-        Close this tab — we&apos;ll email {notifyEmail ?? "you"} when done.
+        {notifyEmail ? <>Close this tab — we&apos;ll email {notifyEmail} when done.</> : "You can return to this page to see the result."}
       </p>
     </div>
   );

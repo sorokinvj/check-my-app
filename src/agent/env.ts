@@ -8,11 +8,13 @@
 
 import { getDb } from "@/lib/db";
 import { putObject } from "@/lib/storage";
+import type { ExtensionRunner } from "./extension-runner";
 
 export interface AgentBindings {
   DB: D1Database;
   EVIDENCE: R2Bucket;
   MYBROWSER: Fetcher;
+  EXTENSION_RUNNER?: DurableObjectNamespace<ExtensionRunner>;
   CHECK_RUN: Workflow;
   ANTHROPIC_API_KEY: string;
   ANTHROPIC_NAV_MODEL?: string;
@@ -137,10 +139,12 @@ export function harnessMode(bindings: Pick<AgentBindings, "HARNESS_TIER">): Harn
 export async function putScreenshot(
   env: AgentEnv,
   buffer: Uint8Array,
+  visibility: "public" | { privateRunId: string } = "public",
 ): Promise<{ storageUrl: string; sha256: string }> {
   const hash = await crypto.subtle.digest("SHA-256", buffer as BufferSource);
   const sha256 = [...new Uint8Array(hash)].map((b) => b.toString(16).padStart(2, "0")).join("");
-  const storageUrl = await putObject(env.bindings.EVIDENCE, `screenshots/${sha256}.png`, buffer);
+  const prefix = visibility === "public" ? "" : `private/runs/${visibility.privateRunId}/`;
+  const storageUrl = await putObject(env.bindings.EVIDENCE, `${prefix}screenshots/${sha256}.png`, buffer);
   return { storageUrl, sha256 };
 }
 

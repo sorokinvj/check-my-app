@@ -197,18 +197,20 @@ export async function runAgentLoop(args: AgentLoopArgs): Promise<AgentLoopResult
         }
       }
 
-      // Vision (CHE-70): a screenshot's JPEG rides along as an image block so
+      // Vision (CHE-70): the captured screenshot rides along as an image block so
       // the model judges what it actually photographed, not just the DOM.
-      const jpeg = env.pendingScreenshotJpegB64;
-      if (jpeg) env.pendingScreenshotJpegB64 = undefined;
+      const capture = env.pendingScreenshotPngB64 ?? env.pendingScreenshotJpegB64;
+      const mediaType = env.pendingScreenshotPngB64 ? "image/png" : "image/jpeg";
+      env.pendingScreenshotPngB64 = undefined;
+      env.pendingScreenshotJpegB64 = undefined;
       results.push({
         type: "tool_result",
         tool_use_id: tool.id,
-        content: jpeg
+        content: capture
           ? [
               {
                 type: "image",
-                source: { type: "base64", media_type: "image/jpeg", data: jpeg },
+                source: { type: "base64", media_type: mediaType, data: capture },
               },
               { type: "text", text: resultText },
             ]

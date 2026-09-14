@@ -197,6 +197,8 @@ function sourceChecks() {
       first !== null && /^if \(isSelfCheckRequest\((_?req)\.headers\)\) return selfCheckReadOnlyResponse\(\)$/.test(first),
       first ?? "function not found");
   }
+  const savedAction = readFileSync(path.join(repoRoot, 'src/app/dashboard/actions.ts'), 'utf8');
+  check('Saved-app Run refuses self-checks before auth and database work', firstStatement(savedAction, 'runSavedApp')?.startsWith('if (isSelfCheckRequest(await headers())) redirect(') === true);
   // Server actions. `headers()` from next/headers throws outside a request
   // scope, so these cannot be called here; the source is the evidence. Each
   // exported action's first statement is `await refuseSelfCheck(publicId)`,

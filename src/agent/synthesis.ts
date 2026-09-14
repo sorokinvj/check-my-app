@@ -108,6 +108,7 @@ export function synthesisSystem(knowledge?: AppKnowledge | null): string {
 }
 
 export interface SynthesizedFinding {
+  errorSignature?: string;
   title: string;
   category: "broken" | "risky" | "confusing" | "polish" | "exposed";
   severity: "high" | "medium" | "low";

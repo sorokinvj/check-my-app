@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getDbFromContext } from "@/lib/db";
+import { extensionReportPublished } from "@/lib/extension-target";
 
 // GET /api/runs/{publicId}/verdict — structured verdict for automation (the
 // MCP server, CI hooks). Same visibility as the verdict page: knowledge of the
@@ -18,6 +19,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     },
   });
   if (!run) return NextResponse.json({ error: "Run not found" }, { status: 404 });
+  if (!extensionReportPublished(run)) return NextResponse.json({ status: run.status, verdict: null, bottom_line: null, journeys: [], findings: [] });
 
   const totalTokens = run.llmUsage.reduce(
     (s, u) => s + u.inputTokens + u.cacheWriteTokens + u.cacheReadTokens + u.outputTokens,

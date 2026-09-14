@@ -1,0 +1,25 @@
+import assert from 'node:assert/strict';
+import { SessionObservation } from '../extension-runner/observation.mjs';
+const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+let text = 'Earlier result';
+const observation = new SessionObservation({ ownerRunId: 'run-123', targetId: 'tab-123', baseline: text,
+  intervalMs: 5, read: async () => ({ surface: 'extension-shadow-panel', text }) });
+observation.start();
+await delay(15);
+assert.ok(observation.snapshot().samples.length >= 1);
+assert.equal(observation.snapshot().samples.some(s => s.changedFromBaseline), false, 'An earlier answer is never fresh output');
+text = 'Project Cedar reduced query response time';
+await delay(20);
+const result = await observation.finish();
+assert.ok(result.samples.some(s => s.text === text && s.changedFromBaseline));
+assert.equal(result.ownerRunId, 'run-123');
+assert.equal(result.targetId, 'tab-123');
+const count = result.samples.length;
+await delay(15);
+assert.equal(observation.snapshot().samples.length, count, 'Sampling ends with the owned session');
+const hung = new SessionObservation({ ownerRunId: 'run-456', targetId: 'tab-456', read: () => new Promise(() => {}), intervalMs: 1, readTimeoutMs: 10 });
+hung.start();
+const failed = await hung.finish();
+assert.ok(failed.samples.some(s => s.error === 'Session observation timed out'));
+assert.equal(failed.samples.some(s => s.changedFromBaseline), false, 'A stalled observation cannot become product evidence');
+console.log('Extension observation: local sampling, fresh-versus-stale output, ownership and bounded cleanup pass');

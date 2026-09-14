@@ -2,6 +2,7 @@ import { notFound, redirect } from "next/navigation";
 import { getDbFromContext } from "@/lib/db";
 import { RunLive } from "@/components/run-live";
 import { isTerminal } from "@/lib/status";
+import { extensionDisplayName } from "@/lib/extension-target";
 
 export const dynamic = "force-dynamic";
 
@@ -13,6 +14,9 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
     select: {
       publicId: true,
       appSlug: true,
+      targetKind: true,
+      targetUrl: true,
+      extensionEvidence: true,
       status: true,
       runNumber: true,
       startedAt: true,
@@ -30,7 +34,8 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
     <main className="mx-auto max-w-5xl px-4 py-10">
       <RunLive
         publicId={run.publicId}
-        appSlug={run.appSlug}
+        appSlug={run.targetKind === "extension" ? extensionDisplayName(run.targetUrl, run.extensionEvidence) : run.appSlug}
+        isExtension={run.targetKind === "extension"}
         runNumber={run.runNumber}
         startedAt={run.startedAt.toISOString()}
         notifyEmail={run.notifyEmail}
