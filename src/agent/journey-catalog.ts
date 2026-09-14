@@ -176,6 +176,62 @@ export async function recordJourneyCost(
   });
 }
 
+/**
+ * CHE-232 — the app's journeys as a map to confirm (known-map.ts). Best
+ * established first: a journey walked twenty times is the one discovery should
+ * keep calling by its own name, and the prompt only shows the first few.
+ * Null when the app has no usable journeys yet, so the caller falls back to
+ * reading the last walked run instead of handing the model an empty map.
+ *
+ * A journey whose last walk verified nothing (status "skipped") is left out for
+ * the same reason the run-row version leaves it out: its plan is not a map of
+ * anything we know works.
+ */
+export async function journeysForMap(
+  env: AgentEnv,
+  appId: string,
+  maxSteps: number,
+): Promise<Array<{ title: string; steps: string[] }> | null> {
+  const rows = await env.db.appJourney.findMany({
+    where: { appId, retiredAt: null },
+    orderBy: [{ walkCount: "desc" }, { lastWalkedAt: "desc" }],
+    select: { title: true, status: true, plan: true },
+  });
+  const journeys = rows
+    .filter((j) => j.status !== "skipped")
+    .map((j) => {
+      const plan = (parseJson<string[]>(j.plan) ?? []).filter((s) => typeof s === "string" && s.trim());
+      // A title is a worse plan than real steps and a much better one than none.
+      return { title: j.title, steps: plan.length ? plan.slice(0, maxSteps) : [j.title] };
+    });
+  return journeys.length ? journeys : null;
+}
+
+/**
+ * CHE-232 — the app's journeys and how each one last ended, for the prompts'
+ * knowledge block. Only journeys that were really walked: "how it ended" has no
+ * answer for a journey nothing has ever walked.
+ */
+export async function journeysForKnowledge(
+  env: AgentEnv,
+  appId: string,
+  take: number,
+): Promise<Array<{ title: string; status: string; walkedAt: string }>> {
+  const rows = await env.db.appJourney.findMany({
+    where: { appId, retiredAt: null, lastWalkedAt: { not: null } },
+    orderBy: [{ walkCount: "desc" }, { lastWalkedAt: "desc" }],
+    take,
+    select: { title: true, status: true, lastWalkedAt: true },
+  });
+  return rows
+    .filter((j) => j.lastWalkedAt)
+    .map((j) => ({
+      title: j.title,
+      status: j.status ?? "unknown",
+      walkedAt: new Date(j.lastWalkedAt as Date).toISOString(),
+    }));
+}
+
 /** The app's live journeys, oldest first — the shape planning reads (CHE-232). */
 export async function listJourneys(env: AgentEnv, appId: string) {
   return env.db.appJourney.findMany({
