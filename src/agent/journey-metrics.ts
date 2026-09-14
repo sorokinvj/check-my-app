@@ -34,6 +34,24 @@ export const METRIC_BOUNDS = { maxPrice: 200, maxConversion: 100 } as const;
 /** A note shorter than this says nothing; the value it defends is not accepted. */
 export const MIN_NOTE_CHARS = 12;
 
+/**
+ * The cheapest a journey can be. A journey is something a person DOES, so it
+ * costs at least the one action that starts it; a price of zero is not a cheap
+ * journey, it is a model that did not answer.
+ *
+ * This is not a guess about phrasing. Run #192 (checkmyapp.dev, 2026-09-14,
+ * the first production run after the metric shipped) priced all four of its
+ * journeys at 0 actions and 0% conversion, each with a note explaining that the
+ * number was "not tracked — no event labels in UI": the discovery model read
+ * "price" and "conversion" as analytics it was being asked to look up, and
+ * having found no funnel events, reported their absence as the measurement.
+ * Stored, that reads as "every journey in this app is free and nobody
+ * completes it" — a sentence about the customer's product that our own model
+ * never meant to say, which is rule 8: a claim contaminated by our incapacity
+ * is not a finding, it is a ticket on our board.
+ */
+export const MIN_PRICE = 1;
+
 // ─── The guide ───────────────────────────────────────────────────────────────
 // Rendered into the discovery prompt verbatim and published as the skill.
 
@@ -48,6 +66,14 @@ not the product's, not the implementation's, and never ours.
 Both are opinions. That is the point: "signing up costs your user eleven
 actions" is a judgement about someone's product that only an outside observer
 makes, and it is worth more than another green check mark.
+
+**Neither is analytics.** You are not looking these up, and there is nothing to
+look them up in: no funnel events, no dashboard, no labels in the UI. You count
+what you watched a person have to do, and you judge how many would finish. So
+"not tracked" is never an answer here, and neither is 0 actions — a journey is
+something a person does, so it costs at least one. If you genuinely cannot tell,
+say so in the note and give your best judgement anyway; a number with a doubt
+beside it is useful, a zero is a false statement about someone's product.
 
 ## Counting the price
 
@@ -162,6 +188,11 @@ export interface MetricDecision {
   reason: string;
   /** True when the previous value was kept instead of the proposed one. */
   kept: boolean;
+  /**
+   * True when the model returned a number no journey can have, so this run
+   * priced nothing. Our defect, not the app's — the caller files it (rule 2).
+   */
+  unpriced?: boolean;
 }
 
 /**
@@ -186,6 +217,21 @@ export function decideMetric(raw: RawMetric | null | undefined, previous: Journe
       value: previous,
       reason: previous ? "no numbers this run — the stored ones stand" : "no numbers this run",
       kept: Boolean(previous),
+    };
+  }
+
+  // An impossible price is a non-answer wearing a number. Refused the same way
+  // a missing one is: the stored value stands, and nothing is written when
+  // there is none — a journey with no price says "we have not priced this yet",
+  // which is true, where a stored 0 says something false about their product.
+  if (price < MIN_PRICE) {
+    return {
+      value: previous,
+      reason: previous
+        ? `refused ${price} actions — a journey costs at least ${MIN_PRICE}; the stored ${previous.price} stands`
+        : `refused ${price} actions — a journey costs at least ${MIN_PRICE}`,
+      kept: Boolean(previous),
+      unpriced: true,
     };
   }
 
