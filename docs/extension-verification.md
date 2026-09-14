@@ -124,6 +124,37 @@ the real JobLander production extension, but it is not production CheckMyApp
 end-to-end. A verdict produced here is evidence about the executor, not proof
 of the shipped product.
 
+### Executor smoke test — 2026-09-14 15:30 UTC, passed
+
+`allowSessions: false` boots the whole executor while
+`extensionToolAllowed()` refuses every paid tool, so the container half can
+be proven alive for the price of a few container-seconds and no session at
+all. Worth running first whenever the stand has been rebuilt: a failure here
+is infrastructure, and reading it as a product defect is exactly the
+confusion rule 8 exists to prevent.
+
+```
+curl -X POST http://127.0.0.1:19092/attempt/<owner-id>/session \
+  -H "X-CMA-Spike: 1" -H "Content-Type: application/json" \
+  -d '{"scenario":"interview","ownerRunId":"<owner-id>","extensionId":"hafhjepjihcimcljkdphpinannbdmnhf",
+       "targetUrl":"fixture:interview","maxDurationSeconds":300,"allowSessions":false,"maxSessionSeconds":60}'
+curl -X DELETE http://127.0.0.1:19092/attempt/<owner-id>/session -H "X-CMA-Spike: 1"
+```
+
+What it returned, through the restored broker: the Store build installed
+(JobLander 3.26.1, manifest v3, artifact SHA-256
+`5e52e2eb824a6e3fa223ad3f2a6c288b4e73da66d913e7690badcc75d38a97b3` — the
+same artifact recorded earlier in this document), `identityKeyRestored:
+true`, Chrome 145.0.7632.6, the service worker and target tab up, and both
+audio fixtures loaded. Disposal answered `disposed: true`,
+`closeReason: "requested"`, `applicationCleanup: "not-started"` and no
+sessions — 11 seconds of container time, nothing paid.
+
+So the executor, the container image, the Store install path and the
+identity restoration all still work. What remains unproven is the
+Stop-confirmation reliability under the combined scenario, which needs a
+paid run, and the seed the dashboard builds for it.
+
 ## Previous checkpoint — 2026-09-14 10:47 UTC
 
 PR #81 remains on `feat/chrome-extension-targets`; pushed head `c904293` has
