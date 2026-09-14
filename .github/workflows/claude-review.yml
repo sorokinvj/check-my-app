@@ -14,16 +14,24 @@
 
 name: Claude review
 
+# Disabled (owner instruction, 2026-09-14): manual trigger only. The
+# automatic pull_request trigger below fired on every PR in the repo, not
+# only doer/Codex ones — including a session-authored PR (#82) reviewing
+# itself, which is not the CHE-116 case this workflow exists for. Re-enable
+# by restoring the `pull_request:` block below if the doer/Codex cross-review
+# needs to run again automatically; the design rationale in the comments
+# below still applies to that case.
 on:
-  pull_request:
-    types: [opened, synchronize, ready_for_review, reopened]
-    # The dispatcher opens every doer PR carrying one file — .doer/TICKET.md —
-    # and only then asks the implementer. Reviewing that is reviewing a ticket,
-    # and worse: a clean review of an empty diff is what the merge gate reads as
-    # "nobody objects". A PR that touches nothing else never reaches a reviewer;
-    # the state machine refuses it on the same rule (scripts/doer/machine.mjs).
-    paths-ignore:
-      - ".doer/**"
+  workflow_dispatch: {}
+  # pull_request:
+  #   types: [opened, synchronize, ready_for_review, reopened]
+  #   # The dispatcher opens every doer PR carrying one file — .doer/TICKET.md —
+  #   # and only then asks the implementer. Reviewing that is reviewing a ticket,
+  #   # and worse: a clean review of an empty diff is what the merge gate reads as
+  #   # "nobody objects". A PR that touches nothing else never reaches a reviewer;
+  #   # the state machine refuses it on the same rule (scripts/doer/machine.mjs).
+  #   paths-ignore:
+  #     - ".doer/**"
 
 # One review per head. A second push supersedes the first, and a verdict about
 # an older push is not a verdict — the doer's merge gate enforces the same rule.
