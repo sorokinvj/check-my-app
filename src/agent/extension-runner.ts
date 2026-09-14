@@ -30,11 +30,10 @@ export class ExtensionRunner extends Container<AgentBindings> {
     });
     await this.schedule(new Date(lease.expiresAt + 120_000), "expire");
     try {
-      // Started first, and only then waited on. A container that dies before
-      // its port is ready reports through the library as a stopped state with
-      // no code — the runtime's own monitor is the one place the real ending
-      // exists, and it can only be watched once the instance is up (CHE-233).
-      await this.start({ envVars: { RUNNER_CONTROL_TOKEN: token } }, { retries: 60, waitInterval: 1_000, portToCheck: 9090 });
+      // One call starts the instance and waits for its port. Splitting it in
+      // two to get an earlier look at the runtime's monitor cost a run: the
+      // extra start is a second lifecycle on the same attempt, and the shape
+      // that has actually been proven against the executor is this one.
       await this.startAndWaitForPorts({
         ports: 9090,
         startOptions: { envVars: { RUNNER_CONTROL_TOKEN: token } },
@@ -49,13 +48,12 @@ export class ExtensionRunner extends Container<AgentBindings> {
       await this.ctx.storage.put("identity", session);
       return session;
     } catch (error) {
-      // Read after the attempt is torn down: the runtime's ending often lands
-      // during cleanup, and a failure that reports nothing is the thing this
-      // whole path exists to stop producing.
+      // Read after the attempt is torn down: the stop event lands during
+      // cleanup, and a failure that reports nothing is the thing this whole
+      // path exists to stop producing.
       await this.expire().catch(() => {});
       const exit = await this.ctx.storage.get<ExecutorExit>("lastExit");
-      const runtime = await this.ctx.storage.get<string>("lastExitMessage");
-      throw new Error(describeExecutorExit(error, exit, runtime));
+      throw new Error(describeExecutorExit(error, exit));
     }
   }
 
@@ -63,23 +61,9 @@ export class ExtensionRunner extends Container<AgentBindings> {
   // message never carries. Without the exit code every such failure reads the
   // same, and reading it as anything about the extension is exactly the
   // confusion rule 8 exists to prevent (CHE-233: five identical runs, no cause).
-  // The runtime settles this promise when the instance ends, with the ending
-  // the platform actually saw. The library's own stop event can only report a
-  // synthesized 0 when it never learned a code, which is what made six runs
-  // indistinguishable from one another.
-  override onStart(): void {
-    const monitor = this.ctx.container?.monitor();
-    if (!monitor) return;
-    this.ctx.waitUntil(monitor.then(
-      () => { console.log("[extension-runner] executor ended with no error from the runtime"); },
-      (error: unknown) => {
-        const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-        console.error(`[extension-runner] executor ended: ${message}`);
-        return this.ctx.storage.put("lastExitMessage", message.slice(0, 300)).then(() => {}, () => {});
-      },
-    ));
-  }
-
+  // This is the whole of what is needed: in production it reported the real
+  // code 1 of a container dying at boot. A second watcher on the runtime's own
+  // monitor added nothing that this did not already say.
   override async onStop(params: StopParams): Promise<void> {
     const exit: ExecutorExit = { exitCode: params.exitCode, reason: params.reason, at: Date.now() };
     console.log(`[extension-runner] executor stopped: exitCode=${exit.exitCode} reason=${exit.reason}`);

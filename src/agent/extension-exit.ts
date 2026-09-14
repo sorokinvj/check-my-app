@@ -17,12 +17,8 @@ const SIGNALS: Record<number, string> = {
   143: "terminated (SIGTERM)",
 };
 
-// `runtime` is what the platform's own monitor said. It outranks the stop
-// event, which reports a synthesized code 0 whenever the library never learned
-// a real one — a clean stop and a death mid-boot read identically there.
-export function describeExecutorExit(error: unknown, exit?: ExecutorExit | null, runtime?: string | null): string {
+export function describeExecutorExit(error: unknown, exit?: ExecutorExit | null): string {
   const base = error instanceof Error ? error.message : String(error);
-  if (runtime?.trim()) return `${base} — the executor ended: ${runtime.trim()}`;
   if (!exit || !Number.isFinite(exit.exitCode)) return base;
   const detail = SIGNALS[exit.exitCode] ?? (exit.exitCode === 0 ? "stopped cleanly" : `exited with code ${exit.exitCode}`);
   return `${base} — the executor ${detail} (${exit.reason})`;
