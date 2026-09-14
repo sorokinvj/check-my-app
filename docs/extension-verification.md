@@ -272,10 +272,42 @@ is only our patience. The page either shows the balance or shows a
 credential rejection; waiting longer for one of those cannot hide a defect,
 while timing out before either appears invents one.
 
-**Not deployed.** This is container code, so it needs an image rebuild, and
-this machine cannot build (see the Docker note in "Running the stand"). The
-deployed executor still carries the 20s budget, so a combined run attempted
-before that rebuild will fail here again.
+**Deployed 2026-09-14 ~18:40 UTC.** The Docker failure turned out to be the
+memory pressure, not the registry: with Docker stopped the manifest answers
+in 0.3s from the host, and after freeing memory the pull, build and push all
+succeeded. Image `d9187aa5` is live on `standard-4` with both the 60s
+sign-in budget and the Stop timing breakdown in it.
+
+### First paid Stop after the fixes — confirmed, but only one meter
+
+Combined attempt on the rebuilt image, 2026-09-14 ~18:50 UTC. The account
+preflight that had timed out twice **passed**, and the extension's paid
+session started (`captureStarted: true`, 130s limit). The driver then lost
+its connection to the probe on `/practice/preflight` (`ECONNRESET`), so the
+second meter never started and its own `finally` could not dispose either.
+
+Asking the executor directly afterwards is what the run is worth:
+
+```json
+{"disposed": true, "closeReason": "requested",
+ "applicationCleanup": "ui-stop-observed", "billingCleanup": "confirmed",
+ "sessions": [{"id": "extension-capture", "state": "stopped",
+               "stopObserved": true, "error": null}]}
+```
+
+So a paid session started and **stopped with its UI confirmation observed
+and billing cessation confirmed** — the exact outcome Run 7 could not reach,
+and proof that a paid cycle survives end to end on the new image.
+
+What it is **not**: the combined case. Only one meter ran, and extension-only
+Stop never failed before either. The starved-renderer explanation still
+needs a run with a live practice call beside the capture to be more than a
+well-evidenced inference.
+
+Open, new: why `/practice/preflight` reset the connection while a paid
+session was running. `preparePractice` polls for the call controls and can
+take tens of seconds, so an edge timeout on a long Durable Object call is
+the first suspect — unmeasured, and not to be fixed by guessing.
 
 ## Previous checkpoint — 2026-09-14 10:47 UTC
 
