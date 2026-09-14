@@ -46,9 +46,10 @@ Browser ──POST /api/checks──▶ checkmyapp-web (Next.js via OpenNext)
              6 phases: connecting → surface_scan → discovery
                        → walking (per journey) → anatomy → writing
                                   │            │             │
-                          Browser Rendering   R2 (evidence) Anthropic
-                          (@cloudflare/       screenshots/  Sonnet nav ·
-                           playwright)        transcripts   Opus synthesis
+                          Browser Rendering   R2 (evidence) Anthropic /
+                          (@cloudflare/       screenshots/  OpenRouter, see
+                           playwright)        transcripts   model-tier.
+                                                             recommended.json
                                   │
                                  D1 (Prisma, workerd client, adapter-d1)
 ```
@@ -109,8 +110,11 @@ back to POST `localhost:8787/trigger` (override: `AGENT_DEV_URL`). Known traps:
 
 See `.env.example` (Cloudflare runtime gets these as worker secrets/vars, not
 .env — see DEPLOY.md). Key vars: `ANTHROPIC_API_KEY`,
-`ANTHROPIC_NAV_MODEL`/`ANTHROPIC_SYNTH_MODEL` (Sonnet nav · Opus synthesis),
-`CREDENTIALS_SECRET` (AES-256-GCM for test creds at rest), Clerk keys,
+`ANTHROPIC_NAV_MODEL`/`ANTHROPIC_SYNTH_MODEL`/`ANTHROPIC_JUDGE_MODEL` — the
+recommended tier is `src/agent/model-tier.recommended.json`, checked against
+`.env.example` by `scripts/verify-model-config.mjs`; see COSTS.md
+"Recommended tier config" for how it's decided — `CREDENTIALS_SECRET`
+(AES-256-GCM for test creds at rest), Clerk keys,
 `LINEAR_CLIENT_ID/SECRET` (per-owner tickets), `EMAIL_API_KEY`/`EMAIL_FROM`
 (Resend; unset = log-only), Turnstile keys (bot protection, enforced when set).
 

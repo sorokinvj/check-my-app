@@ -10,6 +10,7 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import type { AgentBindings } from "./env";
+import RECOMMENDED_TIER from "./model-tier.recommended.json";
 
 export interface LlmConfig {
   navClient: Anthropic;
@@ -89,9 +90,26 @@ export function ignoresJsonSchema(model: string): boolean {
   return /glm-5v|glm-4\.[56]v/.test(model);
 }
 
+// An unset ANTHROPIC_NAV_MODEL/ANTHROPIC_SYNTH_MODEL used to silently fall
+// back to a literal frozen in this file — the extensions branch (PR #81)
+// validated an entire feature against Sonnet/Opus while production had moved
+// to DeepSeek weeks earlier, and nothing printed a line about it. The
+// fallback now reads model-tier.recommended.json (kept in sync with
+// COSTS.md's "Recommended tier config" — see scripts/verify-model-config.mjs)
+// and always logs when it fires, so a stale local .dev.vars is loud instead
+// of silently wrong.
+function warnFallback(envVar: string, value: string): string {
+  console.warn(
+    `[llm] ${envVar} not set — falling back to recommended tier default "${value}". ` +
+      `This may not match production; see COSTS.md "Recommended tier config".`,
+  );
+  return value;
+}
+
 export function makeLlm(env: AgentBindings): LlmConfig {
-  const navModel = env.ANTHROPIC_NAV_MODEL ?? "claude-sonnet-4-6";
-  const synthModel = env.ANTHROPIC_SYNTH_MODEL ?? "claude-opus-4-8";
+  const navModel = env.ANTHROPIC_NAV_MODEL ?? warnFallback("ANTHROPIC_NAV_MODEL", RECOMMENDED_TIER.navModel);
+  const synthModel =
+    env.ANTHROPIC_SYNTH_MODEL ?? warnFallback("ANTHROPIC_SYNTH_MODEL", RECOMMENDED_TIER.synthModel);
   const structModel = structModelFor(navModel, env.ANTHROPIC_STRUCT_MODEL);
   const navClient = clientFor(navModel, env);
   // CHE-169: the judge defaults to the nav model on the nav client, so with

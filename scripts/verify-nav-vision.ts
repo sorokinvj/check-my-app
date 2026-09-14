@@ -15,6 +15,7 @@
 
 import { isVisionModel, makeLlm, navVisionFor, structModelFor } from "@/agent/llm";
 import type { AgentBindings } from "@/agent/env";
+import RECOMMENDED_TIER from "@/agent/model-tier.recommended.json";
 
 let failures = 0;
 function check(name: string, ok: boolean, detail = "") {
@@ -78,8 +79,17 @@ const llm = (extra: Partial<AgentBindings>) => makeLlm({ ...base, ...extra });
   check("struct override reaches LlmConfig", c.structModel === "deepseek/deepseek-v4-flash");
 }
 {
+  // CHE-183 regression (this fix): an unset ANTHROPIC_NAV_MODEL used to fall
+  // back to a hardcoded "claude-sonnet-4-6" here — this default must track
+  // model-tier.recommended.json instead, or a stale default is exactly the
+  // bug scripts/verify-model-config.mjs exists to catch.
   const c = llm({});
-  check("defaults: claude nav is vision, struct on itself", c.navVision && c.structModel === c.navModel);
+  check(
+    "defaults: unset nav model matches the recommended tier, vision + struct routed accordingly",
+    c.navModel === RECOMMENDED_TIER.navModel &&
+      c.navVision === isVisionModel(RECOMMENDED_TIER.navModel) &&
+      c.structModel === structModelFor(RECOMMENDED_TIER.navModel, undefined),
+  );
 }
 
 console.log(failures ? `\n${failures} check(s) FAILED` : "\nall checks passed");

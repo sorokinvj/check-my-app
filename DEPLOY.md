@@ -21,6 +21,19 @@ npx wrangler secret put CREDENTIALS_SECRET  --config wrangler-agent.jsonc
 # Turnstile (CHE-18) — set on the WEB worker
 npx wrangler secret put TURNSTILE_SECRET
 # NEXT_PUBLIC_TURNSTILE_SITE_KEY is a build-time public var (vars, not secret).
+
+# Model tiering (CHE-16, CHE-168/169) — also secrets, deliberately: a spike
+# flips these without a redeploy. Unset falls back to
+# src/agent/model-tier.recommended.json, which is what should actually be
+# live here — keep the two in sync (scripts/verify-model-config.mjs checks
+# .env.example against that file, but cannot see these prod secrets).
+npx wrangler secret put ANTHROPIC_NAV_MODEL    --config wrangler-agent.jsonc
+npx wrangler secret put ANTHROPIC_SYNTH_MODEL  --config wrangler-agent.jsonc
+npx wrangler secret put ANTHROPIC_JUDGE_MODEL  --config wrangler-agent.jsonc
+npx wrangler secret put ANTHROPIC_NAV_VISION   --config wrangler-agent.jsonc
+npx wrangler secret put HARNESS_TIER           --config wrangler-agent.jsonc
+# Required whenever a model id above contains "/" (OpenRouter routing).
+npx wrangler secret put OPENROUTER_API_KEY     --config wrangler-agent.jsonc
 ```
 
 ## Deploy (also automated in CI — `.github/workflows/ci.yml`)
