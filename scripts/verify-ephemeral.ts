@@ -8,8 +8,9 @@
 //   2. the TTL: only a positive integer in EPHEMERAL_RUN_TTL_DAYS counts,
 //      anything else is the 7-day default;
 //   3. startCheck for an owner with `ephemeral` creates a run that is marked,
-//      dated, owned — and touches no App table at all (the stub has none and
-//      throws if asked);
+//      dated, owned — and touches the App table not once, read included (the
+//      stub logs every call; CHE-234 attaches an owner's ordinary run to their
+//      App, and a preview must stay outside that);
 //   4. Enable Daily Watch on an ephemeral run is refused before any write —
 //      the App upsert it would otherwise do never happens;
 //   5. a re-check of an ephemeral run is ephemeral, with a fresh expiry;
@@ -154,6 +155,7 @@ interface World {
   pendingCheck: Row[];
   watch: Row[];
   user: Row[];
+  app: Row[];
 }
 
 function world(): World {
@@ -170,6 +172,7 @@ function world(): World {
     pendingCheck: [],
     watch: [],
     user: [],
+    app: [],
   };
 }
 
@@ -190,10 +193,18 @@ function stubDb(w: World) {
     watch: table(w.watch, "watch", log),
     user: table(w.user, "user", log),
     counter: { upsert: async () => ({ name: "runNumber", value: ++counter }) },
-    // No App table at all: any path that reaches for one throws, and the
-    // failure names it.
-    get app(): never {
-      throw new Error("db.app was touched — an ephemeral run must never reach the App table");
+    // CHE-234 gave startCheck a reason to read the App table — an owner's
+    // one-off check of an app they own attaches to it. So the App table exists
+    // here now, and every touch of it is logged (reads included, which `table`
+    // does not log): "an ephemeral run never reaches App" is then a fact about
+    // the log, checked below, rather than a stub that throws.
+    app: {
+      ...table(w.app, "app", log),
+      findUnique: async ({ where }: { where: Where }) => {
+        log.push("app.findUnique");
+        const composite = where.ownerId_appSlug as Where | undefined;
+        return w.app.find((r) => matches(r, composite ?? where)) ?? null;
+      },
     },
   };
   return { db: db as unknown as PrismaClient, log };
@@ -267,7 +278,7 @@ async function main() {
     check("start: one run, handed to the agent", w.run.length === 1 && triggered[0] === run.id, `${w.run.length}/${triggered.join()}`);
     check("start: the run is ephemeral, dated, owned by the caller and has no app",
       row.ephemeral === true && (row.expiresAt as Date).getTime() === expiresAt.getTime() &&
-        row.ownerId === OWNER.id && row.appId === undefined && row.anonKeyHash === null,
+        row.ownerId === OWNER.id && row.appId === null && row.anonKeyHash === null,
       JSON.stringify({ ephemeral: row.ephemeral, expiresAt: row.expiresAt, ownerId: row.ownerId, appId: row.appId }));
     check("start: the slug is the preview hostname", row.appSlug === "pr-123.preview.example.com", String(row.appSlug));
     check("start: no App table was touched", log.every((l) => !l.startsWith("app.")), log.join(", "));
