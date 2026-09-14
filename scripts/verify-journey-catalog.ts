@@ -20,6 +20,8 @@
 import type { AgentEnv } from "@/agent/env";
 import { parseJson } from "@/lib/json";
 import {
+  journeysForKnowledge,
+  journeysForMap,
   recordCarry,
   recordJourneyCost,
   recordWalk,
@@ -44,8 +46,28 @@ function stubDb() {
   const appJourney: Row[] = [];
   const journey: Row[] = [];
   let ids = 0;
+  // Enough of Prisma's `where` for these reads: equality, and the one operator
+  // the catalog queries use ({ not: null } for "was actually walked").
   const matches = (row: Row, where: Row = {}) =>
-    Object.entries(where).every(([k, v]) => row[k] === v);
+    Object.entries(where).every(([k, v]) => {
+      if (v && typeof v === "object" && "not" in (v as Row)) return row[k] !== (v as Row).not;
+      return row[k] === v;
+    });
+  const order = (rows: Row[], by: unknown): Row[] => {
+    const clauses = (Array.isArray(by) ? by : by ? [by] : []) as Array<Record<string, "asc" | "desc">>;
+    if (!clauses.length) return rows;
+    return [...rows].sort((a, b) => {
+      for (const clause of clauses) {
+        const [field, dir] = Object.entries(clause)[0];
+        const av = a[field] ?? 0;
+        const bv = b[field] ?? 0;
+        if (av === bv) continue;
+        const cmp = av < bv ? -1 : 1;
+        return dir === "desc" ? -cmp : cmp;
+      }
+      return 0;
+    });
+  };
   const apply = (row: Row, data: Row) => {
     for (const [k, v] of Object.entries(data)) {
       if (v && typeof v === "object" && "increment" in (v as Row)) {
@@ -56,7 +78,10 @@ function stubDb() {
     }
   };
   const table = (rows: Row[], defaults: Row = {}) => ({
-    findMany: async ({ where }: { where?: Row } = {}) => rows.filter((r) => matches(r, where)),
+    findMany: async ({ where, orderBy, take }: { where?: Row; orderBy?: unknown; take?: number } = {}) => {
+      const found = order(rows.filter((r) => matches(r, where)), orderBy);
+      return typeof take === "number" ? found.slice(0, take) : found;
+    },
     findFirst: async ({ where }: { where?: Row } = {}) => rows.find((r) => matches(r, where)) ?? null,
     findUnique: async ({ where }: { where: Row }) => rows.find((r) => matches(r, where)) ?? null,
     create: async ({ data }: { data: Row }) => {
@@ -162,6 +187,39 @@ async function main() {
   await recordJourneyCost(env, { journeyId: check2.id, appJourneyId: j.appJourneyId, costUsd: 0.2 });
   check("each check carries what it cost", journey[0].costUsd === 0.1234 && journey[1].costUsd === 0.2);
   check("the journey carries what it has cost us so far", Math.abs((appJourney[0].costUsd as number) - 0.3234) < 1e-9, String(appJourney[0].costUsd));
+}
+
+// 7 — the read paths planning uses (CHE-232).
+{
+  const { env } = stubDb();
+  const core = await resolveJourney(env, APP, "Sign up for a new account");
+  const rare = await resolveJourney(env, APP, "Explore the roles directory");
+  const blind = await resolveJourney(env, APP, "Install the Chrome extension");
+  // Walked twenty times; the plan is what the last walk actually did.
+  for (let n = 1; n <= 20; n += 1) {
+    await recordWalk(env, { appJourneyId: core.appJourneyId, runId: `r${n}`, runNumber: n, title: "Sign up for a new account", status: "ok", plan: ["open /signup", "fill the form", "submit"], at: day(n % 28 || 1) });
+  }
+  await recordWalk(env, { appJourneyId: rare.appJourneyId, runId: "r21", runNumber: 21, title: "Explore the roles directory", status: "confusing", plan: [], at: day(2) });
+  await recordWalk(env, { appJourneyId: blind.appJourneyId, runId: "r22", runNumber: 22, title: "Install the Chrome extension", status: "skipped", plan: [], at: day(3) });
+
+  const map = await journeysForMap(env, "app_1", 12);
+  check("the map is the app's journeys, best-established first", map?.[0].title === "Sign up for a new account", JSON.stringify(map?.map((j) => j.title)));
+  check("…with the plan the last walk actually took", map?.[0].steps.join(" | ") === "open /signup | fill the form | submit", JSON.stringify(map?.[0].steps));
+  check("…a journey with no plan is offered by its title, not as an empty one", map?.[1].steps.length === 1 && map?.[1].steps[0] === "Explore the roles directory", JSON.stringify(map?.[1]));
+  check("…and a journey whose last walk verified nothing is left out", !map?.some((j) => j.title.includes("Chrome extension")), JSON.stringify(map?.map((j) => j.title)));
+
+  const known = await journeysForKnowledge(env, "app_1", 5);
+  check("knowledge names the journeys and how each one last ended", known[0].status === "ok" && known[1].status === "confusing", JSON.stringify(known));
+  check("…dated by the last real walk", /^\d{4}-\d{2}-\d{2}T/.test(known[0].walkedAt), known[0].walkedAt);
+
+  const { env: empty } = stubDb();
+  check("an app with no journeys yet hands back no map at all, not an empty one", (await journeysForMap(empty, "app_1", 12)) === null);
+  check("…and no knowledge", (await journeysForKnowledge(empty, "app_1", 5)).length === 0);
+
+  // A journey that has never been walked is a proposal, not history.
+  const { env: fresh } = stubDb();
+  await resolveJourney(fresh, APP, "Sign up for a new account");
+  check("a journey nothing has walked yet is not offered as knowledge", (await journeysForKnowledge(fresh, "app_1", 5)).length === 0);
 }
 
 // Aliases: bounded, deduped on the normalised form, newest last.

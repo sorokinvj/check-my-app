@@ -276,8 +276,11 @@ rather than mapping the app again: open the homepage and the pages the journeys
 start from, read them, and glance at anything new in the navigation. Then output
 the journeys: keep the known ones whose surfaces still exist (adapt their steps
 to what you see now), replace any whose surface is gone, and add at most 2 for
-genuinely new surfaces. Budget 8-15 tool calls, then STOP and emit the JSON
-below. Always finish with the JSON, never with a plan to "explore more".`);
+genuinely new surfaces. When you keep a journey, REUSE ITS TITLE WORD FOR WORD —
+these titles are how this app's journeys are tracked between checks, and a
+rewording reads as a different journey. Budget 8-15 tool calls, then STOP and
+emit the JSON below. Always finish with the JSON, never with a plan to
+"explore more".`);
 
   return lines.join("\n\n");
 }

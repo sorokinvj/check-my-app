@@ -21,6 +21,7 @@ import { parseJson } from "@/lib/json";
 import type { KnownMap, ProposedJourney } from "./discovery";
 import type { AgentEnv } from "./env";
 import { findLastWalkedRun } from "./replay";
+import { journeysForMap } from "./journey-catalog";
 
 // Older than this and the map is more likely to mislead than to help: a
 // product that has not been walked in a month has usually moved. Deliberately
@@ -35,7 +36,7 @@ const MAX_KNOWN_STEPS = 12;
 
 export async function loadKnownMap(
   env: AgentEnv,
-  run: { watchId: string | null },
+  run: { watchId: string | null; appId?: string | null },
   now: Date = new Date(),
 ): Promise<KnownMap | null> {
   if (!run.watchId) return null;
@@ -50,8 +51,30 @@ export async function loadKnownMap(
   const anatomy = normalizeAnatomy(parseJson<unknown>(walked.anatomy));
   if (!anatomy) return null;
 
+  // CHE-232: the app's journeys, not the last run's rows. The difference is
+  // the whole point of the catalog — the last run walked whichever five
+  // journeys it happened to propose, under whatever wording it reached for;
+  // the catalog knows which journeys this app HAS. Best-established first
+  // (most walks, then most recently walked), because the prompt shows five and
+  // a journey walked twenty times is the one the model should keep calling by
+  // its own name. Falls back to the old read for a run with no App row.
+  const journeys =
+    (run.appId ? await journeysForMap(env, run.appId, MAX_KNOWN_STEPS) : null) ??
+    (await runJourneys(env, walked.id));
+
+  return {
+    runNumber: walked.runNumber,
+    walkedAt: walked.completedAt.toISOString(),
+    anatomy,
+    journeys,
+  };
+}
+
+// The pre-catalog read: the last walked run's rows, in the order it walked
+// them. Still the answer for a run whose target has no App row.
+async function runJourneys(env: AgentEnv, runId: string): Promise<ProposedJourney[]> {
   const rows = await env.db.journey.findMany({
-    where: { runId: walked.id },
+    where: { runId },
     orderBy: { order: "asc" },
     select: {
       title: true,
@@ -59,7 +82,7 @@ export async function loadKnownMap(
       steps: { orderBy: { order: "asc" }, select: { label: true } },
     },
   });
-  const journeys: ProposedJourney[] = rows
+  return rows
     // A skipped journey verified nothing last time; its plan is not a map of
     // anything we know works, so it is not offered as one to keep.
     .filter((j) => j.status !== "skipped")
@@ -69,11 +92,4 @@ export async function loadKnownMap(
       // the title is a worse plan than real steps but a better one than none.
       steps: j.steps.length ? j.steps.map((s) => s.label).slice(0, MAX_KNOWN_STEPS) : [j.title],
     }));
-
-  return {
-    runNumber: walked.runNumber,
-    walkedAt: walked.completedAt.toISOString(),
-    anatomy,
-    journeys,
-  };
 }

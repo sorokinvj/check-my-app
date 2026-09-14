@@ -22,6 +22,7 @@
 //     fails (same swallow contract as the other pre-flight rungs).
 
 import type { AgentEnv } from "./env";
+import { journeysForKnowledge } from "./journey-catalog";
 import type { SurveyOutcome } from "./snapshot";
 
 export interface AppKnowledge {
@@ -185,10 +186,21 @@ export async function loadAppKnowledge(
     }
   }
 
-  // The last walked run's journeys and how they ended — the same run the
-  // known map (CHE-133) and the partial plan (CHE-57) read.
+  // CHE-232: the app's journeys and how each of them last ended. Before the
+  // catalog this could only be "the last walked run's rows", which meant the
+  // prompts knew about whichever five journeys that run happened to propose,
+  // under that run's wording. The catalog answers the question that was
+  // actually being asked — what are this app's journeys, and how is each one
+  // doing — and answers it for a one-off check too, not only a watch.
   let journeys: ComposeInput["journeys"] = [];
-  if (run.watchId) {
+  if (run.appId) {
+    try {
+      journeys = await journeysForKnowledge(env, run.appId, JOURNEY_ROWS);
+    } catch (err) {
+      warn("app journeys", err);
+    }
+  }
+  if (journeys.length === 0 && run.watchId) {
     try {
       // Loaded lazily: replay.ts reaches `cloudflare:workers` through the
       // browser launcher, and a static import would make this module — and
