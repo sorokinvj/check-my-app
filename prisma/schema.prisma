@@ -182,6 +182,70 @@ model CreatedResource {
   @@index([appId, deletedAt])
 }
 
+// ─── The journey catalog (CHE-231) ───────────────────────────────────────────
+// A UX journey is the unit of a run. It belongs to the APP and outlives every
+// run: "someone signs up" is the same journey in Run #12 and Run #157, whatever
+// wording the model reached for that day. Before this row existed, continuity
+// was reconstructed by matching free-text titles from the last run — and
+// joblander.app wrote 167 distinct titles for ~13 journeys across 60 runs, so
+// there was nothing to match.
+//
+// Identity is decided in code, never by a prompt: src/lib/journey-key.ts
+// resolves a title to one of these rows (scripts/verify-journey-identity.ts
+// drives the real 167 titles through it). The row is per App, because an App is
+// already "one owner ↔ one target"; an anonymous one-off run has no continuity
+// to accumulate and gets no catalog row, only the key on its journeys.
+
+model AppJourney {
+  id    String @id @default(cuid())
+  app   App    @relation(fields: [appId], references: [id], onDelete: Cascade)
+  appId String
+  // Stable slug from journey-key.ts: "signup", "install-extension",
+  // "practic-interview-ai". Unique per app; never rewritten once assigned —
+  // a key that moves is a history that restarts.
+  key   String
+  // The current canonical wording, i.e. the last walk's title. Display only:
+  // nothing keys on it.
+  title String
+  // Every distinct title we have resolved to this journey, JSON string[]. The
+  // audit trail for a merge — what the identity rules folded together is
+  // always visible, not just their verdict.
+  aliases String @default("[]")
+  // The plan: ordered step labels from the last walk that produced any, JSON
+  // string[]. What discovery is asked to confirm and what a re-walk starts from.
+  plan    String @default("[]")
+
+  // Current state, updated by every run that walks it. status is the same
+  // StepStatus roll-up the per-run row carries.
+  status          String?
+  lastRunId       String? // the last run that had this journey at all
+  lastRunNumber   Int?
+  // When it was last ACTUALLY walked (a carried copy does not move this) and by
+  // which run — the provenance any "verified on" claim must be built from.
+  lastWalkedAt    DateTime?
+  lastWalkedRunId String?
+  walkCount       Int @default(0)
+  // How many consecutive walks ended worse than ok/partial, and since when.
+  // Cleared the moment a walk comes back healthy.
+  consecutiveBad  Int       @default(0)
+  failingSince    DateTime?
+  // Everything this journey has cost us, summed over its checks. The journey is
+  // the unit of work, so it is also the unit of spend.
+  costUsd         Float @default(0)
+  // A journey the product no longer has. Kept, never deleted (it is the record
+  // of what the app used to do) and never walked again.
+  retiredAt     DateTime?
+  retiredReason String?
+
+  checks Journey[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([appId, key])
+  @@index([appId, retiredAt])
+}
+
 // ─── Journeys & steps ────────────────────────────────────────────────────────
 // status: StepStatus — see src/lib/enums.ts
 
@@ -191,6 +255,17 @@ model Journey {
   runId   String
   order   Int
   title   String // "Sign up → first mock interview"
+  // CHE-231: which journey of the app this is a check of. Null on runs with no
+  // App row (anonymous one-off checks, PR previews) and on rows written before
+  // the catalog existed — journeyKey is filled in either way, so even those
+  // rows can be grouped by identity.
+  appJourney   AppJourney? @relation(fields: [appJourneyId], references: [id], onDelete: SetNull)
+  appJourneyId String?
+  journeyKey   String?
+  // What this check cost: the walking loop plus its judge, the same number that
+  // lands in LlmUsage for this journey. Null on a carried journey — nothing was
+  // spent walking it — and on rows written before the column.
+  costUsd      Float?
   status  String // StepStatus — worst-case roll-up of its steps
   summary String? // "What we found: signup fails on Safari mobile (~18% of traffic)"
   videoUrl String? // recording of the agent walking this journey
@@ -212,6 +287,7 @@ model Journey {
   steps   Step[]
 
   @@index([runId])
+  @@index([appJourneyId])
 }
 
 model Step {
@@ -493,6 +569,8 @@ model App {
   policy  TicketPolicy?
   runs    Run[]
   issues  IssueLink[]
+  // CHE-231: the app's journeys — the units its runs are made of.
+  journeys AppJourney[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

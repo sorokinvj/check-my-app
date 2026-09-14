@@ -45,6 +45,7 @@ import { discoverApp, type KnownMap, type ProposedJourney, type RunInput } from 
 import { loadKnownMap } from "./known-map";
 import { loadAppKnowledge, type AppKnowledge } from "./knowledge";
 import { walkOneJourney, type WalkRun } from "./execution";
+import { recordJourneyCost } from "./journey-catalog";
 import { orderByFocus } from "./limits";
 import { parseActions, replayJourney, type ReplayResult } from "./journey-replay";
 import { claimedHands, drivenControls, gateFindings } from "./findings-gate";
@@ -451,6 +452,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
         id: run.id,
         appSlug: run.appSlug,
         appId: run.appId,
+        runNumber: run.runNumber,
         targetUrl: run.targetUrl,
         testEmail: run.testEmail,
         testPasswordEnc: run.testPasswordEnc,
@@ -606,7 +608,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
       if (plan.taken) {
         await step.do("carry-journeys", async () => {
           for (const entry of plan.carry) {
-            await carryJourney(env, runId, entry);
+            await carryJourney(env, runId, entry, run.runNumber);
           }
         });
       }
@@ -631,9 +633,26 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
             }).catch(rethrowBudgetNonRetryable);
             const journey = await env.db.journey.findFirst({
               where: { runId, order },
-              select: { id: true },
+              select: { id: true, appJourneyId: true },
             });
             await recordUsage(env, runId, "walking", llm.navModel, r.usage, journey?.id ?? null);
+            // CHE-231: the journey is the unit of work, so it is the unit of
+            // spend too. Known only here — the judge's tokens land after the
+            // walk returns — and never fatal: a cost we failed to file is a
+            // gap in our accounting, not in the customer's check.
+            if (journey) {
+              await recordJourneyCost(env, {
+                journeyId: journey.id,
+                appJourneyId: journey.appJourneyId,
+                costUsd: r.costUsd,
+              }).catch((err) =>
+                console.warn(
+                  `[journey] cost not filed for journey ${order}: ${
+                    err instanceof Error ? err.message : String(err)
+                  }`,
+                ),
+              );
+            }
             // CHE-169: the judge is its own phase in the ledger, so
             // `npm run cost:trend` can show what the second opinion costs
             // next to what it adjudicated. No row when it was never called.

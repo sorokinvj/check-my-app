@@ -33,6 +33,7 @@
 import type { AgentEnv } from "./env";
 import { FULL_RUN_MAX_AGE_DAYS, findLastWalkedRun } from "./replay";
 import { fullRunGate, gateInputFrom, surveySaysUnchanged, type SurveyOutcome } from "./snapshot";
+import { recordCarry } from "./journey-catalog";
 
 // The only journey statuses worth carrying: "ok" (everything worked) and
 // "partial" (everything attempted worked, some steps went unverified). Anything
@@ -264,6 +265,7 @@ export async function carryJourney(
   env: AgentEnv,
   runId: string,
   entry: CarriedJourney,
+  runNumber?: number,
 ): Promise<void> {
   const source = await env.db.journey.findUnique({
     where: { id: entry.sourceJourneyId },
@@ -272,6 +274,11 @@ export async function carryJourney(
       status: true,
       summary: true,
       videoUrl: true,
+      // CHE-231: identity travels with the copy. Without it a carried journey
+      // would look like a journey the app has never had before, which is the
+      // opposite of what carrying means.
+      appJourneyId: true,
+      journeyKey: true,
       steps: {
         orderBy: { order: "asc" },
         select: {
@@ -302,8 +309,19 @@ export async function carryJourney(
       summary: source.summary,
       videoUrl: source.videoUrl,
       carriedFromRunId: entry.sourceRunId,
+      appJourneyId: source.appJourneyId,
+      journeyKey: source.journeyKey,
     },
   });
+  // CHE-231: the catalog records that this run had the journey, and nothing
+  // more — lastWalkedAt, the walk count and the failure streak stay where the
+  // real walk left them. A carry that moved them would launder old evidence
+  // into "checked today", which is the one thing carrying must never do.
+  if (typeof runNumber === "number") {
+    await recordCarry(env, { appJourneyId: source.appJourneyId, runId, runNumber }).catch((err) =>
+      console.warn(`[journey] carry not recorded: ${err instanceof Error ? err.message : err}`),
+    );
+  }
 
   // One step at a time with its evidence nested — the exact write shape
   // execution.ts already runs in production against D1.
