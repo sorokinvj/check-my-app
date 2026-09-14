@@ -20,6 +20,14 @@ import { sessionView } from './session-view.mjs';
 import { preparePractice, inspectPractice, startPractice, stopPractice, readPractice, practiceControls, enablePracticeMicrophone, observePracticeRequests, PracticeStartRejected, preparePracticeStart, restorePracticeInsights } from './joblander-practice.mjs';
 
 const exec = promisify(execFile);
+// A container that dies before it listens says nothing at all, and six runs
+// were diagnosed from the outside as "the container is not running" with no
+// way to tell a missing X server from a missing token (CHE-233). These two
+// lines are the executor's proof of life. Never the token itself — only
+// whether one arrived.
+console.log(`[runner] boot node=${process.version} isolated=${process.env.RUNNER_ISOLATED === '1'} token=${typeof process.env.RUNNER_CONTROL_TOKEN === 'string' ? process.env.RUNNER_CONTROL_TOKEN.length : 0}ch display=${process.env.DISPLAY ?? 'none'} home=${process.env.HOME ?? 'none'}`);
+process.on('uncaughtException', error => { console.error(`[runner] fatal: ${error?.stack ?? error}`); process.exit(1); });
+process.on('unhandledRejection', reason => { console.error(`[runner] fatal rejection: ${reason instanceof Error ? reason.stack : String(reason)}`); process.exit(1); });
 const token = process.env.RUNNER_CONTROL_TOKEN;
 delete process.env.RUNNER_CONTROL_TOKEN;
 if (process.env.RUNNER_ISOLATED !== '1' || !token || token.length < 32) throw new Error('An isolated container and control token are required');
@@ -546,7 +554,7 @@ server.on('upgrade', (req, socket, head) => {
   }));
 });
 process.on('SIGTERM', () => void closeBrowser('shutdown').finally(() => process.exit(0)));
-server.listen(9090, '0.0.0.0');
+server.listen(9090, '0.0.0.0', () => console.log('[runner] listening on 9090'));
 
 // The stimulus page is reachable only inside this isolated browser container.
 // It never serves an arbitrary path, credentials, the control API or user files.

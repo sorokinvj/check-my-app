@@ -22,6 +22,16 @@ async function main() {
   assert.match(describeExecutorExit(lost, { exitCode: 1, reason: "exit", at: 0 }), /exited with code 1/,
     "An unmapped code is still reported, never swallowed");
 
+  // The runtime's own ending outranks the stop event: a container that died
+  // mid-boot and one that stopped cleanly both arrive here as code 0, and only
+  // the monitor's message separates them.
+  const runtime = describeExecutorExit(lost, { exitCode: 0, reason: "exit", at: 0 }, "Error: container exited with code 1");
+  assert.match(runtime, /container exited with code 1/, "The runtime ending must win over a synthesized clean stop");
+  assert.doesNotMatch(runtime, /stopped cleanly/);
+  assert.match(describeExecutorExit(lost, null, "   "), /^The container is not running/, "Blank runtime text is not an ending");
+  assert.match(describeExecutorExit(lost, { exitCode: 137, reason: "exit", at: 0 }, null), /out of memory/,
+    "With no runtime ending the stop event is still reported");
+
   // These strings describe OUR machinery. They are diagnostics on the run row,
   // never customer-facing text — rule 1 — so the leak detector must agree that
   // they would be a leak if anyone ever put them in a verdict.

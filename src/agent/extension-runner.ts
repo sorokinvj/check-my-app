@@ -30,6 +30,11 @@ export class ExtensionRunner extends Container<AgentBindings> {
     });
     await this.schedule(new Date(lease.expiresAt + 120_000), "expire");
     try {
+      // Started first, and only then waited on. A container that dies before
+      // its port is ready reports through the library as a stopped state with
+      // no code — the runtime's own monitor is the one place the real ending
+      // exists, and it can only be watched once the instance is up (CHE-233).
+      await this.start({ envVars: { RUNNER_CONTROL_TOKEN: token } }, { retries: 60, waitInterval: 1_000, portToCheck: 9090 });
       await this.startAndWaitForPorts({
         ports: 9090,
         startOptions: { envVars: { RUNNER_CONTROL_TOKEN: token } },
@@ -44,9 +49,13 @@ export class ExtensionRunner extends Container<AgentBindings> {
       await this.ctx.storage.put("identity", session);
       return session;
     } catch (error) {
-      const exit = await this.ctx.storage.get<ExecutorExit>("lastExit");
+      // Read after the attempt is torn down: the runtime's ending often lands
+      // during cleanup, and a failure that reports nothing is the thing this
+      // whole path exists to stop producing.
       await this.expire().catch(() => {});
-      throw new Error(describeExecutorExit(error, exit));
+      const exit = await this.ctx.storage.get<ExecutorExit>("lastExit");
+      const runtime = await this.ctx.storage.get<string>("lastExitMessage");
+      throw new Error(describeExecutorExit(error, exit, runtime));
     }
   }
 
@@ -54,6 +63,23 @@ export class ExtensionRunner extends Container<AgentBindings> {
   // message never carries. Without the exit code every such failure reads the
   // same, and reading it as anything about the extension is exactly the
   // confusion rule 8 exists to prevent (CHE-233: five identical runs, no cause).
+  // The runtime settles this promise when the instance ends, with the ending
+  // the platform actually saw. The library's own stop event can only report a
+  // synthesized 0 when it never learned a code, which is what made six runs
+  // indistinguishable from one another.
+  override onStart(): void {
+    const monitor = this.ctx.container?.monitor();
+    if (!monitor) return;
+    this.ctx.waitUntil(monitor.then(
+      () => { console.log("[extension-runner] executor ended with no error from the runtime"); },
+      (error: unknown) => {
+        const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+        console.error(`[extension-runner] executor ended: ${message}`);
+        return this.ctx.storage.put("lastExitMessage", message.slice(0, 300)).then(() => {}, () => {});
+      },
+    ));
+  }
+
   override async onStop(params: StopParams): Promise<void> {
     const exit: ExecutorExit = { exitCode: params.exitCode, reason: params.reason, at: Date.now() };
     console.log(`[extension-runner] executor stopped: exitCode=${exit.exitCode} reason=${exit.reason}`);
