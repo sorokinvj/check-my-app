@@ -59,6 +59,12 @@ assert.equal((await signInAccountOnce(loginState, loginPage, 'fixture@example.te
 assert.equal(submissions, 1, 'Rejected account access cannot submit twice');
 assert.equal(credentialRejection('Loading your account'), false);
 const uncertain = {};
-await assert.rejects(signInAccountOnce(uncertain, { ...loginPage, waitForFunction: async () => { throw new Error('Connection interrupted'); } }, 'fixture@example.test', 'fixture-password'));
+// The submission leaves and then the connection dies: the click is counted,
+// nothing comes back, and the attempt must still be spent. Simulated on the
+// click itself since the wait that follows it is now progress-based rather
+// than a waitForFunction deadline (extension-runner/progress.mjs).
+await assert.rejects(signInAccountOnce(uncertain, { ...loginPage,
+  getByRole: () => ({ click: async () => { submissions++; throw new Error('Connection interrupted'); } }) },
+'fixture@example.test', 'fixture-password'), /Connection interrupted/);
 await assert.rejects(signInAccountOnce(uncertain, loginPage, 'fixture@example.test', 'fixture-password'), /consumed/);
 assert.equal(submissions, 2, 'An interrupted submission cannot be resubmitted either');

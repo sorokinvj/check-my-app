@@ -1,3 +1,5 @@
+import { waitForProgress } from './progress.mjs';
+
 const dashboard = 'https://joblander.app/dashboard';
 
 export function parseMinuteBalance(text) {
@@ -15,11 +17,13 @@ export function parseMinuteBalance(text) {
 // for was set against the idle case and timed out twice in the combined one,
 // which reads as a product failure and is not one.
 //
-// Unlike the extension's ~2.8s Stop confirmation, this budget models nothing on
-// the product's side — it is only our patience. The page either shows the
-// balance or shows a credential rejection, and waiting longer for one of those
-// cannot mask a defect; timing out before either appears invents one.
-const SIGN_IN_BUDGET_MS = 60_000;
+// No constant is right across that spread, so this no longer waits on a clock.
+// It waits while the page is still working and gives up when it goes quiet
+// without an answer — see extension-runner/progress.mjs. Unlike the extension's
+// Stop confirmation, nothing here models the product's own timing: the page
+// shows the balance or shows a credential rejection, and only a page that has
+// stopped doing either is evidence of anything.
+const SIGN_IN_QUIET_MS = 10_000;
 
 export async function signInAccount(page, email, password) {
   if (!email || !password) throw new Error('Test-account access is required for the minute balance');
@@ -27,8 +31,12 @@ export async function signInAccount(page, email, password) {
   await page.getByPlaceholder('Email address', { exact: true }).fill(email);
   await page.getByPlaceholder('Password', { exact: true }).fill(password);
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
-  await page.waitForFunction(() => /(?:^|\n)Minutes\s*(?:\n|$)/.test(document.body.innerText)
-    || /invalid (?:login|credentials|password|email)|incorrect (?:email|password)|wrong password|too many (?:attempts|requests)|auth\/(?:invalid-credential|wrong-password|user-not-found)/i.test(document.body.innerText), undefined, { timeout: SIGN_IN_BUDGET_MS });
+  const settled = async () => {
+    const text = await page.locator('body').innerText().catch(() => '');
+    return /(?:^|\n)Minutes\s*(?:\n|$)/.test(text) || credentialRejection(text);
+  };
+  await waitForProgress(page, settled,
+    { idleMs: SIGN_IN_QUIET_MS, ceilingMs: 180_000, what: 'the minute balance or a rejected sign-in' });
   if (credentialRejection(await page.locator('body').innerText())) return { credentialRejected: true };
   await page.getByText('Minutes', { exact: true }).waitFor({ state: 'visible', timeout: 1000 });
   return { signedIn: true };
