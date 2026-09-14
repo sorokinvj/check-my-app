@@ -25,7 +25,13 @@
     "class_name": "ExtensionRunner",
     "image": "./extension-runner/Dockerfile",
     "image_build_context": "./extension-runner",
-    "instance_type": "standard-2",
+    // 4 vCPU, not 1. Run 7's Stop confirmation failed with the button visible,
+    // enabled and stable and no element intercepting it: the click dispatch
+    // itself went unanswered because a live WebRTC call, tab capture, Xvfb and
+    // Playwright were sharing standard-2's single core, and the extension's
+    // confirmation window is a hard ~2.8s. See docs/extension-verification.md,
+    // "Root cause of the Stop-confirmation failure".
+    "instance_type": "standard-4",
     "max_instances": 3
   }],
   "durable_objects": {

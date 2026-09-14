@@ -7,7 +7,10 @@
     "class_name": "ExtensionRunner",
     "image": "../../extension-runner/Dockerfile",
     "image_build_context": "../../extension-runner",
-    "instance_type": "standard-2",
+    // Matches wrangler-agent.jsonc — the probe must not be quieter than
+    // production, or it proves the wrong machine (see the Stop-confirmation
+    // root cause in docs/extension-verification.md).
+    "instance_type": "standard-4",
     "max_instances": 3
   }],
   "durable_objects": {

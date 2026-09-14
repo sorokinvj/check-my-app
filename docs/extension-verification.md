@@ -155,6 +155,53 @@ identity restoration all still work. What remains unproven is the
 Stop-confirmation reliability under the combined scenario, which needs a
 paid run, and the seed the dashboard builds for it.
 
+### Root cause of the Stop-confirmation failure — 2026-09-14
+
+Run 7's full Playwright call log, recovered from
+`/tmp/checkmyapp-workflow-run7-walk-2-final.json`, settles what two rounds of
+reasoning about UI timing could not:
+
+```
+locator.click: Timeout 1573ms exceeded.
+Call log:
+  - waiting for getByRole('button', { name: 'Confirm end session', exact: true })
+    - locator resolved to <button … aria-label="Confirm end session" …>
+  - attempting click action
+    - waiting for element to be visible, enabled and stable
+    - element is visible, enabled and stable
+    - scrolling into view if needed
+    - done scrolling
+    - performing click action
+```
+
+The log ends there. Every actionability check **passed** — the button was
+visible, enabled and stable, and Playwright never reported another element
+intercepting pointer events. What did not finish is the click dispatch
+itself: the renderer did not acknowledge it inside the remaining budget.
+
+That rules out the two explanations the code was written to defend against.
+It is not a moving or animating target (the panel is expanded by
+`restorePracticeInsights` before this point), and it is not the overlay
+problem `positionPracticeInsights` exists for — Playwright says so in its
+own words. It is the machine: at that moment the container is running a live
+WebRTC practice call, the extension's tab capture, Xvfb and Playwright, all
+on the **1 vCPU** of `standard-2`. A saturated renderer main thread does not
+answer a click within the extension's hard ~2.8s confirmation window.
+
+Which is why this failure only ever appeared in the combined scenario, why
+an isolated session confirms in 486ms, and why a standalone replay of the
+same recorded plan passed: nothing else was competing for the core. It is a
+provisioning defect of ours, not a defect of the product under test — rule 8
+in its purest form, and it would have been filed against the customer if the
+call log had not been read.
+
+**Fix: `instance_type` `standard-2` → `standard-4`** (1 vCPU/6 GiB → 4
+vCPU/12 GiB) in both `wrangler-agent.jsonc` and the probe config. At
+`max_instances: 3` that is 12 vCPU and 36 GiB against account ceilings of
+100 vCPU and 400 GiB, and it moves container cost for a ~28-minute run from
+roughly $0.07 to $0.20 — small next to the run's LLM cost, and the only one
+of the two numbers that was ever the constraint.
+
 ## Previous checkpoint — 2026-09-14 10:47 UTC
 
 PR #81 remains on `feat/chrome-extension-targets`; pushed head `c904293` has
