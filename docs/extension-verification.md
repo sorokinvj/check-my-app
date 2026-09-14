@@ -63,6 +63,54 @@ Sonnet/Opus override this branch's own setup introduced, root-cause and fix
 the Stop-confirmation timeout above, then one accepted full Run on DeepSeek
 before any release decision.
 
+## Running the stand
+
+Runs 1-7 were driven from a stand whose middle hop was never committed: the
+local Workflow calls `http://127.0.0.1:19092`, and the process that answered
+there — the one holding the probe's bearer token — lived only in the agent's
+shell. When that shell closed the stand became unreproducible, with every
+committed half still pointing at a dead port. The broker is
+`spikes/extension-browser-run/proxy.mjs` now, and the sequence is:
+
+1. **The Cloudflare probe** (`spikes/extension-browser-run/wrangler-native-cloudflare.jsonc`)
+   is already deployed as `checkmyapp-extension-native-probe` at
+   `https://checkmyapp-extension-native-probe.frosty-fog-32a2.workers.dev`.
+   Verify rather than assume — it answers `401` unauthenticated and
+   `{"disposed":false}` with the bearer token:
+   ```
+   curl -H "Authorization: Bearer $PROBE_ACCESS_TOKEN" \
+     https://checkmyapp-extension-native-probe.frosty-fog-32a2.workers.dev/attempt/proxy-smoke-0001/evidence
+   ```
+   Redeploy with `npx wrangler deploy --config spikes/extension-browser-run/wrangler-native-cloudflare.jsonc`
+   after changing anything under `extension-runner/`; the container image is
+   rebuilt from that Dockerfile on deploy.
+
+2. **The broker**, holding the only copy of the token:
+   ```
+   PROBE_ACCESS_TOKEN=... node spikes/extension-browser-run/proxy.mjs
+   ```
+   It forwards only `/attempt/{owner}/…`, replaces any inbound Authorization
+   header with its own, and binds loopback only. `PROBE_ACCESS_TOKEN` is in
+   Notion (Progress Log, keys section) and in the untracked local `.env`; the
+   secret on the Worker is write-only, so a lost copy is rotated with
+   `wrangler secret put`, not recovered. Rules covered by
+   `scripts/verify-extension-proxy.mjs`.
+
+3. **The local Workflow** (`spikes/extension-browser-run/wrangler-workflow.jsonc`,
+   port 8787) subclasses the production `CheckRunWorkflow` and swaps only the
+   `EXTENSION_RUNNER` binding for the broker. Its env comes from
+   `/tmp/checkmyapp-workflow.env` — which must name the **production** model
+   tier, not the Sonnet/Opus defaults that invalidated runs 1-7; run
+   `node scripts/verify-model-config.mjs` before spending anything.
+
+4. **The local product** (`npm run dev`, port 3107 per the Workflow's
+   `APP_URL`) serves the owner dashboard a run is submitted through.
+
+The honest boundary, unchanged: this drives the real cloud executor against
+the real JobLander production extension, but it is not production CheckMyApp
+end-to-end. A verdict produced here is evidence about the executor, not proof
+of the shipped product.
+
 ## Previous checkpoint — 2026-09-14 10:47 UTC
 
 PR #81 remains on `feat/chrome-extension-targets`; pushed head `c904293` has
