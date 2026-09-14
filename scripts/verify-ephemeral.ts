@@ -550,7 +550,20 @@ async function main() {
     // What src/lib/ephemeral.ts does, table by table.
     const DELETED = ["Journey", "Step", "Finding", "Evidence", "GeneratedTest", "LlmUsage", "CreatedResource", "AppSnapshot"];
     const DETACHED = ["PendingCheck"];
-    const REFERENCES = ["Run.baselineRunId", "Journey.carriedFromRunId", "IssueLink.firstSeenRunId", "IssueLink.findingId"];
+    const REFERENCES = [
+      "Run.baselineRunId",
+      "Journey.carriedFromRunId",
+      "IssueLink.firstSeenRunId",
+      "IssueLink.findingId",
+      // CHE-231: the journey catalog's provenance. Neither can ever name an
+      // ephemeral run — a catalog row exists only for an App, and an ephemeral
+      // run has none by construction (src/lib/ephemeral.ts creates no App;
+      // resolveJourney returns no row without one). They are listed here
+      // because a reader must still treat a run it cannot find as "we don't
+      // know when this was walked", never as "walked".
+      "AppJourney.lastRunId",
+      "AppJourney.lastWalkedRunId",
+    ];
     const handled = new Set([...DELETED, ...DETACHED]);
     const expected = owned;
     const missing = [...expected].filter((t) => !handled.has(t));
@@ -560,7 +573,7 @@ async function main() {
       `schema says ${[...expected].sort().join(", ")}; sweep handles ${[...handled].sort().join(", ")}${missing.length ? `; NOT handled: ${missing.join(", ")}` : ""}${extra.length ? `; handled but not in schema: ${extra.join(", ")}` : ""}`);
     // IssueLink.findingId is in the list: reconcile's originalFinding treats a
     // missing finding as null and falls back to re-hashing (CHE-103).
-    check("schema: the only other references into the tree are the four provenance columns whose readers were audited",
+    check("schema: the only other references into the tree are the provenance columns whose readers were audited",
       [...references].sort().join() === [...REFERENCES].sort().join(),
       `schema: ${[...references].sort().join(", ")}`);
 

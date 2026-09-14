@@ -1,0 +1,673 @@
+{
+  "source": "production D1, joblander.app journeys, exported 2026-09-14 (CHE-231)",
+  "rows": [
+    {
+      "title": "Sign up for a new account",
+      "rows": 7
+    },
+    {
+      "title": "Log in to an existing account",
+      "rows": 5
+    },
+    {
+      "title": "Sign up for an account",
+      "rows": 5
+    },
+    {
+      "title": "Build and lock a Story answer",
+      "rows": 4
+    },
+    {
+      "title": "Configure insight / coach settings",
+      "rows": 4
+    },
+    {
+      "title": "Install the Chrome extension and try live insights on the landing page",
+      "rows": 4
+    },
+    {
+      "title": "Install the Chrome extension for live interview hints",
+      "rows": 4
+    },
+    {
+      "title": "Log in and start an AI coaching practice session",
+      "rows": 4
+    },
+    {
+      "title": "Practice an interview with the AI coach (primary value action)",
+      "rows": 4
+    },
+    {
+      "title": "Account Registration",
+      "rows": 3
+    },
+    {
+      "title": "Discovering Supported Interview Roles",
+      "rows": 3
+    },
+    {
+      "title": "Exploring the Homepage Demo",
+      "rows": 3
+    },
+    {
+      "title": "Learn how to use JobLander via tutorials",
+      "rows": 3
+    },
+    {
+      "title": "Learning via Tutorials",
+      "rows": 3
+    },
+    {
+      "title": "Log in to existing account",
+      "rows": 3
+    },
+    {
+      "title": "Sign up / Log in",
+      "rows": 3
+    },
+    {
+      "title": "Starting an AI Interview Practice",
+      "rows": 3
+    },
+    {
+      "title": "Build and Manage Interview Stories",
+      "rows": 2
+    },
+    {
+      "title": "Configure Insight Preferences",
+      "rows": 2
+    },
+    {
+      "title": "Create a new account",
+      "rows": 2
+    },
+    {
+      "title": "Explore Tutorials and Guides",
+      "rows": 2
+    },
+    {
+      "title": "Learn About the App and Report Issues",
+      "rows": 2
+    },
+    {
+      "title": "Learn How to Use JobLander via Tutorials",
+      "rows": 2
+    },
+    {
+      "title": "Log In and Access AI Interview Practice",
+      "rows": 2
+    },
+    {
+      "title": "Log In to the Platform",
+      "rows": 2
+    },
+    {
+      "title": "Practice a mock interview with an AI coach",
+      "rows": 2
+    },
+    {
+      "title": "Review past practice sessions",
+      "rows": 2
+    },
+    {
+      "title": "Sign Up / Create Account",
+      "rows": 2
+    },
+    {
+      "title": "Sign Up for a JobLander Account",
+      "rows": 2
+    },
+    {
+      "title": "Start an AI Interview Practice Session",
+      "rows": 2
+    },
+    {
+      "title": "AI Interview Practice (Core Value Action)",
+      "rows": 1
+    },
+    {
+      "title": "AI Interview Practice Session",
+      "rows": 1
+    },
+    {
+      "title": "Access AI practice (authenticated core value action)",
+      "rows": 1
+    },
+    {
+      "title": "Account & Settings Navigation",
+      "rows": 1
+    },
+    {
+      "title": "Account Configuration and Personalization",
+      "rows": 1
+    },
+    {
+      "title": "Account settings, tutorials, and extension installation",
+      "rows": 1
+    },
+    {
+      "title": "Anonymous Landing & Demo Evaluation",
+      "rows": 1
+    },
+    {
+      "title": "Anonymous visitor explores live insight demo on homepage",
+      "rows": 1
+    },
+    {
+      "title": "Anonymous visitor tries homepage demo, then is pushed to sign up",
+      "rows": 1
+    },
+    {
+      "title": "Attempt to Practice with AI (Unauthenticated)",
+      "rows": 1
+    },
+    {
+      "title": "Authenticated user starts AI interview practice",
+      "rows": 1
+    },
+    {
+      "title": "Authentication (Log In)",
+      "rows": 1
+    },
+    {
+      "title": "Browse Tutorials",
+      "rows": 1
+    },
+    {
+      "title": "Browse Tutorials & Getting Started",
+      "rows": 1
+    },
+    {
+      "title": "Browse Tutorials to Learn How to Use the Product",
+      "rows": 1
+    },
+    {
+      "title": "Browse interview roles directory and start practice",
+      "rows": 1
+    },
+    {
+      "title": "Browse pricing plans and tutorials",
+      "rows": 1
+    },
+    {
+      "title": "Browse roles directory & prepare for a specific role",
+      "rows": 1
+    },
+    {
+      "title": "Browse tutorials and guides",
+      "rows": 1
+    },
+    {
+      "title": "Browse tutorials and learn how live interview hints work",
+      "rows": 1
+    },
+    {
+      "title": "Browse tutorials to learn the product",
+      "rows": 1
+    },
+    {
+      "title": "Build & Lock Interview Stories",
+      "rows": 1
+    },
+    {
+      "title": "Build and Review Interview Stories",
+      "rows": 1
+    },
+    {
+      "title": "Build and lock interview stories",
+      "rows": 1
+    },
+    {
+      "title": "Build and manage interview stories",
+      "rows": 1
+    },
+    {
+      "title": "Build and manage personal story library with AI personalization",
+      "rows": 1
+    },
+    {
+      "title": "Configure AI Insights Settings",
+      "rows": 1
+    },
+    {
+      "title": "Configure Account and Upload Resume",
+      "rows": 1
+    },
+    {
+      "title": "Configure Settings & Insight Preferences",
+      "rows": 1
+    },
+    {
+      "title": "Configure account settings, coach preferences, and extension",
+      "rows": 1
+    },
+    {
+      "title": "Configure insight and coach preferences in Settings",
+      "rows": 1
+    },
+    {
+      "title": "Configure insight preferences",
+      "rows": 1
+    },
+    {
+      "title": "Configure insight preferences and settings",
+      "rows": 1
+    },
+    {
+      "title": "Create an Account",
+      "rows": 1
+    },
+    {
+      "title": "Create an account and access the dashboard",
+      "rows": 1
+    },
+    {
+      "title": "Create and save a structured interview story",
+      "rows": 1
+    },
+    {
+      "title": "Dashboard & Story Management",
+      "rows": 1
+    },
+    {
+      "title": "Explore pricing and upgrade plan",
+      "rows": 1
+    },
+    {
+      "title": "Explore the AI Practice Page",
+      "rows": 1
+    },
+    {
+      "title": "Explore the Landing Page and Try the Live Insights Demo",
+      "rows": 1
+    },
+    {
+      "title": "Explore the app in different languages (i18n)",
+      "rows": 1
+    },
+    {
+      "title": "Explore the authenticated dashboard and story management",
+      "rows": 1
+    },
+    {
+      "title": "Explore tutorials",
+      "rows": 1
+    },
+    {
+      "title": "Explore tutorials on how to use JobLander features",
+      "rows": 1
+    },
+    {
+      "title": "Exploring Tutorials and Learning How It Works",
+      "rows": 1
+    },
+    {
+      "title": "First-Time Onboarding & Tutorials",
+      "rows": 1
+    },
+    {
+      "title": "Get Live AI Hints During a Real Interview",
+      "rows": 1
+    },
+    {
+      "title": "Install Chrome Extension for Live Interview Hints",
+      "rows": 1
+    },
+    {
+      "title": "Install Chrome extension and use live interview hints",
+      "rows": 1
+    },
+    {
+      "title": "Install Chrome extension for live interview assistance",
+      "rows": 1
+    },
+    {
+      "title": "Install and use the Chrome extension for live interview hints",
+      "rows": 1
+    },
+    {
+      "title": "Install and use the browser extension for real-time interview hints",
+      "rows": 1
+    },
+    {
+      "title": "Install browser extension for live interview support",
+      "rows": 1
+    },
+    {
+      "title": "Install extension and sign up",
+      "rows": 1
+    },
+    {
+      "title": "Install extension and use live interview hints",
+      "rows": 1
+    },
+    {
+      "title": "Install the Chrome Extension for Real Interviews",
+      "rows": 1
+    },
+    {
+      "title": "Install the Chrome extension and configure live interview hints",
+      "rows": 1
+    },
+    {
+      "title": "Install the Chrome extension and learn about live interview hints",
+      "rows": 1
+    },
+    {
+      "title": "Install the Chrome extension and use it in a real interview",
+      "rows": 1
+    },
+    {
+      "title": "Install the Chrome extension and use live AI hints in a real interview",
+      "rows": 1
+    },
+    {
+      "title": "Installing the Browser Extension",
+      "rows": 1
+    },
+    {
+      "title": "Learn About the Product via the About Page",
+      "rows": 1
+    },
+    {
+      "title": "Learn via tutorials",
+      "rows": 1
+    },
+    {
+      "title": "Localization Experience",
+      "rows": 1
+    },
+    {
+      "title": "Log In to Dashboard",
+      "rows": 1
+    },
+    {
+      "title": "Log In with Test Credentials",
+      "rows": 1
+    },
+    {
+      "title": "Log in (email or Google)",
+      "rows": 1
+    },
+    {
+      "title": "Log in and create an answer story",
+      "rows": 1
+    },
+    {
+      "title": "Log in and explore the authenticated dashboard",
+      "rows": 1
+    },
+    {
+      "title": "Log in and use the practice coaching session",
+      "rows": 1
+    },
+    {
+      "title": "Log in to JobLander",
+      "rows": 1
+    },
+    {
+      "title": "Log in to access authenticated practice",
+      "rows": 1
+    },
+    {
+      "title": "Log in to the Application",
+      "rows": 1
+    },
+    {
+      "title": "Login to Dashboard",
+      "rows": 1
+    },
+    {
+      "title": "Manage Account and Resume Settings",
+      "rows": 1
+    },
+    {
+      "title": "Manage account settings and log out",
+      "rows": 1
+    },
+    {
+      "title": "New user sign up and terms acceptance",
+      "rows": 1
+    },
+    {
+      "title": "New user signs up via email/password",
+      "rows": 1
+    },
+    {
+      "title": "Onboard via tutorials and getting started guide",
+      "rows": 1
+    },
+    {
+      "title": "Onboard via tutorials and install the extension",
+      "rows": 1
+    },
+    {
+      "title": "Onboarding & Learning",
+      "rows": 1
+    },
+    {
+      "title": "Onboarding — explore tutorials before practicing",
+      "rows": 1
+    },
+    {
+      "title": "Practice AI interview",
+      "rows": 1
+    },
+    {
+      "title": "Practice Interview with AI Coach",
+      "rows": 1
+    },
+    {
+      "title": "Practice Interview with an AI Coach",
+      "rows": 1
+    },
+    {
+      "title": "Practice an AI-coached interview story (core value action)",
+      "rows": 1
+    },
+    {
+      "title": "Practice an interview question with live AI insights",
+      "rows": 1
+    },
+    {
+      "title": "Practice an interview story as an authenticated user",
+      "rows": 1
+    },
+    {
+      "title": "Practice an interview with an AI coach",
+      "rows": 1
+    },
+    {
+      "title": "Practice an interview with the AI coach",
+      "rows": 1
+    },
+    {
+      "title": "Practice in Mirror mode without a meeting",
+      "rows": 1
+    },
+    {
+      "title": "Practice interview questions with AI coach",
+      "rows": 1
+    },
+    {
+      "title": "Practice interviewing with an AI coach",
+      "rows": 1
+    },
+    {
+      "title": "Practice with AI interview coach",
+      "rows": 1
+    },
+    {
+      "title": "Practice with an AI interview coach",
+      "rows": 1
+    },
+    {
+      "title": "Prepare 'My Stories' Before a Real Interview",
+      "rows": 1
+    },
+    {
+      "title": "Primary Value Action (Start AI Interview Practice)",
+      "rows": 1
+    },
+    {
+      "title": "Primary Value Action - Start AI Interview Practice",
+      "rows": 1
+    },
+    {
+      "title": "Primary Value Action: AI Interview Practice",
+      "rows": 1
+    },
+    {
+      "title": "Primary value action — Practice with AI interview coach",
+      "rows": 1
+    },
+    {
+      "title": "Purchase minute packs and manage balance",
+      "rows": 1
+    },
+    {
+      "title": "Read the About / pricing overview",
+      "rows": 1
+    },
+    {
+      "title": "Reset forgotten password",
+      "rows": 1
+    },
+    {
+      "title": "Returning user logs in to access practice",
+      "rows": 1
+    },
+    {
+      "title": "Review Past Coaching Sessions",
+      "rows": 1
+    },
+    {
+      "title": "Review Performance After an Interview",
+      "rows": 1
+    },
+    {
+      "title": "Secondary Value Action - Manage and Build Interview Stories",
+      "rows": 1
+    },
+    {
+      "title": "Settings & Customization",
+      "rows": 1
+    },
+    {
+      "title": "Settings & Personalization",
+      "rows": 1
+    },
+    {
+      "title": "Sign Up / Account Creation",
+      "rows": 1
+    },
+    {
+      "title": "Sign Up / Log In to Access the App",
+      "rows": 1
+    },
+    {
+      "title": "Sign in and explore authenticated dashboard",
+      "rows": 1
+    },
+    {
+      "title": "Sign in with email and password",
+      "rows": 1
+    },
+    {
+      "title": "Sign in with email/password",
+      "rows": 1
+    },
+    {
+      "title": "Sign up / Log in (account creation)",
+      "rows": 1
+    },
+    {
+      "title": "Sign up and log in",
+      "rows": 1
+    },
+    {
+      "title": "Sign up and onboard",
+      "rows": 1
+    },
+    {
+      "title": "Sign up and start practicing with AI coach",
+      "rows": 1
+    },
+    {
+      "title": "Sign up to start practicing interviews",
+      "rows": 1
+    },
+    {
+      "title": "Sign up with email",
+      "rows": 1
+    },
+    {
+      "title": "Start a live AI coaching session",
+      "rows": 1
+    },
+    {
+      "title": "Start an AI Mock Interview Practice Session",
+      "rows": 1
+    },
+    {
+      "title": "Start an AI mock interview practice session",
+      "rows": 1
+    },
+    {
+      "title": "Story Building & Management",
+      "rows": 1
+    },
+    {
+      "title": "Try AI interview practice (auth-gated)",
+      "rows": 1
+    },
+    {
+      "title": "Try the AI interview coach demo on the homepage",
+      "rows": 1
+    },
+    {
+      "title": "Try the homepage AI insights demo (no login)",
+      "rows": 1
+    },
+    {
+      "title": "Try the live AI hints demo (unauthenticated)",
+      "rows": 1
+    },
+    {
+      "title": "Try the live-insights showcase widget on the homepage",
+      "rows": 1
+    },
+    {
+      "title": "Unauthenticated visitor browsing landing and about pages",
+      "rows": 1
+    },
+    {
+      "title": "User Authentication (Log In)",
+      "rows": 1
+    },
+    {
+      "title": "User Login & Authentication",
+      "rows": 1
+    },
+    {
+      "title": "User Onboarding and Learning",
+      "rows": 1
+    },
+    {
+      "title": "User login with email/password (previously broken, now fixed)",
+      "rows": 1
+    },
+    {
+      "title": "View Dashboard and Stories",
+      "rows": 1
+    },
+    {
+      "title": "Visitor learns the product via tutorials",
+      "rows": 1
+    },
+    {
+      "title": "Walk through the 7-step tutorial onboarding path",
+      "rows": 1
+    }
+  ]
+}

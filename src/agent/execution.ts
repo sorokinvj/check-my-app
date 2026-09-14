@@ -30,11 +30,14 @@ import { classifyGap, gapEvidenceText } from "./gap-classes";
 import { cutUndrivenClaims, type GateStep } from "./findings-gate";
 import { summaryFallback } from "@/lib/verdict-language";
 import { summarizeWalk } from "./summary";
+import { recordWalk, resolveJourney } from "./journey-catalog";
 
 export interface WalkRun extends RunInput {
   id: string;
   appSlug: string;
   appId?: string | null;
+  // CHE-231: stamped on the journey's catalog row as "last seen in Run #157".
+  runNumber: number;
 }
 
 const SEVERITY_ORDER: StepStatus[] = ["ok", "skipped", "confusing", "risky", "exposed", "broken"];
@@ -58,6 +61,10 @@ function journeyStatus(statuses: StepStatus[]): string {
 
 // The forced-extraction path asks for raw code, but models still wrap it in a
 // ```ts fence about half the time. Strip a single leading/trailing fence.
+function errText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 function stripCodeFence(text: string): string {
   const fenced = text.match(/```(?:[a-zA-Z]+)?\n([\s\S]*?)```/);
   return (fenced ? fenced[1] : text).trim();
@@ -118,8 +125,24 @@ export async function walkOneJourney(args: {
     const context = await newAgentContext(browser, run.targetUrl, env.bindings);
     const page = await context.newPage();
 
+    // CHE-231: which journey OF THE APP this walk is a check of, decided before
+    // a single step is written. The identity rules are in lib/journey-key.ts;
+    // a run with no App row gets the key and no catalog row. Never fatal: a
+    // catalog we could not read costs this journey its history, not its walk.
+    const identity = await resolveJourney(env, run, proposed.title).catch((err) => {
+      console.warn(`[journey] identity unresolved for "${proposed.title}": ${errText(err)}`);
+      return { appJourneyId: null, key: null, isNew: false };
+    });
+
     const journey = await env.db.journey.create({
-      data: { runId: run.id, order: index, title: proposed.title, status: "ok" },
+      data: {
+        runId: run.id,
+        order: index,
+        title: proposed.title,
+        status: "ok",
+        appJourneyId: identity.appJourneyId,
+        journeyKey: identity.key,
+      },
     });
 
     const stepStatuses: StepStatus[] = [];
@@ -358,6 +381,17 @@ export async function walkOneJourney(args: {
         where: { id: journey.id },
         data: { status, summary },
       });
+      // CHE-231: the catalog learns what this walk found — the status, the plan
+      // the next walk starts from, the failure streak. Best-effort by contract:
+      // the catalog is how the app remembers, never how a run succeeds.
+      await recordWalk(env, {
+        appJourneyId: identity.appJourneyId,
+        runId: run.id,
+        runNumber: run.runNumber,
+        title: proposed.title,
+        status,
+        plan: walkedSteps.map((s) => s.label).filter(Boolean),
+      }).catch((err) => console.warn(`[journey] catalog not updated: ${errText(err)}`));
     } catch (err) {
       // Per-journey isolation: one failure must not abort the rest of the run.
       // Our own LLM budget died (CHE-76) — not a fact about this journey or the
@@ -365,13 +399,24 @@ export async function walkOneJourney(args: {
       // of burning through the remaining journeys and shipping a verdict.
       if (err instanceof LlmBudgetError) throw err;
       console.error(`[walk] journey "${proposed.title}" failed:`, err);
+      const abortedStatus = journeyStatus(stepStatuses);
       await env.db.journey.update({
         where: { id: journey.id },
         data: {
-          status: journeyStatus(stepStatuses),
+          status: abortedStatus,
           summary: `Walk aborted: ${err instanceof Error ? err.message : String(err)}`.slice(0, 500),
         },
       });
+      // An aborted walk is still what we know about this journey today — the
+      // catalog records the status that landed, streak included.
+      await recordWalk(env, {
+        appJourneyId: identity.appJourneyId,
+        runId: run.id,
+        runNumber: run.runNumber,
+        title: proposed.title,
+        status: abortedStatus,
+        plan: walkedSteps.map((s) => s.label).filter(Boolean),
+      }).catch((e) => console.warn(`[journey] catalog not updated: ${errText(e)}`));
     } finally {
       await context.close();
     }

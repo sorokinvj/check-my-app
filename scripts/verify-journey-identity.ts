@@ -1,0 +1,167 @@
+// CHE-231 — the journey identity rules, driven against the titles production
+// actually wrote.
+//
+// src/lib/journey-key.ts decides whether two journey titles name the same
+// journey. That decision is what makes a journey the unit of a run instead of a
+// row a run invents, so it gets the same treatment as the other deterministic
+// gates in this repo: the real data, asserted, on every `npm run verify:all`.
+//
+// The fixture is every distinct journey title joblander.app produced in 60 runs
+// (scripts/fixtures/journey-titles-joblander.json, exported from production D1
+// on 2026-09-14): 167 titles for roughly a dozen journeys.
+//
+// Run: npm run verify:journeys       (add --print to see the clusters)
+
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+import {
+  anchorOf,
+  journeyKey,
+  matchJourney,
+  normalizeTitle,
+  signatureOf,
+  tokenize,
+  type JourneyCandidate,
+} from "../src/lib/journey-key";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const fixture = JSON.parse(
+  readFileSync(join(here, "fixtures", "journey-titles-joblander.json"), "utf8"),
+) as { source: string; rows: Array<{ title: string; rows: number }> };
+
+let failures = 0;
+function check(what: string, ok: boolean, detail = "") {
+  if (ok) {
+    console.log(`  ok   ${what}`);
+  } else {
+    failures += 1;
+    console.log(`  FAIL ${what}${detail ? ` — ${detail}` : ""}`);
+  }
+}
+
+// The resolver as the agent runs it: read the catalog in creation order, match,
+// or create a new entry. Greedy and order-dependent by construction — which is
+// why the assertions below are about membership, not about the order titles
+// happened to arrive in.
+interface Cluster extends JourneyCandidate {
+  aliases: string[];
+  titles: Array<{ title: string; rows: number }>;
+}
+
+function cluster(rows: Array<{ title: string; rows: number }>): Cluster[] {
+  const catalog: Cluster[] = [];
+  for (const row of rows) {
+    const hit = matchJourney(row.title, catalog);
+    if (hit) {
+      const c = hit as Cluster;
+      if (!c.aliases.some((a) => normalizeTitle(a) === normalizeTitle(row.title))) {
+        c.aliases.push(row.title);
+      }
+      c.titles.push(row);
+      continue;
+    }
+    catalog.push({
+      key: journeyKey(row.title, catalog.map((c) => c.key)),
+      title: row.title,
+      aliases: [row.title],
+      titles: [row],
+    });
+  }
+  return catalog;
+}
+
+const clusters = cluster(fixture.rows);
+const byKey = new Map(clusters.map((c) => [c.key, c]));
+const keyOf = (title: string): string | null => matchJourney(title, clusters)?.key ?? null;
+
+console.log(`\n${fixture.rows.length} distinct titles → ${clusters.length} journeys\n`);
+if (process.argv.includes("--print")) {
+  for (const c of clusters.sort((a, b) => b.titles.length - a.titles.length)) {
+    const rows = c.titles.reduce((n, t) => n + t.rows, 0);
+    console.log(`  ${c.key}  (${c.titles.length} titles, ${rows} rows)  "${c.title}"`);
+    for (const t of c.titles.slice(1)) console.log(`        · ${t.title}`);
+  }
+  console.log("");
+}
+
+console.log("Collapse");
+// 167 titles for a product with a dozen flows. The bounds are wide on purpose:
+// this asserts that identity collapses wording, not that a particular rule set
+// produces a particular number.
+check("the 167 titles collapse to fewer than 30 journeys", clusters.length < 30, `got ${clusters.length}`);
+check("…and to more than 8 — collapsing everything would be just as wrong", clusters.length > 8, `got ${clusters.length}`);
+
+console.log("\nAnchored journeys — one per app");
+const anchorGroups = new Map<string, Set<string>>();
+for (const row of fixture.rows) {
+  const anchor = anchorOf(row.title);
+  if (!anchor) continue;
+  const key = keyOf(row.title);
+  if (!key) continue;
+  if (!anchorGroups.has(anchor)) anchorGroups.set(anchor, new Set());
+  anchorGroups.get(anchor)!.add(key);
+}
+for (const [anchor, keys] of [...anchorGroups].sort()) {
+  check(`every "${anchor}" title lands on one journey`, keys.size === 1, `${keys.size} journeys: ${[...keys].join(", ")}`);
+}
+
+console.log("\nJourneys that must stay apart");
+const apart: Array<[string, string]> = [
+  ["Sign up for a new account", "Log in to an existing account"],
+  ["Sign up for a new account", "Reset forgotten password"],
+  ["Install the Chrome extension for live interview hints", "Log in to existing account"],
+  ["Configure insight preferences", "Browse tutorials"],
+  ["Practice an interview with the AI coach", "Build and lock a Story answer"],
+  ["Practice an interview with the AI coach", "Review past practice sessions"],
+  ["Explore pricing and upgrade plan", "Explore tutorials"],
+];
+for (const [a, b] of apart) {
+  const ka = keyOf(a);
+  const kb = keyOf(b);
+  check(`"${a}" ≠ "${b}"`, Boolean(ka) && Boolean(kb) && ka !== kb, `both → ${ka}`);
+}
+
+console.log("\nJourneys that must land together");
+const together: Array<[string, string]> = [
+  ["Sign up for a new account", "Account Registration"],
+  ["Sign up for a new account", "New user signs up via email/password"],
+  ["Log in to an existing account", "Sign in with email and password"],
+  ["Log in to an existing account", "User Authentication (Log In)"],
+  ["Install the Chrome extension for live interview hints", "Installing the Browser Extension"],
+  ["Practice an interview with the AI coach", "Practice interviewing with an AI coach"],
+  ["Practice an interview with the AI coach", "AI Interview Practice Session"],
+  ["Build and lock a Story answer", "Story Building & Management"],
+  ["Browse tutorials", "Explore Tutorials and Guides"],
+  ["Configure insight preferences", "Configure Insight Preferences"],
+];
+for (const [a, b] of together) {
+  const ka = keyOf(a);
+  const kb = keyOf(b);
+  check(`"${a}" = "${b}"`, Boolean(ka) && ka === kb, `${ka} vs ${kb}`);
+}
+
+console.log("\nStability");
+// Resolving a title that is already in the catalog must return its entry, not
+// create a new one — otherwise a journey's history restarts every run, which is
+// the failure this whole change exists to end.
+const unresolved = fixture.rows.filter((r) => !matchJourney(r.title, clusters));
+check("every known title resolves against the finished catalog", unresolved.length === 0, `${unresolved.length} did not`);
+
+// A journey's key must not depend on the wording that happened to arrive first.
+const reversed = cluster([...fixture.rows].reverse());
+check(
+  "reversing the order the titles arrive in changes no journey count by more than 2",
+  Math.abs(reversed.length - clusters.length) <= 2,
+  `${clusters.length} forward vs ${reversed.length} reversed`,
+);
+
+console.log("\nMechanics");
+check("titles normalise away decoration", normalizeTitle("Practice an interview (primary value action)") === "practice an interview", normalizeTitle("Practice an interview (primary value action)"));
+check("stemming joins stories/story", tokenize("Build interview stories").includes("story"), tokenize("Build interview stories").join(" "));
+check("an unanchored title still gets a key", journeyKey("Practice an interview with the AI coach").length > 0);
+check("keys stay unique inside an app", journeyKey("Practice an interview", ["practic-interview"]) !== "practic-interview");
+check("an anchor beats a token count", signatureOf("Sign up and practice an interview").anchor === "signup");
+
+console.log(`\n${failures === 0 ? "PASS" : `FAIL — ${failures} check(s)`}`);
+process.exit(failures === 0 ? 0 : 1);
