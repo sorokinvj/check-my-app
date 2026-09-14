@@ -85,6 +85,23 @@ committed half still pointing at a dead port. The broker is
    after changing anything under `extension-runner/`; the container image is
    rebuilt from that Dockerfile on deploy.
 
+   **Without a working Docker on this machine**, that deploy cannot build.
+   `docker pull mcr.microsoft.com/playwright:v1.58.2-noble` fails here with
+   `context deadline exceeded` — the same registry-reachability problem the
+   local-infra notes record. A config-only change (instance type, instances,
+   bindings) does not need a build at all: `image` also accepts a Cloudflare
+   registry URI, so point it at the image already pushed —
+   ```
+   "image": "registry.cloudflare.com/<account>/checkmyapp-extension-native-probe-extensionrunner:<tag>"
+   ```
+   read the current one out of
+   `GET /accounts/{account}/containers/applications/{app}` — deploy, then put
+   the Dockerfile path back. A change to `extension-runner/` code still needs
+   a real build and cannot ship this way; the deployed image then lags the
+   branch, which the deploy output makes visible. Config changes roll out
+   gradually: the application keeps reporting the old `vcpu`/`memory_mib`
+   until `active_rollout_id` stops `progressing`.
+
 2. **The broker**, holding the only copy of the token:
    ```
    PROBE_ACCESS_TOKEN=... node spikes/extension-browser-run/proxy.mjs
