@@ -8,14 +8,27 @@ export function parseMinuteBalance(text) {
   return balance;
 }
 
+// Measured 2026-09-14, same account and build, sign-in to the dashboard showing
+// its minute balance: 0.8s from the operator's machine, 2.1s in an idle
+// executor, 7.0s in one running the combined scenario, and the whole preflight
+// (sign-in, balance, history, practice discovery) 9s idle. The 20s this waited
+// for was set against the idle case and timed out twice in the combined one,
+// which reads as a product failure and is not one.
+//
+// Unlike the extension's ~2.8s Stop confirmation, this budget models nothing on
+// the product's side — it is only our patience. The page either shows the
+// balance or shows a credential rejection, and waiting longer for one of those
+// cannot mask a defect; timing out before either appears invents one.
+const SIGN_IN_BUDGET_MS = 60_000;
+
 export async function signInAccount(page, email, password) {
   if (!email || !password) throw new Error('Test-account access is required for the minute balance');
-  await page.goto('https://joblander.app/login', { waitUntil: 'domcontentloaded', timeout: 20_000 });
+  await page.goto('https://joblander.app/login', { waitUntil: 'domcontentloaded', timeout: 30_000 });
   await page.getByPlaceholder('Email address', { exact: true }).fill(email);
   await page.getByPlaceholder('Password', { exact: true }).fill(password);
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   await page.waitForFunction(() => /(?:^|\n)Minutes\s*(?:\n|$)/.test(document.body.innerText)
-    || /invalid (?:login|credentials|password|email)|incorrect (?:email|password)|wrong password|too many (?:attempts|requests)|auth\/(?:invalid-credential|wrong-password|user-not-found)/i.test(document.body.innerText), undefined, { timeout: 20_000 });
+    || /invalid (?:login|credentials|password|email)|incorrect (?:email|password)|wrong password|too many (?:attempts|requests)|auth\/(?:invalid-credential|wrong-password|user-not-found)/i.test(document.body.innerText), undefined, { timeout: SIGN_IN_BUDGET_MS });
   if (credentialRejection(await page.locator('body').innerText())) return { credentialRejected: true };
   await page.getByText('Minutes', { exact: true }).waitFor({ state: 'visible', timeout: 1000 });
   return { signedIn: true };

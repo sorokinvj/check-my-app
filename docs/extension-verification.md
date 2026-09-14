@@ -236,6 +236,47 @@ load. That is the next paid run's job, and the timing breakdown added to
 `stopWithConfirmation` will say which sub-step the budget went to if it
 fails again.
 
+### The same defect again, one step earlier: account preflight — 2026-09-14
+
+The first combined attempt after the CPU change never reached a paid meter.
+`/account/preflight` failed with `page.waitForFunction: Timeout 20000ms
+exceeded` — the web sign-in showed neither the minute balance nor a
+credential rejection inside its budget. Four measurements, same account,
+same build, taken rather than assumed:
+
+| Where | Sign-in to balance |
+|---|---|
+| Operator's machine, plain Chromium | **0.8s** |
+| Inside an idle executor container | **2.1s** |
+| Inside a container running the combined scenario | **7.0s** |
+| Whole `/account/preflight`, idle container (sign-in + balance + history + practice discovery) | **9s** |
+| Whole `/account/preflight`, combined scenario | **timed out at 20s, twice** |
+
+The product is fine: the login form is unchanged, the credentials are the
+ones the popup signs in with, and the balance reads 1497 — the same number
+Run 7 ended on, which also confirms none of today's probes started a paid
+meter. It is our budget that is wrong, tuned against the idle case with
+2.2× headroom and spent by the combined one.
+
+This is the Stop failure's class, one step earlier in the same run: **fixed
+timeouts inside the executor, measured in a quiet scenario, fail in the
+loaded one and read as product defects.** Worth checking the rest of this
+path against it — `readAccountBalance` and `readHistory` wait 15s each on
+the same page under the same load — though neither has failed yet and
+neither is changed here on that basis alone.
+
+**Fix: the sign-in budget goes 20s → 60s** (`SIGN_IN_BUDGET_MS`,
+`extension-runner/joblander-account.mjs`). Unlike the extension's ~2.8s
+confirmation window, this number models nothing on the product's side — it
+is only our patience. The page either shows the balance or shows a
+credential rejection; waiting longer for one of those cannot hide a defect,
+while timing out before either appears invents one.
+
+**Not deployed.** This is container code, so it needs an image rebuild, and
+this machine cannot build (see the Docker note in "Running the stand"). The
+deployed executor still carries the 20s budget, so a combined run attempted
+before that rebuild will fail here again.
+
 ## Previous checkpoint — 2026-09-14 10:47 UTC
 
 PR #81 remains on `feat/chrome-extension-targets`; pushed head `c904293` has

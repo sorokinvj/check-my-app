@@ -11,6 +11,10 @@ const token = rawToken.startsWith('RUNNER_CONTROL_TOKEN=') ? rawToken.slice('RUN
 const password = (await readFile(passwordFile, 'utf8')).trim();
 const sessionSeconds = Number(process.env.CMA_SESSION_SECONDS ?? 0);
 const evidenceFile = process.env.CMA_EVIDENCE_FILE;
+const scenario = process.env.CMA_SCENARIO ?? 'interview';
+if (!['interview', 'practice-extension'].includes(scenario)) throw new Error('CMA_SCENARIO must be interview or practice-extension');
+const combined = scenario === 'practice-extension';
+if (combined && !sessionSeconds) throw new Error('The combined scenario exists to exercise two paid meters; it needs CMA_SESSION_SECONDS');
 if (sessionSeconds && (process.env.CMA_ALLOW_SESSION !== '1' || !evidenceFile || !Number.isInteger(sessionSeconds) || sessionSeconds < 125 || sessionSeconds > 300)) throw new Error('A paid session requires CMA_ALLOW_SESSION=1, CMA_SESSION_SECONDS=125..300 and CMA_EVIDENCE_FILE');
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function call(path, input, method) {
@@ -20,7 +24,14 @@ async function call(path, input, method) {
     ...(input === undefined ? {} : { body: JSON.stringify(input) }),
     signal: AbortSignal.timeout(120_000),
   });
-  if (!response.ok) throw new Error(`Runner ${path}: HTTP ${response.status}`);
+  // The body can carry account data, so only the executor's own `error` string
+  // is surfaced — every one of those is a code-authored message. Without it a
+  // failure here is just an HTTP code, which is what made the first combined
+  // attempt on 2026-09-14 undiagnosable.
+  if (!response.ok) {
+    const reason = await response.json().then(payload => payload?.error).catch(() => undefined);
+    throw new Error(`Runner ${path}: HTTP ${response.status}${reason ? ` — ${reason}` : ''}`);
+  }
   return response.json();
 }
 async function control(predicate) {
@@ -36,9 +47,13 @@ async function control(predicate) {
 try {
   const session = await call('/session', {
     ownerRunId: process.env.CMA_OWNER_RUN_ID ?? `native-replay-${Date.now()}`,
-    extensionId: 'hafhjepjihcimcljkdphpinannbdmnhf', targetUrl: 'fixture:interview',
-    maxDurationSeconds: 600, allowSessions: sessionSeconds > 0, maxSessionSeconds: sessionSeconds || 60,
-    stimulusMode: process.env.CMA_STIMULUS_MODE ?? 'interview',
+    extensionId: 'hafhjepjihcimcljkdphpinannbdmnhf',
+    // The combined scenario captures the real practice page; interview-only
+    // captures the local fixture. extensionInput() picks the same pair.
+    targetUrl: combined ? 'https://joblander.app/practice' : 'fixture:interview',
+    scenario,
+    maxDurationSeconds: 900, allowSessions: sessionSeconds > 0, maxSessionSeconds: sessionSeconds || 60,
+    stimulusMode: process.env.CMA_STIMULUS_MODE ?? (combined ? 'practice' : 'interview'),
   });
   console.log(JSON.stringify({ installedVersion: session.installedVersion, sessionId: session.sessionId }));
   await call('/popup', {});
@@ -68,6 +83,17 @@ try {
     await call('/popup', {});
     const started = await call('/session/start', {});
     console.log(JSON.stringify({ captureStarted: started.started, limitSeconds: sessionSeconds }));
+    // CMA_SCENARIO=practice-extension adds the second paid meter, which is the
+    // only configuration that has ever failed Stop: run 7's confirmation click
+    // went unanswered with a live practice call, the capture, Xvfb and
+    // Playwright sharing one vCPU. The interview-only path above never
+    // reproduced it, so a probe that cannot start practice cannot test the fix.
+    if (combined) {
+      const preflight = await call('/practice/preflight', {});
+      if (!preflight.startAvailable) throw new Error('Practice Start was not available for the combined scenario');
+      const practice = await call('/practice/start', {});
+      console.log(JSON.stringify({ practiceStarted: practice.started, meters: practice.sessions?.length ?? 0 }));
+    }
     const deadline = Date.now() + (sessionSeconds + 30) * 1000;
     while (Date.now() < deadline) {
       const state = await call('/state');
@@ -75,6 +101,11 @@ try {
       if (state.session.sessions.every(s => ['stopped', 'unverified'].includes(s.state))) break;
       await delay(5000);
     }
+    // The point of the combined run: say which meters proved their Stop and
+    // which only expired, without having to read the evidence file by hand.
+    const settled = await call('/state');
+    console.log(JSON.stringify({ meters: settled.session.sessions.map(s => ({ id: s.id, state: s.state,
+      stopObserved: s.cleanup?.applicationStopObserved ?? false, error: s.cleanup?.error ?? null })) }));
   }
 } finally {
   const final = await call('/session', undefined, 'DELETE');
