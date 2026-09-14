@@ -102,6 +102,19 @@ committed half still pointing at a dead port. The broker is
    `/tmp/checkmyapp-workflow.env` — which must name the **production** model
    tier, not the Sonnet/Opus defaults that invalidated runs 1-7; run
    `node scripts/verify-model-config.mjs` before spending anything.
+   ```
+   npx wrangler d1 migrations apply checkmyapp --local \
+     --config spikes/extension-browser-run/wrangler-workflow.jsonc
+   npx wrangler dev --config spikes/extension-browser-run/wrangler-workflow.jsonc \
+     --env-file /tmp/checkmyapp-workflow.env     # /health answers {"ok":true}
+   ```
+   The D1 and R2 it binds are the **local** miniflare replicas under
+   `spikes/extension-browser-run/.wrangler/state`, not production — despite
+   the production database id in the config, which `--local` ignores. That
+   replica starts empty: runs 1-7 left nothing behind in it, so the seed
+   (owner, App with `extensionConfig`, encrypted credentials, counters) has
+   to be created through the dashboard in step 4 each time the state
+   directory is new.
 
 4. **The local product** (`npm run dev`, port 3107 per the Workflow's
    `APP_URL`) serves the owner dashboard a run is submitted through.
