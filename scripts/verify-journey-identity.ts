@@ -210,6 +210,83 @@ console.log("\nA surface does not split a journey from its own history");
   );
 }
 
+// CHE-247: the case no token rule could have decided. Measured on current main
+// before this change: "Practice with interview assistance" shares 2 of the
+// shorter title's 3 tokens with "Interview assistance and session minutes" —
+// 0.67 against a 0.60 threshold — so the combined two-meter scenario was
+// absorbed into the single-meter one and had no history anywhere.
+console.log("\nWhat the product does outranks what the title says");
+{
+  const interview = { key: "interview-assistanc-session", title: "Interview assistance and session minutes", surface: null, scenario: "interview" };
+  const practice = { key: "ai-practic-session", title: "AI practice and session minutes", surface: null, scenario: "practice" };
+  const combined = { key: "interview-assistanc-practice-extension", title: "Practice with interview assistance", surface: null, scenario: "practice-extension" };
+  const catalog = [interview, practice, combined];
+
+  // The merge this ticket exists to stop, from both directions.
+  check(
+    "the combined scenario resolves to itself, not to the interview journey",
+    matchJourney("Practice with interview assistance", catalog, null, "practice-extension")?.key === combined.key,
+    String(matchJourney("Practice with interview assistance", catalog, null, "practice-extension")?.key),
+  );
+  check(
+    "…and the interview journey still resolves to itself",
+    matchJourney("Interview assistance and session minutes", catalog, null, "interview")?.key === interview.key,
+    String(matchJourney("Interview assistance and session minutes", catalog, null, "interview")?.key),
+  );
+  check(
+    "the practice journey is not pulled into either",
+    matchJourney("AI practice and session minutes", catalog, null, "practice")?.key === practice.key,
+    String(matchJourney("AI practice and session minutes", catalog, null, "practice")?.key),
+  );
+
+  // The strong form: a scenario outranks even a title we already agreed on,
+  // because it is gated in code and the title is a description.
+  check(
+    "a byte-identical title on a different scenario is a different journey",
+    matchJourney("Interview assistance and session minutes", [interview], null, "practice-extension") === null,
+    String(matchJourney("Interview assistance and session minutes", [interview], null, "practice-extension")?.key),
+  );
+
+  // And the rule that keeps history: unknown on either side matches anything,
+  // so the rows that predate the column are not split from their own past.
+  check(
+    "a proposal with no scenario still matches a row that has one",
+    matchJourney("Interview assistance and session minutes", [interview], null, null)?.key === interview.key,
+    String(matchJourney("Interview assistance and session minutes", [interview], null, null)?.key),
+  );
+  check(
+    "…and a scenario matches a row that has none",
+    matchJourney("Sign in", [{ key: "login", title: "Sign in", surface: null }], null, "interview")?.key === "login",
+    String(matchJourney("Sign in", [{ key: "login", title: "Sign in", surface: null }], null, "interview")?.key),
+  );
+
+  // Without the scenario, the merge is still there — this is the regression
+  // guard: if someone removes the discriminator, this check fails rather than
+  // the catalog quietly absorbing a journey again.
+  const titleOnly = [
+    { key: "interview-assistanc-session", title: "Interview assistance and session minutes", surface: null },
+  ];
+  check(
+    "the underlying titles DO merge without a scenario — that is why this exists",
+    matchJourney("Practice with interview assistance", titleOnly, null, null)?.key === "interview-assistanc-session",
+    String(matchJourney("Practice with interview assistance", titleOnly, null, null)?.key),
+  );
+
+  // Keys. The collision that matters is the same title arriving under two
+  // scenarios — which is exactly what a byte-identical title on a different
+  // scenario now produces, since it is no longer allowed to match.
+  const k1 = journeyKey("Session minutes", [], null, "interview");
+  const k2 = journeyKey("Session minutes", [k1], null, "practice-extension");
+  check("a taken key is scoped by scenario, not numbered", k2.endsWith("-practice-extension"), `${k1} → ${k2}`);
+  // A third of the same title and scenario has nothing left to say about
+  // itself, so it falls back to numbering off the base — "session-minut-2",
+  // not "session-minut-practice-extension-2". Numbering is the last resort and
+  // it says "same shape, different journey", which is all that is true here.
+  check("…and a third falls back to a number off the base",
+    journeyKey("Session minutes", [k1, k2], null, "practice-extension") === "session-minut-2",
+    journeyKey("Session minutes", [k1, k2], null, "practice-extension"));
+}
+
 console.log("\nA surface is a place, not a sentence about one");
 {
   check('"/pricing → /sign-up" is not a path', normalizeSurface("/pricing → /sign-up") === null, String(normalizeSurface("/pricing → /sign-up")));

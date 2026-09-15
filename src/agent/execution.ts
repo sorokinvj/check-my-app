@@ -31,7 +31,7 @@ import { classifyGap, gapEvidenceText } from "./gap-classes";
 import { cutUndrivenClaims, type GateStep } from "./findings-gate";
 import { summaryFallback } from "@/lib/verdict-language";
 import { summarizeWalk } from "./summary";
-import { journeyMetric, recordWalk, resolveJourney } from "./journey-catalog";
+import { journeyMetric, normalizeScenario, recordWalk, resolveJourney } from "./journey-catalog";
 import { normalizeSurface } from "@/lib/journey-key";
 import { ExtensionRuntimeError } from "./extension-error";
 import { extensionAccountingStep, extensionProductFailureStep } from "./extension-evidence";
@@ -134,7 +134,12 @@ export async function walkOneJourney(args: {
     // a single step is written. The identity rules are in lib/journey-key.ts;
     // a run with no App row gets the key and no catalog row. Never fatal: a
     // catalog we could not read costs this journey its history, not its walk.
-    const identity = await resolveJourney(env, run, proposed.title, proposed.surface).catch((err) => {
+    // CHE-247: the scenario goes in with the title. extension-discovery.ts has
+    // been setting it all along and the browser has been launched with it; it
+    // simply never reached identity, which is why "Practice with interview
+    // assistance" was absorbed into "Interview assistance and session minutes"
+    // at 0.67 token overlap and the two-meter scenario had no history anywhere.
+    const identity = await resolveJourney(env, run, proposed.title, proposed.surface, proposed.extensionScenario).catch((err) => {
       console.warn(`[journey] identity unresolved for "${proposed.title}": ${errText(err)}`);
       return { appJourneyId: null, key: null, isNew: false };
     });
@@ -154,6 +159,7 @@ export async function walkOneJourney(args: {
         appJourneyId: identity.appJourneyId,
         journeyKey: identity.key,
         surface: normalizeSurface(proposed.surface),
+        scenario: normalizeScenario(proposed.extensionScenario),
         price: metric?.price ?? null,
         conversion: metric?.conversion ?? null,
       },
@@ -435,6 +441,7 @@ export async function walkOneJourney(args: {
         status: journeyStatus(stepStatuses),
         plan: walkedSteps.map((s) => s.label).filter(Boolean),
         surface: proposed.surface,
+        scenario: proposed.extensionScenario,
         metric,
       }).catch((err) => console.warn(`[journey] catalog not updated: ${errText(err)}`));
     } catch (err) {
@@ -462,6 +469,7 @@ export async function walkOneJourney(args: {
         status: abortedStatus,
         plan: walkedSteps.map((s) => s.label).filter(Boolean),
         surface: proposed.surface,
+        scenario: proposed.extensionScenario,
         metric,
       }).catch((e) => console.warn(`[journey] catalog not updated: ${errText(e)}`));
     } finally {
