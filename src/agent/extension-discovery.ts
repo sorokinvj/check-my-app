@@ -38,7 +38,7 @@ export function shapeExtensionDiscovery(identity: ExtensionSession, observations
         "Start JobLander Insights on the interview page.",
         "Receive a new answer relevant to the interview question.",
         "Observe the session through its allotted duration and end it with confirmation.",
-        "Check the new session's duration, minute debit and unchanged balance after Stop.",
+        "Check the new session's duration, minute debit and when the balance settles after Stop.",
       ],
     });
     if (practice) journeys.push({ title: "AI practice and session minutes", extensionScenario: "practice", steps: [
@@ -46,7 +46,7 @@ export function shapeExtensionDiscovery(identity: ExtensionSession, observations
       "Prepare the practice page with Aria and English, then check the microphone.",
       "Start practice with the microphone on and receive a relevant coach response to the candidate's answer.",
       "Observe practice through its allotted duration, end it and see Start call again.",
-      "Check its duration, minute debit and unchanged balance after Stop.",
+      "Check its duration, minute debit and when the balance settles after Stop.",
     ] });
     if (practice && names.has("Show JobLander Insights")) journeys.push({ title: "Practice with interview assistance", extensionScenario: "practice-extension", steps: [
       "Sign in to the extension and read the same test account's minute balance and history.",
@@ -54,7 +54,7 @@ export function shapeExtensionDiscovery(identity: ExtensionSession, observations
       "Open the extension popup on the practice page and start interview assistance first.",
       "Start practice with the microphone on and receive a relevant coach response and a new extension answer.",
       "Observe both sessions through their allotted durations and end both.",
-      "Check each duration separately, the sum of the two rounded minute debits and unchanged balance after both sessions end.",
+      "Check each duration separately, the sum of the two rounded minute debits and when the balance settles after both sessions end.",
     ] });
     if (names.has("Sign in with email")) journeys.push({ title: "Email sign-in", steps: [
       "Open the extension and choose Sign in with email.",

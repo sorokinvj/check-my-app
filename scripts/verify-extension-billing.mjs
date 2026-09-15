@@ -11,18 +11,37 @@ const stopped = { ...baseline, at: start + 152000, balance: 97, history: [row] }
 const later = { ...stopped, at: stopped.at + 65000 };
 const sessions = [{ id: 'extension-capture', startedAt: start, cleanup: { applicationStopObserved: true } }];
 const samples = [{ source: 'account-ui', balance: 99 }, { source: 'account-ui', balance: 98 }];
-const args = { baseline, stopped, later, sessions, samples };
+const args = { baseline, readings: [stopped, later], sessions, samples };
 assert.equal(assessUiBilling(args).cleanupConfirmed, true);
 assert.equal(assessUiBilling(args).twoMinuteSteps, true);
+assert.equal(assessUiBilling(args).postStopChange, 0, 'A balance that never moved after Stop moved by nothing');
 assert.equal(assessUiBilling({ ...args, samples: [] }).twoMinuteSteps, false, 'Final debit alone does not prove two live minute steps');
-assert.equal(assessUiBilling({ ...args, later: { ...later, balance: 96 } }).cleanupConfirmed, false);
-assert.equal(assessUiBilling({ ...args, later: { ...later, at: stopped.at + 1000 } }).cleanupConfirmed, false);
-assert.equal(assessUiBilling({ ...args, stopped: { ...stopped, balance: 98 }, later: { ...later, balance: 98 } }).cleanupConfirmed, true);
-assert.equal(assessUiBilling({ ...args, later: { ...later, history: [{ ...row, durationSeconds: 120 }] } }).status, 'inconclusive', 'Whole-second duration cannot settle a subsecond minute boundary');
-assert.equal(assessUiBilling({ ...args, later: { ...later, history: [{ ...row, dateUtc: '2026-09-11 18:00' }] } }).status, 'inconclusive');
+assert.equal(assessUiBilling({ ...args, readings: [stopped, { ...later, balance: 96 }] }).cleanupConfirmed, false);
+assert.equal(assessUiBilling({ ...args, readings: [stopped, { ...later, at: stopped.at + 1000 }] }).cleanupConfirmed, false);
+assert.equal(assessUiBilling({ ...args, readings: [{ ...stopped, balance: 98 }, { ...later, balance: 98 }] }).cleanupConfirmed, true);
+assert.equal(assessUiBilling({ ...args, readings: [stopped, { ...later, history: [{ ...row, durationSeconds: 120 }] }] }).status, 'inconclusive', 'Whole-second duration cannot settle a subsecond minute boundary');
+assert.equal(assessUiBilling({ ...args, readings: [stopped, { ...later, history: [{ ...row, dateUtc: '2026-09-11 18:00' }] }] }).status, 'inconclusive');
 assert.equal(assessUiBilling({ ...args, sessions: [{ ...sessions[0], cleanup: {} }] }).cleanupConfirmed, false);
+
+// Cessation is the meter having stopped, not the meter never having moved.
+// The minutes of the session that just ended are debited in the window right
+// after Stop, so the old one-comparison rule confirmed or refused depending on
+// whether the debit landed before our first look (#194 vs #196, CHE-250).
+const settling = { baseline, sessions, samples, readings: [
+  { ...baseline, at: start + 152000, balance: 98, history: [row] },
+  { ...baseline, at: start + 217000, balance: 97, history: [row] },
+  { ...baseline, at: start + 282000, balance: 97, history: [row] },
+] };
+assert.equal(assessUiBilling(settling).status, 'confirmed', 'A debit that posts after Stop and then settles is cessation, not a refusal');
+assert.equal(assessUiBilling(settling).observedMinutes, 3, 'What was charged is read from the settled figure, not the first one');
+assert.equal(assessUiBilling(settling).postStopChange, 1, 'What the person watching would have seen move after Stop is recorded');
+const restless = { ...settling, readings: [settling.readings[0], settling.readings[1], { ...settling.readings[2], balance: 96 }] };
+assert.equal(assessUiBilling(restless).cleanupConfirmed, false, 'A balance still moving at the last reading is not cessation');
+assert.match(assessUiBilling(restless).reason, /still changing/);
+assert.equal(assessUiBilling({ ...settling, readings: [settling.readings[0]] }).cleanupConfirmed, false, 'One reading can never show a meter has stopped');
+
 const practice = { ...row, id: 'https://example.test/practice/owned', kind: 'practice', durationSeconds: 189 };
-const both = { ...args, sessions: [...sessions, { ...sessions[0], id: 'ai-practice' }], stopped: { ...stopped, balance: 93, history: [row, practice] }, later: { ...later, balance: 93, history: [row, practice] }, samples: [{ source: 'account-ui', balance: 98 }, { source: 'account-ui', balance: 96 }] };
+const both = { ...args, sessions: [...sessions, { ...sessions[0], id: 'ai-practice' }], readings: [{ ...stopped, balance: 93, history: [row, practice] }, { ...later, balance: 93, history: [row, practice] }], samples: [{ source: 'account-ui', balance: 98 }, { source: 'account-ui', balance: 96 }] };
 assert.equal(assessUiBilling(both).expectedMinutes, 7, 'Each meter is rounded independently');
 assert.equal(assessUiBilling(both).twoMinuteSteps, true);
 const blocked = new BillingObservation({ baseline, readBalance: () => new Promise(() => {}), readSnapshot: () => new Promise(() => {}), finishTimeoutMs: 5 });
@@ -40,12 +59,12 @@ assert.equal(reads, 1);
 assert.equal(historyReads, 0, 'Failed Stop disposal must not begin the post-Stop minute wait');
 console.log('Extension billing: displayed balance, independent rounding, live minute steps, attribution and cessation gates pass');
 
-const missingMeter = assessUiBilling({ ...both, later: { ...both.later, history: [practice] } });
-assert.equal(missingMeter.cleanupConfirmed, true, 'Positive Stop and stable balance establish cessation even when a meter has no history row');
+const missingMeter = assessUiBilling({ ...both, readings: [both.readings[0], { ...both.readings[1], history: [practice] }] });
+assert.equal(missingMeter.cleanupConfirmed, true, 'Positive Stop and a settled balance establish cessation even when a meter has no history row');
 assert.equal(missingMeter.status, 'inconclusive', 'A missing meter cannot establish independent billing');
 assert.equal(missingMeter.expectedMinutes, undefined);
 assert.equal(missingMeter.observedMinutes, 7);
-assert.equal(assessUiBilling({ ...both, later: { ...both.later, balance: 92, history: [practice] } }).cleanupConfirmed, false, 'Missing history never excuses continued usage');
+assert.equal(assessUiBilling({ ...both, readings: [both.readings[0], { ...both.readings[1], balance: 92, history: [practice] }] }).cleanupConfirmed, false, 'Missing history never excuses continued usage');
 
 let submissions = 0;
 const loginPage = {

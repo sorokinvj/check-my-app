@@ -11,7 +11,7 @@ const observed = [
 ].map(read => JSON.stringify(read)).join("\n");
 const result = shapeExtensionDiscovery(identity, observed, proposed);
 assert.match(result.journeys[0].title, /Interview assistance/);
-assert.match(result.journeys[0].steps.join(" "), /new answer.*confirmation.*unchanged balance/);
+assert.match(result.journeys[0].steps.join(" "), /new answer.*confirmation.*balance settles/);
 assert.deepEqual(result.journeys.slice(0, 3).map(j => j.extensionScenario), ["interview", "practice", "practice-extension"]);
 const run = { id: "discovery-consent", targetKind: "extension", targetUrl: `https://chromewebstore.google.com/detail/${identity.extensionId}`, extensionConfig: JSON.stringify({ allowSessions: true }), testEmail: "test@example.test", testPasswordEnc: "encrypted-fixture" };
 assert.equal(result.journeys.length, 5);
