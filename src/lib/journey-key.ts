@@ -99,8 +99,13 @@ const STOPWORDS = new Set([
   "journey", "flow", "path", "step", "steps", "scenario", "case",
   "app", "application", "product", "site", "website", "page", "pages", "platform", "service",
   "core", "primary", "secondary", "main", "key", "value", "action", "actions",
-  "try", "trying", "attempt", "attempts", "attempting", "test", "testing", "check", "checking",
-  "verify", "verifying", "ensure", "make", "sure", "able", "can", "could", "should", "would",
+  // CHE-247: "check" and "verify" are NOT here, though they look like they
+  // belong. On a product whose subject is checking, they are the verb of the
+  // journey rather than noise — with them removed, "Check a web app (primary
+  // value action)" reduced to the single token [web] and could never match
+  // anything, which is how one journey came to hold twelve catalog rows.
+  "try", "trying", "attempt", "attempts", "attempting", "test", "testing",
+  "ensure", "make", "sure", "able", "can", "could", "should", "would",
   "real", "live", "full", "complete", "successful", "successfully", "properly", "correctly",
   "up", "out", "down", "off", "over", "through", "across", "back",
   "is", "are", "was", "were", "be", "been", "being", "do", "does", "did", "has", "have", "had",
@@ -120,6 +125,14 @@ const SYNONYMS: Record<string, string> = {
   edit: "manag", updat: "manag", modify: "manag", chang: "manag", management: "manag",
   // Starting something.
   start: "start", begin: "start", launch: "start", initiat: "start", run: "start", tak: "start",
+  // CHE-247: for a product whose subject IS checking, these are one verb.
+  // "Check an app", "Analyze a web app", "Run a check" and "Verify the site"
+  // name the same act, and while they were stopwords the titles reduced to one
+  // token each and could never match anything (twelve rows for one journey on
+  // checkmyapp.dev). `submit` stays mapped to "build" above: submitting a form
+  // is making something, and only "submit a URL for a check" reads otherwise —
+  // that one resolves through the check token it also carries.
+  check: "start", analyz: "start", verify: "start", verifi: "start",
   // Domain-neutral near-synonyms that show up everywhere.
   learn: "tutorial", tutorial: "tutorial", guid: "tutorial",
   demo: "demo", showcas: "demo", preview: "demo", trial: "demo",
@@ -306,6 +319,11 @@ export function sameJourney(a: JourneySignature, b: JourneySignature): boolean {
   if (a.normalized && a.normalized === b.normalized) return true;
   if (a.anchor || b.anchor) return a.anchor !== null && a.anchor === b.anchor;
   const shared = a.tokens.filter((t) => b.tokens.includes(t));
+  // Both titles reduce to the same single token: "Run an app check" and "Run a
+  // new app check" are both [start], and the two-token floor below would judge
+  // them different journeys forever. Only when BOTH are one token — [start]
+  // must not swallow [start, web].
+  if (a.tokens.length === 1 && b.tokens.length === 1) return shared.length === 1;
   if (shared.length < 2) return false;
   const smaller = Math.min(a.tokens.length, b.tokens.length);
   return smaller > 0 && shared.length / smaller >= OVERLAP;
