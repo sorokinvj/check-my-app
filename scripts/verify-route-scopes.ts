@@ -63,11 +63,26 @@ check("found route handlers on disk", found.length > 0, `${found.length} handler
 // Server actions: a file marked "use server" exports functions that are POST
 // endpoints in everything but name, and are reachable from any page that
 // imports them.
-const ACTION_FILES = ["src/app/dashboard/actions.ts", "src/app/onboarding/actions.ts", "src/app/verdict/actions.ts"];
+// Discovered, not listed: a hardcoded list of action files is the same hole
+// this whole script exists to close — a new one would simply not be looked at.
+function walkAll(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir)) {
+    const full = join(dir, entry);
+    if (statSync(full).isDirectory()) out.push(...walkAll(full));
+    else if (/\.(ts|tsx)$/.test(entry)) out.push(full);
+  }
+  return out;
+}
+const ACTION_FILES = walkAll(join(ROOT, "src/app"))
+  .filter((f) => /"use server"|'use server'/.test(readFileSync(f, "utf8")))
+  .map((f) => relative(ROOT, f))
+  .sort();
+check("found server action files", ACTION_FILES.length > 0, ACTION_FILES.join(", "));
+
 const foundActions: string[] = [];
 for (const rel of ACTION_FILES) {
   const text = readFileSync(join(ROOT, rel), "utf8");
-  check(`${rel} is a server action file`, text.includes('"use server"'));
   for (const m of text.matchAll(/export\s+async\s+function\s+(\w+)/g)) foundActions.push(`${rel}#${m[1]}`);
 }
 foundActions.sort();

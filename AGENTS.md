@@ -79,6 +79,14 @@ fails the build for one that carries none (CHE-256). Write the declaration when
 you write the query; it is checked over the registry of call sites, so the first
 one without it is caught, not the hundredth.
 
+**A GET that changes state is a GET a scanner will press.** An email security
+scanner follows every link in a message it inspects, so a link whose *load*
+performs the action is consumed by a machine before the person sees it — and
+they are then told it was already used. Invitations (CHE-257) accept on a
+button for this reason, and the same holds for any one-click link we put in an
+email later: unsubscribe, "that's fine" on a finding, a re-check link in a
+verdict mail. The load must be safe; the button is the act.
+
 **Do not wrap Prisma arguments in a generic helper.** Prisma computes its types
 from the exact argument object, so a helper of the shape `f<T>(args: T): T`
 re-infers them and `orderBy: { createdAt: "desc" }` widens to `string`. The
