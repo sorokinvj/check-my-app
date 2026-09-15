@@ -11,7 +11,7 @@ import { FindingsList } from "@/components/findings-list";
 import { EnableWatchButton, FullRecheckButton, RecheckButton } from "@/components/verdict-actions";
 import { ExportSpecs } from "@/components/export-specs";
 import { TrackOnView, TrackedLink } from "@/components/track";
-import { canMutateOwned, getOptionalUser } from "@/lib/auth";
+import { canMutateOwned, getOptionalUser, optionalTeamContext } from "@/lib/auth";
 import { viewerCapabilities } from "@/lib/viewer-capabilities";
 import { FINDING_PUBLIC_SELECT } from "@/lib/finding-fields";
 import { fullRechecksRemaining } from "@/lib/plans";
@@ -130,6 +130,8 @@ export default async function VerdictPage({
   // so "Export to GitHub" renders in its connected state. Anonymous viewers get
   // the connect path (the export API redirects them to sign-in).
   const viewer = await getOptionalUser(prisma);
+  // CHE-253: the allowance shown to a signed-in viewer is their team's.
+  const viewerTeam = await optionalTeamContext(prisma, viewer);
   // CHE-202: an ephemeral run has no App and gets none — the lookup is skipped
   // rather than tolerated, so a preview hostname that happens to match an
   // onboarded app's slug never borrows that app's repo connection.
@@ -158,7 +160,7 @@ export default async function VerdictPage({
   // reads the owner's current plan).
   const fullRecheckAllowance =
     caps.fullRecheck && viewer
-      ? await fullRechecksRemaining(prisma, { id: viewer.id, plan: viewer.plan as UserPlan })
+      ? await fullRechecksRemaining(prisma, { id: viewer.id, plan: (viewerTeam?.team.plan ?? "free") as UserPlan })
       : null;
   // The refusal of a full re-check comes back as ?recheck=<reason>, worded by
   // fullRecheckGate in src/lib/plans.ts; both of its refusals start with

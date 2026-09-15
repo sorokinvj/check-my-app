@@ -5,9 +5,13 @@ import { nextRunNumber } from "./db";
 import { triggerRun } from "./trigger";
 import { effectiveSiteCap } from "./site-cap";
 
+// CHE-253: `owner` is the person acting and the team they act for. The quota
+// and the plan are the team's; ownerId on the new run stays the person, because
+// attribution is what isOwnRun (src/agent/notify-verdict.ts) reads to decide
+// whether a verdict about one of our own hosts is silenced.
 export async function startSavedApp(
   db: PrismaClient,
-  owner: { id: string; plan: UserPlan },
+  owner: { id: string; teamId: string | null; plan: UserPlan },
   appId: string,
   deps = { trigger: triggerRun, siteCap: effectiveSiteCap },
 ): Promise<{ publicId: string } | { error: string }> {
@@ -22,7 +26,7 @@ export async function startSavedApp(
   if (!gate.ok) return { error: gate.reason };
   const run = await db.run.create({
     data: {
-      runNumber: await nextRunNumber(db), ownerId: owner.id, appId: app.id,
+      runNumber: await nextRunNumber(db), ownerId: owner.id, teamId: owner.teamId, appId: app.id,
       targetUrl: app.targetUrl, appSlug: app.appSlug, targetKind: app.targetKind,
       extensionId: app.extensionId, extensionConfig: app.extensionConfig,
       testEmail: app.testEmail, testPasswordEnc: app.testPasswordEnc,

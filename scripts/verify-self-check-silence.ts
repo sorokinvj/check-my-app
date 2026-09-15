@@ -281,6 +281,47 @@ async function main(): Promise<void> {
       isOwnRun({ ownerId: null, watchId: "w" }) &&
       !isOwnRun({ ownerId: null, watchId: null }),
   );
+  // CHE-253: ownership became a team's. This case is the one that would strand
+  // the rule — a run written with a team and no owner. It fails against the
+  // code as it stood before teams existed, which is the only kind of assertion
+  // worth adding to a predicate that already passes.
+  check(
+    "isOwnRun: a team-owned run is ours even with no ownerId",
+    isOwnRun({ ownerId: null, teamId: "team_u", watchId: null }),
+  );
+  check(
+    "a team-owned run of OUR host is silenced",
+    silenceReason({
+      targetUrl: "https://checkmyapp.dev/dashboard",
+      ownRun: isOwnRun({ ownerId: null, teamId: "team_u", watchId: null }),
+      ownedByTestAccount: false,
+    }) === "our own product, checked by us",
+  );
+  check(
+    "…and an anonymous visitor's free check of the same host still gets its mail",
+    silenceReason({
+      targetUrl: "https://checkmyapp.dev/",
+      ownRun: isOwnRun({ ownerId: null, teamId: null, watchId: null }),
+      ownedByTestAccount: false,
+    }) === null,
+  );
+  // The owner's rule of 2026-09-08, stated as four rows rather than as prose:
+  // the HOST answers "is this app ours", the ACCOUNT answers "whose run is
+  // this", and they are different questions. Teams add a third way to say
+  // "ours", which is exactly the kind of addition that flattens a distinction
+  // by accident — so each combination is asserted, not inferred.
+  for (const [label, targetUrl, ownRun, ownedByTestAccount, expected] of [
+    ["our host + a team's run", "https://checkmyapp.dev/x", true, false, "our own product, checked by us"],
+    ["our host + a stranger's run", "https://checkmyapp.dev/x", false, false, null],
+    ["a customer host + a team's run", "https://joblander.app/x", true, false, null],
+    ["a customer host + a test account", "https://joblander.app/x", true, true, "a self-check account"],
+  ] as const) {
+    check(
+      `host and account answer separately: ${label}`,
+      silenceReason({ targetUrl, ownRun, ownedByTestAccount }) === expected,
+      String(silenceReason({ targetUrl, ownRun, ownedByTestAccount })),
+    );
+  }
 
   // ─── Customer counting ─────────────────────────────────────────────────────
 

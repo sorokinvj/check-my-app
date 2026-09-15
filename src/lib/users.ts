@@ -10,9 +10,12 @@ export interface ClerkUserMirror {
   clerkUserId: string;
   email: string;
   name?: string | null;
-  clerkOrgId?: string | null;
 }
 
+// CHE-253: the mirror no longer carries a Clerk organization id. Which team a
+// person acts for is ours to answer (src/lib/teams.ts) — Clerk's organizations
+// give two roles and a third needs a paid add-on, so membership never became
+// something we could key access on.
 export async function upsertUserFromClerk(
   db: PrismaClient,
   u: ClerkUserMirror,
@@ -23,12 +26,10 @@ export async function upsertUserFromClerk(
       clerkUserId: u.clerkUserId,
       email: u.email,
       name: u.name ?? undefined,
-      clerkOrgId: u.clerkOrgId ?? undefined,
     },
     update: {
       email: u.email,
       name: u.name ?? undefined,
-      clerkOrgId: u.clerkOrgId ?? undefined,
     },
   });
 }

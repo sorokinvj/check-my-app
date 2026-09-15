@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getDbFromContext } from "@/lib/db";
 import { getOptionalUser } from "@/lib/auth";
+import { optionalTeamContext } from "@/lib/auth";
 import { encryptSecret } from "@/lib/crypto";
 import { GitHubError, validateRepoAccess } from "@/lib/github";
 import { connectGithubSchema } from "@/lib/validation";
@@ -13,6 +14,7 @@ import { connectGithubSchema } from "@/lib/validation";
 export async function POST(req: Request) {
   const db = await getDbFromContext();
   const user = await getOptionalUser(db);
+  const context = await optionalTeamContext(db, user);
   if (!user) {
     return NextResponse.json({ error: "Sign in to connect GitHub" }, { status: 401 });
   }
@@ -64,7 +66,7 @@ export async function POST(req: Request) {
     update: {},
     create: {
       ownerId: user.id,
-      orgId: user.clerkOrgId ?? null,
+      teamId: context?.team.id ?? null,
       targetUrl: run.targetUrl,
       appSlug: run.appSlug,
       targetKind: run.targetKind,

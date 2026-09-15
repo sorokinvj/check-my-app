@@ -26,9 +26,13 @@ function nextRunFrom(frequency: WatchFrequency): Date | null {
   return new Date(Date.now() + hours * 60 * 60 * 1000);
 }
 
+// CHE-253: the caller passes the person AND the team they are acting for. The
+// plan being gated against is the team's — a person does not have a plan — and
+// the App, Watch and adopted Run are stamped with the team that will pay for
+// them.
 export async function enableWatchForRun(
   db: PrismaClient,
-  user: { id: string; plan: string; clerkOrgId: string | null } | null,
+  user: { id: string; teamId: string; plan: string } | null,
   opts: { runPublicId: string; frequency: WatchFrequency; notifyOnChangeOnly: boolean },
 ): Promise<EnableWatchResult> {
   if (!user) return { kind: "unauthenticated" };
@@ -70,7 +74,7 @@ export async function enableWatchForRun(
     update: {},
     create: {
       ownerId: user.id,
-      orgId: user.clerkOrgId ?? null,
+      teamId: user.teamId,
       targetUrl: run.targetUrl,
       targetKind: run.targetKind,
       extensionId: run.extensionId,
@@ -101,6 +105,7 @@ export async function enableWatchForRun(
     create: {
       appId: app.id,
       ownerId: user.id,
+      teamId: user.teamId,
       appSlug: run.appSlug,
       targetUrl: run.targetUrl,
       frequency: opts.frequency,
@@ -125,7 +130,7 @@ export async function enableWatchForRun(
   // Adopt the source run into the owner's app + watch (becomes the baseline).
   await db.run.update({
     where: { id: run.id },
-    data: { watchId: watch.id, ownerId: user.id, appId: app.id },
+    data: { watchId: watch.id, ownerId: user.id, teamId: user.teamId, appId: app.id },
   });
 
   return { kind: "ok", slug: watch.appSlug };

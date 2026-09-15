@@ -1,6 +1,6 @@
-// Stripe → User.plan sync (CHE-40 phase 3).
+// Stripe → Team.plan sync (CHE-40 phase 3; the subject became the team in CHE-253).
 //
-// Stripe posts subscription lifecycle events here; we keep `User.plan` and the
+// Stripe posts subscription lifecycle events here; we keep `Team.plan` and the
 // stored customer/subscription ids in step. Inert until STRIPE_SECRET_KEY +
 // STRIPE_WEBHOOK_SECRET are set and the endpoint is registered in the Stripe
 // dashboard — returns 503 until then. Public route (signature-verified, not
@@ -18,6 +18,7 @@ import {
   type StripeEnv,
 } from "@/lib/stripe";
 import { isPaidOneCheck, startPaidCheck } from "@/lib/one-check";
+import { personalTeamId } from "@/lib/teams";
 import { captureServer } from "@/lib/analytics-server";
 import type { PrismaClient } from "@/generated/prisma/client";
 import type { UserPlan } from "@/lib/enums";
@@ -35,13 +36,16 @@ function planFromSubscription(env: StripeEnv, sub: Stripe.Subscription): UserPla
   return planFromPriceId(env, sub.items.data[0]?.price?.id);
 }
 
-async function findUserForSubscription(db: PrismaClient, sub: Stripe.Subscription) {
+// CHE-253: the subscription belongs to a TEAM. Resolved by the Stripe customer
+// id, then by the subscription id — never by an email, which is a person and
+// can belong to several teams.
+async function findTeamForSubscription(db: PrismaClient, sub: Stripe.Subscription) {
   const customerId = customerIdOf(sub.customer);
   if (customerId) {
-    const byCustomer = await db.user.findUnique({ where: { stripeCustomerId: customerId } });
+    const byCustomer = await db.team.findUnique({ where: { stripeCustomerId: customerId } });
     if (byCustomer) return byCustomer;
   }
-  return db.user.findFirst({ where: { stripeSubscriptionId: sub.id } });
+  return db.team.findFirst({ where: { stripeSubscriptionId: sub.id } });
 }
 
 export async function POST(req: Request) {
@@ -88,12 +92,16 @@ export async function POST(req: Request) {
         break;
       }
 
-      // A plan subscription: sync User.plan from the price.
+      // A plan subscription: sync the TEAM's plan from the price.
       if (session.mode !== "subscription") break;
       const userId = session.client_reference_id ?? session.metadata?.userId;
-      if (!userId) break; // not one of ours (checkout we didn't create)
-      const user = await db.user.findUnique({ where: { id: userId } });
-      if (!user) break;
+      // teamId is what checkout writes now; userId is the fallback for a session
+      // created before this deploy and paid after it, whose team is the buyer's
+      // personal one (CHE-253, migration 0032 derived that id from the user's).
+      const teamId = session.metadata?.teamId ?? (userId ? personalTeamId(userId) : null);
+      if (!teamId) break; // not one of ours (checkout we didn't create)
+      const team = await db.team.findUnique({ where: { id: teamId } });
+      if (!team) break;
 
       const subscriptionId =
         typeof session.subscription === "string"
@@ -106,28 +114,29 @@ export async function POST(req: Request) {
         const sub = await stripe.subscriptions.retrieve(subscriptionId);
         plan = planFromSubscription(stripeEnv, sub);
       }
-      await db.user.update({
-        where: { id: user.id },
+      await db.team.update({
+        where: { id: team.id },
         data: {
-          stripeCustomerId: customerIdOf(session.customer) ?? user.stripeCustomerId,
+          stripeCustomerId: customerIdOf(session.customer) ?? team.stripeCustomerId,
           stripeSubscriptionId: subscriptionId,
           // Unknown price → leave the plan alone rather than guessing.
           ...(plan ? { plan } : {}),
         },
       });
-      // The buyer is a signed-in owner and the browser identified with the
-      // same Clerk id, so this joins their own events without a cookie.
-      await captureServer("checkout_completed", user.id, { plan: plan ?? "unknown" });
+      // The buyer is a signed-in person and the browser identified with the
+      // same Clerk id, so this joins their own events without a cookie. The
+      // plan is the team's; the event is still theirs.
+      if (userId) await captureServer("checkout_completed", userId, { plan: plan ?? "unknown" });
       break;
     }
 
     case "customer.subscription.updated": {
       const sub = event.data.object;
-      const user = await findUserForSubscription(db, sub);
-      if (!user) break;
+      const team = await findTeamForSubscription(db, sub);
+      if (!team) break;
       const plan = planFromSubscription(stripeEnv, sub);
-      await db.user.update({
-        where: { id: user.id },
+      await db.team.update({
+        where: { id: team.id },
         data: { stripeSubscriptionId: sub.id, ...(plan ? { plan } : {}) },
       });
       break;
@@ -135,10 +144,10 @@ export async function POST(req: Request) {
 
     case "customer.subscription.deleted": {
       const sub = event.data.object;
-      const user = await findUserForSubscription(db, sub);
-      if (!user) break;
-      await db.user.update({
-        where: { id: user.id },
+      const team = await findTeamForSubscription(db, sub);
+      if (!team) break;
+      await db.team.update({
+        where: { id: team.id },
         data: { plan: "free", stripeSubscriptionId: null },
       });
       break;

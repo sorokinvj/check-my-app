@@ -73,9 +73,11 @@ export async function createRecheckRun(
       appId: true,
       ownerId: true,
       ephemeral: true,
-      // CHE-137: the owner's CURRENT plan decides the full re-check allowance,
+      teamId: true,
+      // CHE-253: the plan is the TEAM's — the person who clicks may not be the
+      // one who pays. CHE-137: the CURRENT plan decides the allowance,
       // so an upgrade takes effect on the next click with nothing to sync.
-      owner: { select: { plan: true } },
+      team: { select: { plan: true } },
     },
   });
   if (!prev) return { kind: "not_found" };
@@ -90,7 +92,7 @@ export async function createRecheckRun(
   if (prev.targetKind === "extension" && prev.ownerId && !opts.full) {
     // Extension checks always open a fresh installed product. They cannot use
     // the unmetered website survey path to bypass the on-demand allowance.
-    const gate = await assertCanStartRun(prisma, { id: prev.ownerId, plan: (prev.owner?.plan ?? "free") as UserPlan }, null, { siteCap: deps.siteCap() });
+    const gate = await assertCanStartRun(prisma, { id: prev.ownerId, plan: (prev.team?.plan ?? "free") as UserPlan }, null, { siteCap: deps.siteCap() });
     if (!gate.ok) return { kind: "quota", reason: gate.reason };
   }
   if (isAnonymous) {
@@ -128,7 +130,7 @@ export async function createRecheckRun(
   // "re-check after a deploy", and it costs what the survey says changed.
   let remaining: number | null | undefined;
   if (opts.full && prev.ownerId) {
-    const plan = (prev.owner?.plan ?? "free") as UserPlan;
+    const plan = (prev.team?.plan ?? "free") as UserPlan;
     const used = await fullRechecksUsed(prisma, prev.ownerId, deps.now());
     const gate = fullRecheckGate(plan, used, deps.now());
     if (!gate.ok) return { kind: "quota", reason: gate.reason };
@@ -157,6 +159,7 @@ export async function createRecheckRun(
       watchId: prev.watchId,
       appId: prev.appId,
       ownerId: prev.ownerId,
+      teamId: prev.teamId,
       baselineRunId: prev.id,
       // CHE-74: an explicit full re-check must not be eaten by smoke/partial.
       // The same flag is what the monthly allowance counts (CHE-137).

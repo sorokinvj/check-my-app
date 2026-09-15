@@ -49,6 +49,7 @@ export interface NotifiableRun {
   targetUrl: string;
   notifyEmail: string | null;
   ownerId: string | null;
+  teamId?: string | null;
   watchId: string | null;
   baselineRunId: string | null;
 }
@@ -78,10 +79,22 @@ export function silenceReason(input: {
   return null;
 }
 
-// A run belongs to us when someone signed in started it or a watch scheduled
-// it. An ownerless run came off the public /check form.
-export function isOwnRun(run: { ownerId: string | null; watchId: string | null }): boolean {
-  return run.ownerId !== null || run.watchId !== null;
+// A run belongs to us when someone signed in started it, a team owns it, or a
+// watch scheduled it. An ownerless, teamless run came off the public /check
+// form.
+//
+// CHE-253 added teamId, and it is read here on purpose rather than left to
+// ownerId alone. Every owned run still carries its actor in ownerId, so this
+// clause changes no answer today — it means that a future run written with only
+// a team cannot silently stop being ours. When this predicate is wrong we do
+// not get a 500: we mail a customer a verdict about a page our own checker
+// broke, which is what CHE-156 cost (30 runs, 66 findings, 29 mailed out).
+export function isOwnRun(run: {
+  ownerId: string | null;
+  teamId?: string | null;
+  watchId: string | null;
+}): boolean {
+  return run.ownerId !== null || (run.teamId ?? null) !== null || run.watchId !== null;
 }
 
 // ─── What happened to the mail, as a value (CHE-224) ─────────────────────────

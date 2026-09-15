@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getDbFromContext } from "@/lib/db";
 import { getOptionalUser } from "@/lib/auth";
+import { optionalTeamContext } from "@/lib/auth";
 import { canUseFrequency } from "@/lib/plans";
 import type { UserPlan } from "@/lib/enums";
 import { updateWatchSchema } from "@/lib/validation";
@@ -11,12 +12,13 @@ import { isSelfCheckRequest, selfCheckReadOnlyResponse } from "@/lib/self-check"
 async function ownWatch(slug: string) {
   const db = await getDbFromContext();
   const user = await getOptionalUser(db);
-  if (!user) return { db, user: null, watch: null, unauthorized: true as const };
+  const context = await optionalTeamContext(db, user);
+  if (!user) return { db, user: null, team: null, watch: null, unauthorized: true as const };
   const app = await db.app.findUnique({
     where: { ownerId_appSlug: { ownerId: user.id, appSlug: slug } },
     include: { watch: true },
   });
-  return { db, user, watch: app?.watch ?? null, unauthorized: false as const };
+  return { db, user, team: context?.team ?? null, watch: app?.watch ?? null, unauthorized: false as const };
 }
 
 // PATCH /api/watch/{slug} — Screen 4 settings: frequency, notify rule, pause/resume.
@@ -30,7 +32,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ slug: 
     return NextResponse.json({ error: "Invalid input" }, { status: 400 });
   }
 
-  const { db, user, watch, unauthorized } = await ownWatch((await params).slug);
+  const { db, user, team, watch, unauthorized } = await ownWatch((await params).slug);
   if (unauthorized) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   if (!watch) return NextResponse.json({ error: "Watch not found" }, { status: 404 });
 
@@ -39,7 +41,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ slug: 
   const targetFreq = parsed.data.frequency ?? watch.frequency;
   if (
     (parsed.data.frequency || parsed.data.active === true) &&
-    !canUseFrequency(user.plan as UserPlan, targetFreq as "daily" | "every_6h" | "manual")
+    !canUseFrequency((team?.plan ?? "free") as UserPlan, targetFreq as "daily" | "every_6h" | "manual")
   ) {
     return NextResponse.json(
       { error: `Your plan doesn't allow ${targetFreq} checks.` },

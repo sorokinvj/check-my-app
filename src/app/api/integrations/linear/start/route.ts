@@ -12,8 +12,9 @@ export async function GET(req: NextRequest) {
   const appId = req.nextUrl.searchParams.get("appId");
   if (!appId) return NextResponse.json({ error: "appId required" }, { status: 400 });
 
-  const { user, db } = await requireUser();
-  if (!PLAN_LIMITS[user.plan as UserPlan].trackerIntegration) {
+  // CHE-253: the plan that carries tracker integrations is the team's.
+  const { user, db, team } = await requireUser();
+  if (!PLAN_LIMITS[team.plan as UserPlan].trackerIntegration) {
     return NextResponse.json({ error: "Tracker integrations require a paid plan." }, { status: 403 });
   }
   const app = await db.app.findFirst({ where: { id: appId, ownerId: user.id } });

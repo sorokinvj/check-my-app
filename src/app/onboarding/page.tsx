@@ -11,12 +11,12 @@ export default async function OnboardingPage({
 }: {
   searchParams: Promise<{ url?: string; type?: string }>;
 }) {
-  const { user, db } = await requireUser();
+  const { user, db, team } = await requireUser();
   const { url, type } = await searchParams;
   // CHE-95 (found by our own check): the plan cap used to announce itself only
   // after the owner had filled the whole form and pressed Save. Say it first.
   const activeWatches = await db.watch.count({ where: { ownerId: user.id, active: true } });
-  const capReason = watchCapReason(user.plan as UserPlan, activeWatches);
+  const capReason = watchCapReason(team.plan as UserPlan, activeWatches);
 
   return (
     <main className="mx-auto w-full max-w-2xl px-4 py-12">

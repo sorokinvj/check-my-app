@@ -18,6 +18,9 @@ export interface StartCheckOptions {
   input: CreateCheckInput;
   // Attribution: a signed-in owner, or the anonymous client's salted IP hash.
   ownerId: string | null;
+  // CHE-253: the team whose plan pays for this run. Null exactly when ownerId
+  // is — an anonymous check belongs to nobody and is billed to nobody.
+  teamId?: string | null;
   anonKeyHash: string | null;
   // A paid one-off check: the Stripe Checkout Session that paid for it. The
   // column is unique, so a second start on the same payment fails at the
@@ -89,6 +92,7 @@ export async function startCheck(
       deploySha: input.deploy?.sha ?? null,
       deployEnv: input.deploy?.env || null,
       ownerId: opts.ownerId,
+      teamId: opts.teamId ?? null,
       anonKeyHash: opts.anonKeyHash,
       paidCheckoutSessionId: opts.paid?.checkoutSessionId ?? null,
       ephemeral: Boolean(opts.ephemeral),

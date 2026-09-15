@@ -10,13 +10,22 @@ import { redirect } from "next/navigation";
 import { getDbFromContext } from "./db";
 import { upsertUserFromClerk } from "./users";
 import { resolveApiKeyOwner } from "./apiKeys";
+import { activeTeamContext, type TeamRow } from "./teams";
+import type { TeamScope } from "./scopes";
 import type { PrismaClient } from "@/generated/prisma/client";
 
+// CHE-253: a protected page gets the person, the team they are acting for and
+// what they may do in it — all three from one place. A page given only the user
+// would have to re-answer "which team is this" from whatever row it happens to
+// be rendering, and tenancy inferred from the row on screen is the mistake this
+// epic exists to make impossible.
 export async function requireUser(): Promise<{
   user: NonNullable<Awaited<ReturnType<PrismaClient["user"]["upsert"]>>>;
   db: PrismaClient;
+  team: TeamRow;
+  scope: TeamScope;
 }> {
-  const { userId, orgId } = await auth();
+  const { userId } = await auth();
   if (!userId) redirect("/sign-in");
 
   const clerkUser = await currentUser();
@@ -28,15 +37,16 @@ export async function requireUser(): Promise<{
   const name =
     [clerkUser?.firstName, clerkUser?.lastName].filter(Boolean).join(" ") || null;
 
-  // Capture the active Clerk organization so domain rows can org-scope (the
-  // user picks/creates an org in the Clerk <OrganizationSwitcher>); null = personal.
   const user = await upsertUserFromClerk(db, {
     clerkUserId: userId,
     email,
     name,
-    clerkOrgId: orgId ?? null,
   });
-  return { user, db };
+  // Lazily, like the mirror above: an account created before teams existed, or
+  // written straight by a webhook, gets its personal team on first use rather
+  // than being refused.
+  const { team, scope } = await activeTeamContext(db, user);
+  return { user, db, team, scope };
 }
 
 // API-route auth: resolve the signed-in user's D1 mirror, or null (no redirect).
@@ -47,7 +57,7 @@ export async function requireUser(): Promise<{
 // sign-in with no visible error (the webhook that would create the row is
 // inert until CLERK_WEBHOOK_SIGNING_SECRET is configured).
 export async function getOptionalUser(db: PrismaClient) {
-  const { userId, orgId } = await auth();
+  const { userId } = await auth();
   if (!userId) return null;
   const existing = await db.user.findUnique({ where: { clerkUserId: userId } });
   if (existing) return existing;
@@ -62,8 +72,20 @@ export async function getOptionalUser(db: PrismaClient) {
     clerkUserId: userId,
     email,
     name,
-    clerkOrgId: orgId ?? null,
   });
+}
+
+// The team an API-route caller is acting for, and what they may do in it.
+// requireUser's counterpart for routes where anonymous access is also valid:
+// the caller may be a browser session or an API key (getOwnerFromRequest), and
+// both resolve to the same team context so nothing downstream has to ask which
+// kind of caller it is looking at.
+export async function optionalTeamContext(
+  db: PrismaClient,
+  user: { id: string; name?: string | null; email: string } | null,
+) {
+  if (!user) return null;
+  return activeTeamContext(db, user);
 }
 
 // Request-level owner resolution for API routes (CHE-52): a browser presents a

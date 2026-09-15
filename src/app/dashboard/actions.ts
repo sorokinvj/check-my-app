@@ -65,14 +65,18 @@ export async function setIntegrationEndpoints(appId: string, formData: FormData)
 export async function createApiKey(
   name: string,
 ): Promise<{ id: string; name: string; rawKey: string }> {
-  const { user, db } = await requireUser();
-  if (!PLAN_LIMITS[user.plan as UserPlan].apiAccess) {
+  // CHE-253: the plan is the team's, and so is the key — a CI hook does not
+  // stop working because the person who minted it left. Who minted it stays on
+  // ownerId as attribution.
+  const { user, db, team } = await requireUser();
+  if (!PLAN_LIMITS[team.plan as UserPlan].apiAccess) {
     throw new Error("API access is available on the Business plan.");
   }
   const rawKey = generateApiKey();
   const key = await db.apiKey.create({
     data: {
       ownerId: user.id,
+      teamId: team.id,
       name: name.trim().slice(0, 100) || "API key",
       keyHash: await hashApiKey(rawKey),
     },
@@ -94,7 +98,7 @@ export async function revokeApiKey(id: string): Promise<void> {
 // TicketPolicy. The password is write-only: a blank submission leaves
 // testPasswordEnc untouched on both records.
 export async function updateAppSettings(appId: string, formData: FormData) {
-  const { user, db } = await requireUser();
+  const { user, db, team } = await requireUser();
   const app = await db.app.findFirst({
     where: { id: appId, ownerId: user.id },
     include: { watch: true, policy: true },
@@ -124,7 +128,7 @@ export async function updateAppSettings(appId: string, formData: FormData) {
   // per-plan cap, but the tier still can't select a faster cadence than allowed.
   const gate = app.targetKind === "extension" ? { ok: true as const } : await assertCanAddWatch(db, {
     ownerId: user.id,
-    plan: user.plan as UserPlan,
+    plan: team.plan as UserPlan,
     frequency,
     existingWatchId: app.watch?.id ?? null,
   });
@@ -216,8 +220,8 @@ export async function deleteApp(
 
 export async function runSavedApp(appId: string, _previous: { error: string } | null) {
   if (isSelfCheckRequest(await headers())) redirect(selfCheckRedirectPath(`/dashboard/${appId}`));
-  const { user, db } = await requireUser();
-  const result = await startSavedApp(db, { id: user.id, plan: user.plan as UserPlan }, appId);
+  const { user, db, team } = await requireUser();
+  const result = await startSavedApp(db, { id: user.id, teamId: team.id, plan: team.plan as UserPlan }, appId);
   if ("error" in result) return result;
   redirect(`/run/${result.publicId}`);
 }

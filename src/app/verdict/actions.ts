@@ -8,6 +8,7 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { getDbFromContext } from "@/lib/db";
 import { getOptionalUser } from "@/lib/auth";
+import { optionalTeamContext } from "@/lib/auth";
 import { hashClientKey } from "@/lib/crypto";
 import { createRecheckRun } from "@/lib/recheck";
 import { EPHEMERAL_WATCH_REFUSAL, enableWatchForRun } from "@/lib/watch-enable";
@@ -39,11 +40,16 @@ export async function enableWatchAction(publicId: string): Promise<void> {
   await refuseSelfCheck(publicId);
   const prisma = await getDbFromContext();
   const user = await getOptionalUser(prisma);
-  const result = await enableWatchForRun(prisma, user, {
-    runPublicId: publicId,
-    frequency: "daily",
-    notifyOnChangeOnly: true,
-  });
+  const context = await optionalTeamContext(prisma, user);
+  const result = await enableWatchForRun(
+    prisma,
+    user && context ? { id: user.id, teamId: context.team.id, plan: context.team.plan } : null,
+    {
+      runPublicId: publicId,
+      frequency: "daily",
+      notifyOnChangeOnly: true,
+    },
+  );
   switch (result.kind) {
     case "unauthenticated":
       redirect(`/sign-in?redirect_url=${encodeURIComponent(`/verdict/${publicId}`)}`);
