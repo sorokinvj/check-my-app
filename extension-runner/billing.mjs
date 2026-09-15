@@ -1,17 +1,28 @@
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-export function assessUiBilling({ baseline, stopped, later, sessions, samples = [] }) {
+// Cessation is the meter having STOPPED moving, not the meter never having
+// moved. The old rule compared one reading at Stop with one a minute later and
+// refused if they differed — but the minutes of the session that just ended are
+// debited in exactly that window, so the answer depended on whether the debit
+// landed before or after our first look: run #194 confirmed and #196 refused,
+// same scenario and same code (CHE-250). `readings` is the post-Stop series,
+// oldest first; charging has ceased when the last two agree.
+export function assessUiBilling({ baseline, readings = [], sessions, samples = [] }) {
   let cessation = {};
   const inconclusive = reason => ({ status: 'inconclusive', cleanupConfirmed: false, ...cessation, reason });
-  if (!baseline || !stopped || !later || [baseline, stopped, later].some(s => s.source !== 'account-ui' || !Number.isSafeInteger(s.balance) || !Array.isArray(s.history))) return inconclusive('The displayed balance or history is missing');
-  if (later.at - stopped.at < 65_000) return inconclusive('The post-Stop observation is too short');
-  if (later.balance !== stopped.balance) return inconclusive('The displayed balance changed after Stop');
+  const stopped = readings[0], settled = readings.at(-1), previousReading = readings.at(-2);
+  if (!baseline || readings.length < 2 || [baseline, ...readings].some(s => !s || s.source !== 'account-ui' || !Number.isSafeInteger(s.balance) || !Array.isArray(s.history))) return inconclusive('The displayed balance or history is missing');
+  if (settled.at - previousReading.at < 65_000) return inconclusive('The post-Stop observation is too short');
+  if (settled.balance !== previousReading.balance) return inconclusive('The displayed balance was still changing after Stop');
   if (!sessions.length || sessions.some(s => !s.startedAt || !s.cleanup?.applicationStopObserved)) return inconclusive('Owned application Stop is missing');
-  // Stop and a stable balance establish cessation independently of whether
+  // Stop and a settled balance establish cessation independently of whether
   // the product exposes enough history to verify each meter's rounding.
-  cessation = { cleanupConfirmed: true, observedMinutes: baseline.balance - stopped.balance, cessationMs: later.at - stopped.at };
+  // `postStopChange` is what the person watching the screen would have seen
+  // move after the product told them the session had stopped.
+  cessation = { cleanupConfirmed: true, observedMinutes: baseline.balance - settled.balance, cessationMs: settled.at - stopped.at,
+    postStopChange: stopped.balance - settled.balance, postStopSettledMs: settled.at - stopped.at };
   const previous = new Set(baseline.history?.map(h => h.id) ?? []);
-  const newRows = (later.history ?? []).filter(h => !previous.has(h.id));
+  const newRows = (settled.history ?? []).filter(h => !previous.has(h.id));
   if (newRows.length !== sessions.length) return inconclusive('The new history rows cannot be attributed to the owned sessions');
   const rows = [];
   for (const session of sessions) {
@@ -26,15 +37,19 @@ export function assessUiBilling({ baseline, stopped, later, sessions, samples = 
     rows.push(row);
   }
   const expectedMinutes = rows.reduce((sum, row) => sum + Math.ceil(row.durationSeconds / 60), 0);
-  const observedMinutes = baseline.balance - stopped.balance;
+  const observedMinutes = baseline.balance - settled.balance;
   if (observedMinutes !== expectedMinutes) return inconclusive('The visible debit does not establish the per-session rounding');
   const deltas = samples.filter(s => s.source === 'account-ui').map(s => baseline.balance - s.balance);
   const twoMinuteSteps = rows.every(r => r.durationSeconds >= 120) && deltas.includes(sessions.length) && deltas.includes(sessions.length * 2);
-  return { status: 'confirmed', cleanupConfirmed: true, expectedMinutes, observedMinutes, twoMinuteSteps, sessions: rows, cessationMs: later.at - stopped.at };
+  return { status: 'confirmed', cleanupConfirmed: true, expectedMinutes, observedMinutes, twoMinuteSteps, sessions: rows,
+    cessationMs: settled.at - stopped.at, postStopChange: stopped.balance - settled.balance, postStopSettledMs: settled.at - stopped.at };
 }
 
 export class BillingObservation {
-  constructor({ baseline, readBalance, readSnapshot, intervalMs = 15_000, cessationMs = 65_000, finishTimeoutMs = 110_000 }) {
+  // finishTimeoutMs covers the settle loop below: up to three readings with a
+  // cessation wait between each, plus the reads themselves.
+  constructor({ baseline, readBalance, readSnapshot, intervalMs = 15_000, cessationMs = 65_000, finishTimeoutMs = 240_000, maxReadings = 3 }) {
+    this.maxReadings = maxReadings;
     this.baseline = baseline; this.readBalance = readBalance; this.readSnapshot = readSnapshot;
     this.intervalMs = intervalMs; this.cessationMs = cessationMs; this.finishTimeoutMs = finishTimeoutMs; this.samples = []; this.stopping = false;
   }
@@ -60,11 +75,18 @@ export class BillingObservation {
   async finishObservations(sessions) {
     await this.task;
     try {
-      const stopped = await this.readSnapshot();
-      await delay(this.cessationMs);
-      const later = await this.readSnapshot();
-      const assessment = assessUiBilling({ baseline: this.baseline, stopped, later, sessions, samples: this.samples });
-      return { baseline: this.baseline, samples: this.samples, stopped, later, assessment };
+      // Read until two consecutive readings agree: that is the meter having
+      // stopped. A balance that never moved settles on the second reading and
+      // costs nothing extra; one still posting the ended session's minutes
+      // takes one more.
+      const readings = [await this.readSnapshot()];
+      while (readings.length < this.maxReadings) {
+        await delay(this.cessationMs);
+        readings.push(await this.readSnapshot());
+        if (readings.at(-1).balance === readings.at(-2).balance) break;
+      }
+      const assessment = assessUiBilling({ baseline: this.baseline, readings, sessions, samples: this.samples });
+      return { baseline: this.baseline, samples: this.samples, readings, stopped: readings[0], later: readings.at(-1), assessment };
     } catch { return { baseline: this.baseline, samples: this.samples, assessment: { status: 'inconclusive', cleanupConfirmed: false, reason: 'Account UI observation unavailable' } }; }
   }
 }

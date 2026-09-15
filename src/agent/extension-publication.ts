@@ -162,7 +162,7 @@ export async function prepareExtensionPublication(env: AgentEnv, runId: string, 
   const verdict: Verdict = findings.length ? "broken" : incomplete.length ? "mostly_ok" : "all_good";
   const bottomLine = [findings.length ? "A session displayed an error. All started sessions were stopped."
     : "Interview assistance, AI practice and their combined use produced new responses and stopped as expected.",
-    minuteGaps.length ? `Minute-by-minute charges and final rounding were not confirmed for ${minuteGaps.map(r => scenarioNames[r.report.scenario].toLowerCase()).join(" and ")}.` : "Session minute usage and the unchanged balance after Stop were confirmed.",
+    minuteGaps.length ? `Minute-by-minute charges and final rounding were not confirmed for ${minuteGaps.map(r => scenarioNames[r.report.scenario].toLowerCase()).join(" and ")}.` : "Session minute usage was confirmed, and charging stopped when each session did.",
     otherGaps.length ? "Some additional extension and account controls remain unverified." : "",
   ].filter(Boolean).join(" ");
   return { appLens, verdict, bottomLine, findings, costUsd: 0, usage: emptyUsage(),
