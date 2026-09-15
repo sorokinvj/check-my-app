@@ -7,6 +7,7 @@ import { freshLinearToken } from "@/lib/tracker/token";
 import { decideTicketAction } from "@/lib/tracker/decision";
 import { draftForFinding, dedupKeyForFinding } from "@/lib/tracker/file";
 import { isSelfCheckRequest, selfCheckReadOnlyResponse } from "@/lib/self-check";
+import { alreadyScoped } from "@/lib/tenant-db";
 
 // POST /api/findings/{id}/ticket — file this finding into the owner's tracker
 // using the parameters they set at onboarding (TicketPolicy) and their Linear
@@ -27,7 +28,7 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
   });
   if (!finding) return NextResponse.json({ error: "Finding not found" }, { status: 404 });
 
-  const app = await prisma.app.findUnique({
+  const app = await prisma.app.findUnique({ ...alreadyScoped("the unique key names the owner"),
     where: { ownerId_appSlug: { ownerId: user.id, appSlug: finding.run.appSlug } },
     include: { tracker: true, policy: true },
   });

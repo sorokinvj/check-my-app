@@ -6,6 +6,7 @@ import { canUseFrequency } from "@/lib/plans";
 import type { UserPlan } from "@/lib/enums";
 import { updateWatchSchema } from "@/lib/validation";
 import { isSelfCheckRequest, selfCheckReadOnlyResponse } from "@/lib/self-check";
+import { alreadyScoped } from "@/lib/tenant-db";
 
 // Resolve the caller's own Watch for an app slug (CHE-33 tenant-scoped). Returns
 // null if not signed in or the app/watch isn't theirs.
@@ -14,7 +15,7 @@ async function ownWatch(slug: string) {
   const user = await getOptionalUser(db);
   const context = await optionalTeamContext(db, user);
   if (!user) return { db, user: null, team: null, watch: null, unauthorized: true as const };
-  const app = await db.app.findUnique({
+  const app = await db.app.findUnique({ ...alreadyScoped("the unique key names the owner"),
     where: { ownerId_appSlug: { ownerId: user.id, appSlug: slug } },
     include: { watch: true },
   });
@@ -58,7 +59,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ slug: 
         : new Date(Date.now() + (frequency === "daily" ? 24 : 6) * 60 * 60 * 1000);
   }
 
-  const updated = await db.watch.update({ where: { id: watch.id }, data });
+  const updated = await db.watch.update({ ...alreadyScoped("already read in this request"), where: { id: watch.id }, data });
   return NextResponse.json({
     slug: updated.appSlug,
     active: updated.active,
@@ -77,7 +78,7 @@ export async function DELETE(_req: Request, { params }: { params: Promise<{ slug
   if (unauthorized) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   if (!watch) return NextResponse.json({ error: "Watch not found" }, { status: 404 });
 
-  await db.run.updateMany({ where: { watchId: watch.id }, data: { watchId: null } });
-  await db.watch.delete({ where: { id: watch.id } });
+  await db.run.updateMany({ ...alreadyScoped("already read in this request"), where: { watchId: watch.id }, data: { watchId: null } });
+  await db.watch.delete({ ...alreadyScoped("already read in this request"), where: { id: watch.id } });
   return NextResponse.json({ ok: true });
 }

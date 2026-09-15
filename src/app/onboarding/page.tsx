@@ -3,6 +3,7 @@ import { requireUser } from "@/lib/auth";
 import { OnboardingWizard } from "@/components/onboarding-wizard";
 import { watchCapReason } from "@/lib/plans";
 import type { UserPlan } from "@/lib/enums";
+import { ownerScoped } from "@/lib/tenant-db";
 
 // Onboarding (protected by proxy.ts). requireUser() also lazily creates the D1
 // mirror row on first visit. Prefilled with ?url= when arriving from a verdict.
@@ -15,7 +16,7 @@ export default async function OnboardingPage({
   const { url, type } = await searchParams;
   // CHE-95 (found by our own check): the plan cap used to announce itself only
   // after the owner had filled the whole form and pressed Save. Say it first.
-  const activeWatches = await db.watch.count({ where: { ownerId: user.id, active: true } });
+  const activeWatches = await db.watch.count({ ...ownerScoped(), where: { ownerId: user.id, active: true } });
   const capReason = watchCapReason(team.plan as UserPlan, activeWatches);
 
   return (

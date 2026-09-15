@@ -3,6 +3,7 @@ import { getDbFromContext } from "@/lib/db";
 import { getOwnerFromRequest } from "@/lib/auth";
 import { appSlugFromUrl } from "@/lib/utils";
 import { normalizeTargetUrl } from "@/lib/validation";
+import { publicRow } from "@/lib/tenant-db";
 
 // GET /api/checks/lookup?url=… — domain-keyed result cache (CHE-39).
 // Returns the latest completed run for the URL's domain so /check can prefill
@@ -29,7 +30,7 @@ export async function GET(req: Request) {
     OR: [{ ownerId: null }, ...(owner ? [{ ownerId: owner.id }] : [])],
   };
   const [latest, count, watch] = await Promise.all([
-    prisma.run.findFirst({
+    prisma.run.findFirst({ ...publicRow(),
       where,
       orderBy: { completedAt: "desc" },
       select: {
@@ -40,8 +41,8 @@ export async function GET(req: Request) {
         completedAt: true,
       },
     }),
-    prisma.run.count({ where }),
-    prisma.watch.findFirst({ where: { appSlug, active: true }, select: { id: true } }),
+    prisma.run.count({ ...publicRow(), where }),
+    prisma.watch.findFirst({ ...publicRow(), where: { appSlug, active: true }, select: { id: true } }),
   ]);
 
   if (!latest) {

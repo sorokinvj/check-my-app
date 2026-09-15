@@ -19,6 +19,7 @@ import { appSlugFromUrl } from "@/lib/utils";
 import { readExtensionOptions } from "@/lib/extension-target";
 import { captureServer, serverDistinctId } from "@/lib/analytics-server";
 import { startCheck, type StartCheckDeps, type StartedCheck } from "@/lib/start-check";
+import { publicRow } from "@/lib/tenant-db";
 
 export const PENDING_CHECK_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -49,13 +50,13 @@ export async function startPaidCheck(
 
   // Already started (by whichever of webhook / poll came first).
   if (pending.runId) {
-    const existing = await db.run.findUnique({
+    const existing = await db.run.findUnique({ ...publicRow(),
       where: { id: pending.runId },
       select: { id: true, publicId: true },
     });
     if (existing) return existing;
   }
-  const bySession = await db.run.findUnique({
+  const bySession = await db.run.findUnique({ ...publicRow(),
     where: { paidCheckoutSessionId: checkoutSessionId },
     select: { id: true, publicId: true },
   });
@@ -96,7 +97,7 @@ export async function startPaidCheck(
     if (!isUniqueViolation(err)) throw err;
     // Lost the race: the other starter's insert landed between our read and
     // our write. Its run is the run.
-    const winner = await db.run.findUnique({
+    const winner = await db.run.findUnique({ ...publicRow(),
       where: { paidCheckoutSessionId: checkoutSessionId },
       select: { id: true, publicId: true },
     });
@@ -130,7 +131,7 @@ export async function paidCheckState(
   if (!pending) return null;
 
   if (pending.runId) {
-    const run = await db.run.findUnique({
+    const run = await db.run.findUnique({ ...publicRow(),
       where: { id: pending.runId },
       select: { publicId: true },
     });

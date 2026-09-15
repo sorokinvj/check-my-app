@@ -4,6 +4,7 @@ import { getOptionalUser } from "@/lib/auth";
 import { decryptSecret } from "@/lib/crypto";
 import { GitHubError, openSpecsPr, specFileSlug } from "@/lib/github";
 import { isSelfCheckRequest, selfCheckReadOnlyResponse } from "@/lib/self-check";
+import { alreadyScoped, publicRow } from "@/lib/tenant-db";
 
 // POST /api/runs/{id}/export-specs — put this run's generated Playwright specs
 // into the owner's repo as a PR (never a direct push to the default branch).
@@ -20,7 +21,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     return NextResponse.json({ error: "Sign in to export specs" }, { status: 401 });
   }
 
-  const run = await db.run.findUnique({
+  const run = await db.run.findUnique({ ...publicRow(),
     where: { publicId: (await params).id },
     select: { id: true, publicId: true, runNumber: true, appSlug: true, ownerId: true, ephemeral: true },
   });
@@ -37,7 +38,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     );
   }
 
-  const app = await db.app.findUnique({
+  const app = await db.app.findUnique({ ...alreadyScoped("the unique key names the owner"),
     where: { ownerId_appSlug: { ownerId: user.id, appSlug: run.appSlug } },
     include: { repo: true },
   });

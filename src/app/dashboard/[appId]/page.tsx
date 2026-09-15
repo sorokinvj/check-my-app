@@ -11,6 +11,7 @@ import { setIntegrationEndpoints, updateAppSettings } from "../actions";
 import { DeleteAppSection } from "@/components/delete-app";
 import { fullRechecksRemaining } from "@/lib/plans";
 import type { UserPlan } from "@/lib/enums";
+import { teamOwned } from "@/lib/tenant-db";
 
 // Per-app settings (CHE-64, redesigned CHE-81). Three meaning-first sections —
 // the page will keep growing, so hierarchy comes from sections, not from a pile
@@ -32,7 +33,7 @@ export default async function AppSettingsPage({
   const { user, db, team } = await requireUser();
 
   const app = await db.app.findFirst({
-    where: { id: appId, ownerId: user.id },
+    where: { ...teamOwned(team.id), id: appId, ownerId: user.id },
     include: { watch: true, policy: true, tracker: true, repo: true, runs: { orderBy: { createdAt: "desc" }, take: 1, select: { extensionEvidence: true } } },
   });
   if (!app) notFound();

@@ -1,13 +1,14 @@
 import { NextResponse } from "next/server";
 import { getDbFromContext } from "@/lib/db";
 import { extensionReportPublished } from "@/lib/extension-target";
+import { publicRow } from "@/lib/tenant-db";
 
 // GET /api/runs/{publicId}/verdict — structured verdict for automation (the
 // MCP server, CI hooks). Same visibility as the verdict page: knowledge of the
 // unguessable publicId is the capability.
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const prisma = await getDbFromContext();
-  const run = await prisma.run.findUnique({
+  const run = await prisma.run.findUnique({ ...publicRow(),
     where: { publicId: (await params).id },
     include: {
       journeys: { orderBy: { order: "asc" }, select: { title: true, status: true, summary: true } },

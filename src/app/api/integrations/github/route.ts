@@ -5,6 +5,7 @@ import { optionalTeamContext } from "@/lib/auth";
 import { encryptSecret } from "@/lib/crypto";
 import { GitHubError, validateRepoAccess } from "@/lib/github";
 import { connectGithubSchema } from "@/lib/validation";
+import { alreadyScoped, publicRow } from "@/lib/tenant-db";
 
 // POST /api/integrations/github — connect a repo for spec export from a verdict.
 // v1 is a fine-grained PAT (no GitHub OAuth app yet): validated against the
@@ -28,7 +29,7 @@ export async function POST(req: Request) {
     );
   }
 
-  const run = await db.run.findUnique({
+  const run = await db.run.findUnique({ ...publicRow(),
     where: { publicId: parsed.data.runId },
     select: { id: true, ownerId: true, appId: true, appSlug: true, targetUrl: true, targetKind: true, extensionId: true, extensionConfig: true, ephemeral: true },
   });
@@ -61,7 +62,7 @@ export async function POST(req: Request) {
     throw e;
   }
 
-  const app = await db.app.upsert({
+  const app = await db.app.upsert({ ...alreadyScoped("the unique key names the owner"),
     where: { ownerId_appSlug: { ownerId: user.id, appSlug: run.appSlug } },
     update: {},
     create: {
@@ -90,7 +91,7 @@ export async function POST(req: Request) {
 
   // Adopt the source run so the verdict page renders as owned from now on.
   if (!run.ownerId || run.appId !== app.id) {
-    await db.run.update({ where: { id: run.id }, data: { ownerId: user.id, appId: app.id } });
+    await db.run.update({ ...alreadyScoped("already read in this request"), where: { id: run.id }, data: { ownerId: user.id, appId: app.id } });
   }
 
   return NextResponse.json(
@@ -109,13 +110,13 @@ export async function DELETE(req: Request) {
   const runId = new URL(req.url).searchParams.get("runId");
   if (!runId) return NextResponse.json({ error: "runId required" }, { status: 400 });
 
-  const run = await db.run.findUnique({
+  const run = await db.run.findUnique({ ...publicRow(),
     where: { publicId: runId },
     select: { appSlug: true },
   });
   if (!run) return NextResponse.json({ error: "Run not found" }, { status: 404 });
 
-  const app = await db.app.findUnique({
+  const app = await db.app.findUnique({ ...alreadyScoped("the unique key names the owner"),
     where: { ownerId_appSlug: { ownerId: user.id, appSlug: run.appSlug } },
     select: { id: true },
   });

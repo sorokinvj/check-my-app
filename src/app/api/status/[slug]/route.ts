@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getDbFromContext } from "@/lib/db";
 import { getOptionalUser } from "@/lib/auth";
+import { alreadyScoped, publicRow } from "@/lib/tenant-db";
 
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://checkmyapp.dev";
 
@@ -16,13 +17,13 @@ export async function GET(_req: Request, { params }: { params: Promise<{ slug: s
   const user = await getOptionalUser(db);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const app = await db.app.findUnique({
+  const app = await db.app.findUnique({ ...alreadyScoped("the unique key names the owner"),
     where: { ownerId_appSlug: { ownerId: user.id, appSlug: (await params).slug } },
     select: { id: true, appSlug: true },
   });
   if (!app) return NextResponse.json({ error: "App not found" }, { status: 404 });
 
-  const run = await db.run.findFirst({
+  const run = await db.run.findFirst({ ...publicRow(),
     where: { appId: app.id, status: { in: ["completed", "partial"] }, verdict: { not: null } },
     orderBy: { completedAt: "desc" },
     select: { verdict: true, runNumber: true, completedAt: true, publicId: true },

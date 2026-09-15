@@ -11,14 +11,15 @@ import { credentialFingerprint, encryptSecret } from "@/lib/crypto";
 import { generateApiKey, hashApiKey } from "@/lib/apiKeys";
 import { PLAN_LIMITS, assertCanAddWatch } from "@/lib/plans";
 import type { UserPlan, WatchFrequency } from "@/lib/enums";
+import { alreadyScoped, teamOwned } from "@/lib/tenant-db";
 
 // Re-point an app's tracker to a different team (CHE-31 team picker). The default
 // at connect time is the first team; JobLander must target the JobLander team,
 // not whatever happens to be first.
 export async function setTrackerTeam(appId: string, teamId: string, teamName: string) {
-  const { user, db } = await requireUser();
+  const { user, db, team } = await requireUser();
   const app = await db.app.findFirst({
-    where: { id: appId, ownerId: user.id },
+    where: { ...teamOwned(team.id), id: appId, ownerId: user.id },
     include: { tracker: true },
   });
   if (!app?.tracker) throw new Error("tracker not connected");
@@ -33,9 +34,9 @@ export async function setTrackerTeam(appId: string, teamId: string, teamName: st
 // secret is write-only: blank keeps the current one, and it's dropped with the
 // webhook URL so a disabled endpoint leaves no secret behind.
 export async function setIntegrationEndpoints(appId: string, formData: FormData) {
-  const { user, db } = await requireUser();
+  const { user, db, team } = await requireUser();
   const app = await db.app.findFirst({
-    where: { id: appId, ownerId: user.id },
+    where: { ...teamOwned(team.id), id: appId, ownerId: user.id },
     select: { id: true },
   });
   if (!app) throw new Error("app not found");
@@ -56,7 +57,7 @@ export async function setIntegrationEndpoints(appId: string, formData: FormData)
   if (!webhookUrl) data.webhookSecretEnc = null;
   else if (webhookSecret) data.webhookSecretEnc = encryptSecret(webhookSecret);
 
-  await db.app.update({ where: { id: appId }, data });
+  await db.app.update({ ...alreadyScoped("already read in this request"), where: { id: appId }, data });
   revalidatePath("/dashboard");
 }
 
@@ -73,7 +74,7 @@ export async function createApiKey(
     throw new Error("API access is available on the Business plan.");
   }
   const rawKey = generateApiKey();
-  const key = await db.apiKey.create({
+  const key = await db.apiKey.create({ ...alreadyScoped("created with its team"),
     data: {
       ownerId: user.id,
       teamId: team.id,
@@ -87,8 +88,8 @@ export async function createApiKey(
 // Revoke = delete the row; the key stops resolving on the next request.
 // deleteMany scoped to the owner so one tenant can't revoke another's key.
 export async function revokeApiKey(id: string): Promise<void> {
-  const { user, db } = await requireUser();
-  await db.apiKey.deleteMany({ where: { id, ownerId: user.id } });
+  const { user, db, team } = await requireUser();
+  await db.apiKey.deleteMany({ where: { ...teamOwned(team.id), id, ownerId: user.id } });
 }
 
 // Edit an app's settings after onboarding (CHE-64). Mirrors createApp's field →
@@ -100,7 +101,7 @@ export async function revokeApiKey(id: string): Promise<void> {
 export async function updateAppSettings(appId: string, formData: FormData) {
   const { user, db, team } = await requireUser();
   const app = await db.app.findFirst({
-    where: { id: appId, ownerId: user.id },
+    where: { ...teamOwned(team.id), id: appId, ownerId: user.id },
     include: { watch: true, policy: true },
   });
   if (!app) throw new Error("app not found");
@@ -146,7 +147,7 @@ export async function updateAppSettings(appId: string, formData: FormData) {
     ? { extensionConfig: JSON.stringify(extension.data) } : {};
 
   // App — creds/scope/notes (source of record for test creds).
-  await db.app.update({
+  await db.app.update({ ...alreadyScoped("already read in this request"),
     where: { id: app.id },
     data: { testEmail, scopeHints, userNotes, focusAreas, writeMode, ...passwordUpdate, ...extensionUpdate },
   });
@@ -154,7 +155,7 @@ export async function updateAppSettings(appId: string, formData: FormData) {
   // Watch — cadence + notify email; test creds mirrored here exactly as
   // onboarding's nested create does (recurring runs read them off the Watch).
   if (app.watch) {
-    await db.watch.update({
+    await db.watch.update({ ...alreadyScoped("already read in this request"),
       where: { id: app.watch.id },
       data: { frequency, notifyEmail, testEmail, ...passwordUpdate },
     });
@@ -191,9 +192,9 @@ export async function deleteApp(
   _prev: DeleteAppResult,
   formData: FormData,
 ): Promise<DeleteAppResult> {
-  const { user, db } = await requireUser();
+  const { user, db, team } = await requireUser();
   const app = await db.app.findFirst({
-    where: { id: appId, ownerId: user.id },
+    where: { ...teamOwned(team.id), id: appId, ownerId: user.id },
     select: { id: true, appSlug: true },
   });
   if (!app) return { error: "App not found." };
@@ -205,14 +206,14 @@ export async function deleteApp(
     return { error: `Type ${app.appSlug} to confirm removal.` };
   }
 
-  await db.run.updateMany({ where: { appId: app.id }, data: { appId: null, watchId: null } });
+  await db.run.updateMany({ ...alreadyScoped("already read in this request"), where: { appId: app.id }, data: { appId: null, watchId: null } });
   await db.createdResource.updateMany({ where: { appId: app.id }, data: { appId: null } });
   await db.issueLink.deleteMany({ where: { appId: app.id } });
-  await db.watch.deleteMany({ where: { appId: app.id } });
+  await db.watch.deleteMany({ ...alreadyScoped("already read in this request"), where: { appId: app.id } });
   await db.ticketPolicy.deleteMany({ where: { appId: app.id } });
   await db.trackerIntegration.deleteMany({ where: { appId: app.id } });
   await db.repoIntegration.deleteMany({ where: { appId: app.id } });
-  await db.app.delete({ where: { id: app.id } });
+  await db.app.delete({ ...alreadyScoped("already read in this request"), where: { id: app.id } });
 
   revalidatePath("/dashboard");
   redirect(`/dashboard?removed=${encodeURIComponent(app.appSlug)}`);

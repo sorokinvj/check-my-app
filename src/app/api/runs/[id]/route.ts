@@ -3,11 +3,12 @@ import { getDbFromContext } from "@/lib/db";
 import { parseJson } from "@/lib/json";
 import type { RunEvent } from "@/lib/types";
 import { publicRunError } from "@/lib/extension-target";
+import { publicRow } from "@/lib/tenant-db";
 
 // GET /api/runs/{publicId} — run status + live feed for the in-progress page.
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const prisma = await getDbFromContext();
-  const run = await prisma.run.findUnique({
+  const run = await prisma.run.findUnique({ ...publicRow(),
     where: { publicId: (await params).id },
     select: {
       publicId: true,

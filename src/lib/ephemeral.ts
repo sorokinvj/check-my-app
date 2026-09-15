@@ -23,6 +23,7 @@
 import type { PrismaClient } from "@/generated/prisma/client";
 import { deleteObjects, evidenceKey } from "@/lib/storage";
 import { isChromeStoreUrl } from "@/lib/extension-target";
+import { systemWide } from "@/lib/tenant-db";
 
 // How long an ephemeral run and its evidence live. Long enough to be read after
 // the PR merges; short enough that a busy repo never accumulates them.
@@ -112,7 +113,7 @@ export async function sweepExpiredEphemeralRuns(
   now: Date = new Date(),
   evidenceBucket?: R2Bucket | null,
 ): Promise<EphemeralSweepResult> {
-  const expired = await db.run.findMany({
+  const expired = await db.run.findMany({ ...systemWide("janitor"),
     where: { ephemeral: true, expiresAt: { lt: now } },
     select: { id: true, targetKind: true, targetUrl: true, transcriptUrl: true, liveScreenshotUrl: true },
     orderBy: { expiresAt: "asc" },
@@ -221,7 +222,7 @@ export async function sweepExpiredEphemeralRuns(
   await eachChunk(runIds, (ids) =>
     db.pendingCheck.updateMany({ where: { runId: { in: ids } }, data: { runId: null } }),
   );
-  await eachChunk(runIds, (ids) => db.run.deleteMany({ where: { id: { in: ids } } }));
+  await eachChunk(runIds, (ids) => db.run.deleteMany({ ...systemWide("janitor"), where: { id: { in: ids } } }));
 
   // Not touched on purpose: Run.baselineRunId, Journey.carriedFromRunId,
   // IssueLink.firstSeenRunId and IssueLink.findingId in OTHER rows may now
@@ -243,8 +244,8 @@ export async function sweepExpiredEphemeralRuns(
       db.evidence.findMany({ where: { storageUrl: { in: part } }, select: { storageUrl: true } }),
       db.step.findMany({ where: { screenshotUrl: { in: part } }, select: { screenshotUrl: true } }),
       db.journey.findMany({ where: { videoUrl: { in: part } }, select: { videoUrl: true } }),
-      db.run.findMany({ where: { transcriptUrl: { in: part } }, select: { transcriptUrl: true } }),
-      db.run.findMany({ where: { liveScreenshotUrl: { in: part } }, select: { liveScreenshotUrl: true } }),
+      db.run.findMany({ ...systemWide("janitor"), where: { transcriptUrl: { in: part } }, select: { transcriptUrl: true } }),
+      db.run.findMany({ ...systemWide("janitor"), where: { liveScreenshotUrl: { in: part } }, select: { liveScreenshotUrl: true } }),
     ]);
     for (const r of ev) stillUsed.add(r.storageUrl);
     for (const r of st) if (r.screenshotUrl) stillUsed.add(r.screenshotUrl);

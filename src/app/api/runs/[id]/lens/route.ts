@@ -3,6 +3,7 @@ import { getDbFromContext } from "@/lib/db";
 import { canMutateOwned } from "@/lib/auth";
 import { updateLensSchema } from "@/lib/validation";
 import { isSelfCheckRequest, selfCheckReadOnlyResponse } from "@/lib/self-check";
+import { alreadyScoped, publicRow } from "@/lib/tenant-db";
 
 // PATCH /api/runs/{publicId}/lens — Loop C: user edits the App Lens or reacts
 // to it. The next Daily Watch run reads the corrected Lens + feedback.
@@ -16,7 +17,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     return NextResponse.json({ error: "Invalid input" }, { status: 400 });
   }
 
-  const run = await prisma.run.findUnique({
+  const run = await prisma.run.findUnique({ ...publicRow(),
     where: { publicId: (await params).id },
     select: { id: true, ownerId: true },
   });
@@ -25,7 +26,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
   }
 
-  const updated = await prisma.run.update({
+  const updated = await prisma.run.update({ ...alreadyScoped("already read in this request"),
     where: { id: run.id },
     data: {
       ...(parsed.data.lens !== undefined && { appLens: JSON.stringify(parsed.data.lens) }),

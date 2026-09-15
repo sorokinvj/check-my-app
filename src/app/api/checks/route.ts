@@ -13,6 +13,7 @@ import { createCheckSchema } from "@/lib/validation";
 import { verifyTurnstile } from "@/lib/turnstile";
 import { isSelfCheckRequest, selfCheckReadOnlyResponse } from "@/lib/self-check";
 import type { UserPlan } from "@/lib/enums";
+import { publicRow } from "@/lib/tenant-db";
 
 // POST /api/checks — create a run from a submission and trigger it.
 export async function POST(req: Request) {
@@ -72,7 +73,7 @@ export async function POST(req: Request) {
   // verdict gets that verdict instead of a new run. Owners always get a real
   // run — they may be testing a deploy that just went out.
   if (!owner) {
-    const fresh = await prisma.run.findFirst({
+    const fresh = await prisma.run.findFirst({ ...publicRow(),
       where: {
         appSlug: appSlugFromUrl(input.url),
         status: "completed",

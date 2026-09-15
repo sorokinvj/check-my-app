@@ -4,6 +4,7 @@
 // key-authenticated request.
 
 import type { PrismaClient } from "@/generated/prisma/client";
+import { alreadyScoped, publicRow } from "@/lib/tenant-db";
 
 export const API_KEY_RE = /^cma_[0-9a-f]{32}$/;
 
@@ -37,12 +38,12 @@ export async function resolveApiKeyOwner(db: PrismaClient, req: Request) {
   const raw = extractApiKey(req);
   if (!raw) return null;
   const keyHash = await hashApiKey(raw);
-  const key = await db.apiKey.findUnique({
+  const key = await db.apiKey.findUnique({ ...publicRow(),
     where: { keyHash },
     include: { owner: true },
   });
   if (!key) return null;
-  await db.apiKey.update({ where: { id: key.id }, data: { lastUsedAt: new Date() } });
+  await db.apiKey.update({ ...alreadyScoped("already read in this request"), where: { id: key.id }, data: { lastUsedAt: new Date() } });
   return key.owner;
 }
 

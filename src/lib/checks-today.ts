@@ -8,6 +8,7 @@
 
 import type { PrismaClient } from "@/generated/prisma/client";
 import { anonRunsToday } from "@/lib/plans";
+import { publicRow } from "@/lib/tenant-db";
 
 export const TODAY_LIST_MAX = 50;
 const EXCERPT_CHARS = 240;
@@ -52,7 +53,7 @@ export async function todayChecks(
   // A run that failed on our side has no verdict to read and is not the
   // customer's product speaking (CLAUDE.md rule 4), so it stays out of the
   // public list. It still counts against the cap above — it was started.
-  const rows = await db.run.findMany({
+  const rows = await db.run.findMany({ ...publicRow(),
     where: { ownerId: null, createdAt: { gte: dayStart }, status: { not: "failed" } },
     orderBy: { createdAt: "desc" },
     take: TODAY_LIST_MAX,

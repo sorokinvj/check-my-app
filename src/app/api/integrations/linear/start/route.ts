@@ -7,6 +7,7 @@ import { requireUser } from "@/lib/auth";
 import { PLAN_LIMITS } from "@/lib/plans";
 import type { UserPlan } from "@/lib/enums";
 import { buildAuthorizeUrl } from "@/lib/tracker/linear-oauth";
+import { teamOwned } from "@/lib/tenant-db";
 
 export async function GET(req: NextRequest) {
   const appId = req.nextUrl.searchParams.get("appId");
@@ -17,7 +18,7 @@ export async function GET(req: NextRequest) {
   if (!PLAN_LIMITS[team.plan as UserPlan].trackerIntegration) {
     return NextResponse.json({ error: "Tracker integrations require a paid plan." }, { status: 403 });
   }
-  const app = await db.app.findFirst({ where: { id: appId, ownerId: user.id } });
+  const app = await db.app.findFirst({ where: { ...teamOwned(team.id), id: appId, ownerId: user.id } });
   if (!app) return NextResponse.json({ error: "app not found" }, { status: 404 });
 
   const { env } = getCloudflareContext();

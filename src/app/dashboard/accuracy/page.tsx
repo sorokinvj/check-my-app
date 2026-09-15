@@ -2,6 +2,7 @@ import Link from "next/link";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { requireUser } from "@/lib/auth";
 import { DEFAULT_SELF_HOSTS, isSelfHost } from "@/agent/self-hosts";
+import { systemWide } from "@/lib/tenant-db";
 
 // How often we were right (CHE-99).
 //
@@ -61,7 +62,7 @@ export default async function AccuracyPage() {
   const { user, db } = await requireUser();
   const extraHosts = selfCheckHosts();
 
-  const apps = await db.app.findMany({
+  const apps = await db.app.findMany({ ...systemWide("measurement"),
     where: { ownerId: user.id },
     select: { id: true, appSlug: true },
     orderBy: { appSlug: "asc" },
@@ -104,7 +105,7 @@ export default async function AccuracyPage() {
   // predicate name the ours-shaped ones. A run of a preview host listed in
   // SELF_CHECK_HOSTS lands on the self side here for the same reason it gets no
   // mail (CHE-156).
-  const ranSlugs = await db.run.findMany({
+  const ranSlugs = await db.run.findMany({ ...systemWide("measurement"),
     where: forOwner,
     select: { appSlug: true },
     distinct: ["appSlug"],
