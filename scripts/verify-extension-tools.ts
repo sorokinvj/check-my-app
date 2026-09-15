@@ -63,12 +63,19 @@ assert.equal(accountCalls, 1, 'Account rejection reaches the run-wide gate befor
 const realTimeout = globalThis.setTimeout;
 globalThis.setTimeout = ((callback: (...args: unknown[]) => void, ms: number, ...args: unknown[]) => realTimeout(callback, Math.min(ms, 20), ...args)) as typeof setTimeout;
 try {
-  let signal: AbortSignal | undefined;
-  Object.assign(extension, { runner: { fetch: (request: Request) => { signal = request.signal; return new Promise(() => {}); } } });
+  // The request itself is held, not just its signal. A Request's signal follows
+  // the one it was built from through a listener the runtime drops once the
+  // Request is collected, so a double that keeps only the signal is asserting
+  // on garbage collection: CHE-245 failed here in 3 of 11 suite runs, never
+  // alone. Holding the request is what a real transport does anyway.
+  let signal: AbortSignal | undefined, held: Request | undefined;
+  Object.assign(extension, { runner: { fetch: (request: Request) => { held = request; signal = request.signal; return new Promise(() => {}); } } });
   await assert.rejects(extension.call('/session/observe', {}), ExtensionRuntimeError, 'A transport ignoring AbortSignal must not hold the Workflow until its whole-phase deadline');
-  assert.equal(signal?.aborted, true);
-  Object.assign(extension, { runner: { fetch: async (request: Request) => { signal = request.signal; return new Response(new ReadableStream({ start() {} })); } } });
+  assert.equal(held?.signal, signal);
+  assert.equal(signal?.aborted, true, 'The cancel is issued before the caller is told, so a live request sees it');
+  Object.assign(extension, { runner: { fetch: async (request: Request) => { held = request; signal = request.signal; return new Response(new ReadableStream({ start() {} })); } } });
   await assert.rejects(extension.call('/state'), ExtensionRuntimeError, 'The deadline covers an incomplete response body too');
+  assert.equal(held?.signal, signal);
   assert.equal(signal?.aborted, true);
 } finally { globalThis.setTimeout = realTimeout; }
 Object.assign(extension, { popup: false, replayActions: [], browser: { isConnected: () => true },
