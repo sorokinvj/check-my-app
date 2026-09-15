@@ -597,6 +597,7 @@ model Team {
   stripeSubscriptionId String?
 
   memberships Membership[]
+  invites     TeamInvite[]
   apps        App[]
   runs        Run[]
   watches     Watch[]
@@ -627,6 +628,44 @@ model Membership {
   @@unique([teamId, userId])
   @@index([userId])
   @@index([teamId])
+}
+
+// An invitation to a team (CHE-257). Ours, not Clerk's: the scope is decided at
+// invite time and is one of our three (src/lib/scopes.ts), which Clerk's
+// organizations cannot express without a paid add-on — and routing invites
+// through them while keeping the real scope here would be two sources of truth
+// for one fact.
+//
+// Only a hash of the token is stored. The raw token exists in the emailed link
+// and nowhere else, the same shape ApiKey.keyHash already uses: a database dump
+// does not let anyone join a team.
+model TeamInvite {
+  id     String @id @default(cuid())
+  team   Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  teamId String
+  // Where the invitation was sent. NOT what is matched on acceptance — a person
+  // signs in with the account they actually use, which is often not the address
+  // a colleague typed. The token is the capability; the email is the delivery.
+  email  String
+  scope  String @default("member") // TeamScope
+
+  tokenHash       String  @unique // SHA-256 hex of the raw token
+  invitedByUserId String
+
+  expiresAt      DateTime
+  // Set when it is used, revoked, or replaced by a resend. An invite is never
+  // deleted: "who invited whom, and what happened to it" is the audit trail
+  // T11 reads, and a row that vanishes takes its own history with it.
+  acceptedAt     DateTime?
+  acceptedByUserId String?
+  revokedAt      DateTime?
+  revokedReason  String? // "revoked" | "resent"
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([teamId])
+  @@index([email])
 }
 
 // Owner API keys (CHE-52): let a coding agent act as the owner over the public

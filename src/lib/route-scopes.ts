@@ -67,6 +67,11 @@ export const ROUTE_RULES: Record<string, RouteRule> = {
   "POST /api/findings/[id]/ticket": { kind: "row", decidedIn: "src/app/api/findings/[id]/ticket/route.ts" },
   "POST /api/runs/[id]/export-specs": { kind: "row", decidedIn: "src/app/api/runs/[id]/export-specs/route.ts" },
 
+  // Inviting, cancelling and resending: `member.invite` in the scope table.
+  "POST /api/team/invites": { kind: "team", action: "member.invite" },
+  "POST /api/team/invites/[id]": { kind: "team", action: "member.invite" },
+  "DELETE /api/team/invites/[id]": { kind: "team", action: "member.invite" },
+
   // The team's own settings.
   "POST /api/watch": { kind: "team", action: "watch.configure" },
   "PATCH /api/watch/[slug]": { kind: "team", action: "watch.configure" },
@@ -91,4 +96,8 @@ export const ACTION_RULES: Record<string, RouteRule> = {
   "src/app/verdict/actions.ts#recheckRunAction": { kind: "row", decidedIn: "src/lib/recheck.ts" },
   "src/app/verdict/actions.ts#fullRecheckRunAction": { kind: "row", decidedIn: "src/lib/recheck.ts" },
   "src/app/verdict/actions.ts#enableWatchAction": { kind: "row", decidedIn: "src/lib/watch-enable.ts" },
+  // Accepting is not a team action — the person is not on the team yet. The
+  // token they hold is the capability, and the invitation row decides
+  // (src/lib/invites.ts), which is exactly what `row` means.
+  "src/app/invite/[token]/actions.ts#acceptInviteAction": { kind: "row", decidedIn: "src/lib/invites.ts" },
 };
