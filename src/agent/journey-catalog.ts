@@ -45,11 +45,6 @@ export interface ResolvedJourney {
 }
 
 /**
- * The catalog row for a proposed journey title, created if this is a journey we
- * have not seen. Runs without an App (anonymous one-off checks, PR previews)
- * get the key and no row: there is no history for them to accumulate.
- */
-/**
  * The stored form of a scenario: lower-cased and trimmed, or null when nobody
  * told us. Kept here rather than in journey-key.ts because it is storage
  * hygiene, not an identity rule — `sameScenario` compares the same way.
@@ -59,6 +54,11 @@ export function normalizeScenario(scenario: string | null | undefined): string |
   return text || null;
 }
 
+/**
+ * The catalog row for a proposed journey title, created if this is a journey we
+ * have not seen. Runs without an App (anonymous one-off checks, PR previews)
+ * get the key and no row: there is no history for them to accumulate.
+ */
 export async function resolveJourney(
   env: AgentEnv,
   run: { appId?: string | null },
@@ -311,7 +311,13 @@ export async function recordJourneyCost(
  */
 export interface CatalogJourneyState {
   appJourneyId: string;
+  /** Stable slug — the identity a proposal is matched against. */
+  key: string;
   title: string;
+  /** Every title ever resolved to this journey, so a match survives a rewording. */
+  aliases: string[];
+  /** Where it lives ("app", "/settings"), or null when nobody has told us. */
+  surface: string | null;
   /** Ordered step labels from the last walk that produced any; may be empty. */
   plan: string[];
   /** The roll-up of the last walk, or null for a journey nothing has walked. */
@@ -356,7 +362,10 @@ export async function journeysForPlanning(env: AgentEnv, appId: string): Promise
     where: { appId, retiredAt: null },
     select: {
       id: true,
+      key: true,
       title: true,
+      aliases: true,
+      surface: true,
       plan: true,
       status: true,
       lastWalkedAt: true,
@@ -366,7 +375,10 @@ export async function journeysForPlanning(env: AgentEnv, appId: string): Promise
   });
   return rows.map((r) => ({
     appJourneyId: r.id,
+    key: r.key,
     title: r.title,
+    aliases: (parseJson<string[]>(r.aliases) ?? []).filter((a) => typeof a === "string" && a.trim()),
+    surface: r.surface,
     plan: (parseJson<string[]>(r.plan) ?? []).filter((s) => typeof s === "string" && s.trim()),
     status: r.status,
     lastWalkedAt: r.lastWalkedAt ? new Date(r.lastWalkedAt) : null,

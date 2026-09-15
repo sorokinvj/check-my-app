@@ -45,7 +45,7 @@ import { discoverApp, type KnownMap, type ProposedJourney, type RunInput } from 
 import { loadKnownMap } from "./known-map";
 import { loadAppKnowledge, type AppKnowledge } from "./knowledge";
 import { walkOneJourney, type WalkRun } from "./execution";
-import { catalogIsDeduplicated, recordJourneyCost } from "./journey-catalog";
+import { catalogIsDeduplicated, journeysForPlanning, recordJourneyCost } from "./journey-catalog";
 import { orderByFocus } from "./limits";
 import { parseActions, replayJourney, type ReplayResult } from "./journey-replay";
 import { claimedHands, drivenControls, gateFindings } from "./findings-gate";
@@ -84,6 +84,7 @@ import {
 } from "./snapshot";
 import {
   carryJourney,
+  fullRunQueue,
   partialBottomLine,
   planPartialRun,
   type PartialDecision,
@@ -581,16 +582,37 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
       // they had in the baseline, with the carried ones filling the rest — so
       // journey order, dedupKeys (CHE-50) and synthesis stepRefs all line up with
       // the picture the owner already knows.
+      // CHE-232: on a full run the catalog gets the last slots. Discovery
+      // proposes what it sees; the catalog knows what has waited longest, and
+      // without this the model picks its five headline flows every run and the
+      // long tail of a big app is never walked again. Partial runs already plan
+      // from the catalog, and they are one run in five.
+      const fullWalkList = await step.do("walk-queue", async (): Promise<ProposedJourney[]> => {
+        const focused = orderByFocus(discovery?.journeys ?? [], run.focusAreas);
+        if (!run.appId) return focused;
+        try {
+          const catalog = await journeysForPlanning(env, run.appId);
+          const queue = fullRunQueue({ proposed: focused, catalog, now: new Date() });
+          const added = queue.filter((q) => !focused.slice(0, queue.length).some((f) => f.title === q.title));
+          if (added.length) {
+            console.log(`[rotation] full run: ${added.length} slot(s) to the catalog queue — ${added.map((a) => a.title).join(" · ")}`);
+          }
+          return queue;
+        } catch (err) {
+          // A catalog we could not read costs this run its rotation, never the
+          // run: the same swallow contract every pre-flight rung here uses.
+          console.warn(`[rotation] full-run queue fell back to discovery order: ${err instanceof Error ? err.message : String(err)}`);
+          return focused;
+        }
+      });
+
       const walkList: Array<{ order: number; proposed: ProposedJourney }> = plan.taken
         ? plan.rewalk.map((r) => ({ order: r.order, proposed: { title: r.title, steps: r.steps } }))
         : // CHE-134: journeys covering the owner's focus areas walk first, so a
           // budget cut (an iteration cap, a run time limit, a retry that gives
           // up) lands on the journeys they did not single out. `order` is
           // assigned after the sort: it is the walk position, 0..n-1.
-          orderByFocus(discovery?.journeys ?? [], run.focusAreas).map((proposed, i) => ({
-            order: i,
-            proposed,
-          }));
+          fullWalkList.map((proposed, i) => ({ order: i, proposed }));
 
       await step.do("walking-start", async () => {
         await transition(env, runId, "walking", {
