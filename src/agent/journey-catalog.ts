@@ -45,11 +45,6 @@ export interface ResolvedJourney {
 }
 
 /**
- * The catalog row for a proposed journey title, created if this is a journey we
- * have not seen. Runs without an App (anonymous one-off checks, PR previews)
- * get the key and no row: there is no history for them to accumulate.
- */
-/**
  * The stored form of a scenario: lower-cased and trimmed, or null when nobody
  * told us. Kept here rather than in journey-key.ts because it is storage
  * hygiene, not an identity rule — `sameScenario` compares the same way.
@@ -59,6 +54,11 @@ export function normalizeScenario(scenario: string | null | undefined): string |
   return text || null;
 }
 
+/**
+ * The catalog row for a proposed journey title, created if this is a journey we
+ * have not seen. Runs without an App (anonymous one-off checks, PR previews)
+ * get the key and no row: there is no history for them to accumulate.
+ */
 export async function resolveJourney(
   env: AgentEnv,
   run: { appId?: string | null },
