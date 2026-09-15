@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getDbFromContext } from "@/lib/db";
+import { requireScope } from "@/lib/team-auth";
 import { getOptionalUser } from "@/lib/auth";
 import { optionalTeamContext } from "@/lib/auth";
 import { canUseFrequency } from "@/lib/plans";
@@ -10,11 +11,14 @@ import { alreadyScoped } from "@/lib/tenant-db";
 
 // Resolve the caller's own Watch for an app slug (CHE-33 tenant-scoped). Returns
 // null if not signed in or the app/watch isn't theirs.
-async function ownWatch(slug: string) {
+async function ownWatch(slug: string, req: Request) {
   const db = await getDbFromContext();
-  const user = await getOptionalUser(db);
-  const context = await optionalTeamContext(db, user);
-  if (!user) return { db, user: null, team: null, watch: null, unauthorized: true as const };
+  // CHE-255: configuring a watch is `watch.configure` — a reader may read this
+  // page and may not change what it costs the team.
+  const decision = await requireScope(db, req, "watch.configure");
+  if (!decision.ok) return { db, user: null, team: null, watch: null, refusal: decision.response, unauthorized: true as const };
+  const { user, team: scopedTeam } = decision.grant;
+  const context = { team: scopedTeam };
   const app = await db.app.findUnique({ ...alreadyScoped("the unique key names the owner"),
     where: { ownerId_appSlug: { ownerId: user.id, appSlug: slug } },
     include: { watch: true },
@@ -33,8 +37,8 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ slug: 
     return NextResponse.json({ error: "Invalid input" }, { status: 400 });
   }
 
-  const { db, user, team, watch, unauthorized } = await ownWatch((await params).slug);
-  if (unauthorized) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const { db, user, team, watch, unauthorized, refusal } = await ownWatch((await params).slug, req);
+  if (unauthorized) return refusal ?? NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   if (!watch) return NextResponse.json({ error: "Watch not found" }, { status: 404 });
 
   // Tier gate (CHE-34): a faster cadence (or reactivating) must fit the plan —
@@ -74,8 +78,8 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ slug: 
 export async function DELETE(_req: Request, { params }: { params: Promise<{ slug: string }> }) {
   // CHE-193: our own checker never cancels a watch. First, before anything else.
   if (isSelfCheckRequest(_req.headers)) return selfCheckReadOnlyResponse();
-  const { db, watch, unauthorized } = await ownWatch((await params).slug);
-  if (unauthorized) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const { db, watch, unauthorized, refusal } = await ownWatch((await params).slug, _req);
+  if (unauthorized) return refusal ?? NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   if (!watch) return NextResponse.json({ error: "Watch not found" }, { status: 404 });
 
   await db.run.updateMany({ ...alreadyScoped("already read in this request"), where: { watchId: watch.id }, data: { watchId: null } });

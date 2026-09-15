@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getDbFromContext } from "@/lib/db";
+import { requireScope } from "@/lib/team-auth";
 import { getOptionalUser } from "@/lib/auth";
 import { optionalTeamContext } from "@/lib/auth";
 import { encryptSecret } from "@/lib/crypto";
@@ -14,8 +15,10 @@ import { alreadyScoped, publicRow } from "@/lib/tenant-db";
 // find-or-creates their App for that target and adopts the run.
 export async function POST(req: Request) {
   const db = await getDbFromContext();
-  const user = await getOptionalUser(db);
-  const context = await optionalTeamContext(db, user);
+  const decision = await requireScope(db, req, "integration.connect");
+  if (!decision.ok) return decision.response;
+  const { user, team } = decision.grant;
+  const context = { team };
   if (!user) {
     return NextResponse.json({ error: "Sign in to connect GitHub" }, { status: 401 });
   }

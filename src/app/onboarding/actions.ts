@@ -1,6 +1,7 @@
 "use server";
 
 import { redirect } from "next/navigation";
+import { requireActionScope } from "@/lib/team-auth";
 import { requireUser } from "@/lib/auth";
 import { encryptSecret } from "@/lib/crypto";
 import { appSlugFromUrl } from "@/lib/utils";
@@ -28,7 +29,7 @@ export async function createApp(
   _prevState: CreateAppResult,
   formData: FormData,
 ): Promise<CreateAppResult> {
-  const { user, db, team } = await requireUser();
+  const { user, db, team } = await requireActionScope("app.settings.write");
 
   const target = createCheckSchema.shape.url.safeParse(String(formData.get("targetUrl") ?? ""));
   if (!target.success) return { error: "Enter your app URL or a Chrome Web Store extension link." };

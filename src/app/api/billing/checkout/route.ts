@@ -2,8 +2,7 @@ import { NextResponse } from "next/server";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { getDb } from "@/lib/db";
 import { getOptionalUser } from "@/lib/auth";
-import { activeTeamContext } from "@/lib/teams";
-import { can, refusal } from "@/lib/scopes";
+import { requireScope } from "@/lib/team-auth";
 import {
   BILLING_UNCONFIGURED,
   getStripe,
@@ -31,17 +30,11 @@ export async function POST(req: Request) {
   if (!stripe) return NextResponse.json(BILLING_UNCONFIGURED, { status: 503 });
 
   const db = getDb(env as unknown as { DB: D1Database });
-  const user = await getOptionalUser(db);
-  if (!user) {
-    return NextResponse.json({ error: "Sign in to upgrade" }, { status: 401 });
-  }
-  // CHE-253: the subscription belongs to the team this person is acting for,
-  // and only an admin may buy one — `billing.manage` in src/lib/scopes.ts.
-  const context = await activeTeamContext(db, user);
-  if (!can(context.scope, "billing.manage")) {
-    return NextResponse.json({ error: refusal(context.scope, "billing.manage") }, { status: 403 });
-  }
-  const team = context.team;
+  // CHE-255: one guard, one registry entry. The subscription belongs to the
+  // team this person is acting for, and only an admin may buy one.
+  const decision = await requireScope(db, req, "billing.manage", "Sign in to upgrade");
+  if (!decision.ok) return decision.response;
+  const { user, team } = decision.grant;
 
   const json = (await req.json().catch(() => null)) as { plan?: unknown } | null;
   const plan = json?.plan;

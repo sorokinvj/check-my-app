@@ -1,6 +1,7 @@
 "use server";
 
 import { startSavedApp } from "@/lib/start-saved-app";
+import { requireActionScope } from "@/lib/team-auth";
 import { extensionOptionsFromForm } from "@/lib/validation";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
@@ -17,7 +18,7 @@ import { alreadyScoped, teamOwned } from "@/lib/tenant-db";
 // at connect time is the first team; JobLander must target the JobLander team,
 // not whatever happens to be first.
 export async function setTrackerTeam(appId: string, teamId: string, teamName: string) {
-  const { user, db, team } = await requireUser();
+  const { user, db, team } = await requireActionScope("integration.connect");
   const app = await db.app.findFirst({
     where: { ...teamOwned(team.id), id: appId, ownerId: user.id },
     include: { tracker: true },
@@ -34,7 +35,7 @@ export async function setTrackerTeam(appId: string, teamId: string, teamName: st
 // secret is write-only: blank keeps the current one, and it's dropped with the
 // webhook URL so a disabled endpoint leaves no secret behind.
 export async function setIntegrationEndpoints(appId: string, formData: FormData) {
-  const { user, db, team } = await requireUser();
+  const { user, db, team } = await requireActionScope("integration.connect");
   const app = await db.app.findFirst({
     where: { ...teamOwned(team.id), id: appId, ownerId: user.id },
     select: { id: true },
@@ -69,7 +70,7 @@ export async function createApiKey(
   // CHE-253: the plan is the team's, and so is the key — a CI hook does not
   // stop working because the person who minted it left. Who minted it stays on
   // ownerId as attribution.
-  const { user, db, team } = await requireUser();
+  const { user, db, team } = await requireActionScope("apikey.manage");
   if (!PLAN_LIMITS[team.plan as UserPlan].apiAccess) {
     throw new Error("API access is available on the Business plan.");
   }
@@ -88,7 +89,7 @@ export async function createApiKey(
 // Revoke = delete the row; the key stops resolving on the next request.
 // deleteMany scoped to the owner so one tenant can't revoke another's key.
 export async function revokeApiKey(id: string): Promise<void> {
-  const { user, db, team } = await requireUser();
+  const { user, db, team } = await requireActionScope("apikey.manage");
   await db.apiKey.deleteMany({ where: { ...teamOwned(team.id), id, ownerId: user.id } });
 }
 
@@ -99,7 +100,7 @@ export async function revokeApiKey(id: string): Promise<void> {
 // TicketPolicy. The password is write-only: a blank submission leaves
 // testPasswordEnc untouched on both records.
 export async function updateAppSettings(appId: string, formData: FormData) {
-  const { user, db, team } = await requireUser();
+  const { user, db, team } = await requireActionScope("app.settings.write");
   const app = await db.app.findFirst({
     where: { ...teamOwned(team.id), id: appId, ownerId: user.id },
     include: { watch: true, policy: true },
@@ -192,7 +193,7 @@ export async function deleteApp(
   _prev: DeleteAppResult,
   formData: FormData,
 ): Promise<DeleteAppResult> {
-  const { user, db, team } = await requireUser();
+  const { user, db, team } = await requireActionScope("app.delete");
   const app = await db.app.findFirst({
     where: { ...teamOwned(team.id), id: appId, ownerId: user.id },
     select: { id: true, appSlug: true },
@@ -221,7 +222,7 @@ export async function deleteApp(
 
 export async function runSavedApp(appId: string, _previous: { error: string } | null) {
   if (isSelfCheckRequest(await headers())) redirect(selfCheckRedirectPath(`/dashboard/${appId}`));
-  const { user, db, team } = await requireUser();
+  const { user, db, team } = await requireActionScope("run.start");
   const result = await startSavedApp(db, { id: user.id, teamId: team.id, plan: team.plan as UserPlan }, appId);
   if ("error" in result) return result;
   redirect(`/run/${result.publicId}`);
