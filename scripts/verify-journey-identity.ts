@@ -19,6 +19,7 @@ import {
   anchorOf,
   journeyKey,
   matchJourney,
+  normalizeSurface,
   normalizeTitle,
   signatureOf,
   tokenize,
@@ -162,6 +163,62 @@ check("stemming joins stories/story", tokenize("Build interview stories").includ
 check("an unanchored title still gets a key", journeyKey("Practice an interview with the AI coach").length > 0);
 check("keys stay unique inside an app", journeyKey("Practice an interview", ["practic-interview"]) !== "practic-interview");
 check("an anchor beats a token count", signatureOf("Sign up and practice an interview").anchor === "signup");
+
+// CHE-247: a place the model invented must not outrank a title we have already
+// agreed on. Every case here is a row production actually created.
+console.log("\nA surface does not split a journey from its own history");
+{
+  // Run #197, live: the login journey had 21 walks, the alias "Sign in / sign
+  // up via Clerk" and surface "/authenticated". The model proposed "Sign in /
+  // OAuth through Clerk" on "/core" and got a second row.
+  const login = {
+    key: "login",
+    title: "Authenticate and act on a verdict's findings",
+    aliases: ["Authenticate and act on a verdict's findings", "Sign in / sign up via Clerk", "Sign in or create an account"],
+    surface: "/authenticated",
+  };
+  check(
+    "a known alias matches wherever the model says the journey lives",
+    matchJourney("Sign in / sign up via Clerk", [login], "/core")?.key === "login",
+    String(matchJourney("Sign in / sign up via Clerk", [login], "/core")?.key),
+  );
+
+  // The pair with byte-identical titles that production holds twice.
+  const signup = { key: "signup", title: "Sign up via the free pricing CTA", surface: "/public" };
+  check(
+    "an identical title is the same journey even on a different surface",
+    matchJourney("Sign up via the free pricing CTA", [signup], "/pricing")?.key === "signup",
+    String(matchJourney("Sign up via the free pricing CTA", [signup], "/pricing")?.key),
+  );
+
+  // …and the reason surface exists at all still holds: joblander's /settings
+  // carries three journeys that are NOT each other, and a merely similar title
+  // on another surface must not fold into one of them.
+  const settings = [
+    { key: "settings", title: "Configure insight and coach preferences", surface: "/settings" },
+    { key: "upload-resum", title: "Upload your resume", surface: "/settings" },
+  ];
+  check(
+    "a similar title on a different surface is still a different journey",
+    matchJourney("Upload your resume to the extension", settings, "/extension") === null,
+    String(matchJourney("Upload your resume to the extension", settings, "/extension")?.key),
+  );
+  check(
+    "…and on the same surface it still matches",
+    matchJourney("Upload your resume", settings, "/settings")?.key === "upload-resum",
+    String(matchJourney("Upload your resume", settings, "/settings")?.key),
+  );
+}
+
+console.log("\nA surface is a place, not a sentence about one");
+{
+  check('"/pricing → /sign-up" is not a path', normalizeSurface("/pricing → /sign-up") === null, String(normalizeSurface("/pricing → /sign-up")));
+  check('"/checkout -> /done" is not a path', normalizeSurface("/checkout -> /done") === null, String(normalizeSurface("/checkout -> /done")));
+  check('"settings and billing" is not a path', normalizeSurface("settings and billing") === null, String(normalizeSurface("settings and billing")));
+  check("a real path still is", normalizeSurface("/Settings/") === "/settings", String(normalizeSurface("/Settings/")));
+  check("a full URL still reduces to its path", normalizeSurface("https://app.test/settings") === "/settings", String(normalizeSurface("https://app.test/settings")));
+  check('"app" still means app-wide', normalizeSurface("app-wide") === "app", String(normalizeSurface("app-wide")));
+}
 
 console.log(`\n${failures === 0 ? "PASS" : `FAIL — ${failures} check(s)`}`);
 process.exit(failures === 0 ? 0 : 1);
