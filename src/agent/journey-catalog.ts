@@ -294,6 +294,35 @@ export interface CatalogJourneyState {
   consecutiveBad: number;
 }
 
+/**
+ * Whether this app's live catalog says the same thing once.
+ *
+ * Two rows with the same title are two rows for one journey — the identity
+ * rules did not fold a rewording back into the journey it belongs to (CHE-247).
+ * While that is true of an app, the number of journeys in its catalog is not
+ * the number of journeys it has, and nothing may be claimed from that count:
+ * "we could not cover this app" would be a statement about our own bookkeeping
+ * wearing the shape of a coverage fact (rule 8).
+ *
+ * Deliberately the crudest possible test — exact title equality. It is the one
+ * form of duplication we can be certain about without re-deciding identity
+ * here, and CHE-247's own "how to know it is gone" is that no app's live
+ * catalog holds two rows with the same title.
+ */
+export async function catalogIsDeduplicated(env: AgentEnv, appId: string): Promise<boolean> {
+  const rows = await env.db.appJourney.findMany({
+    where: { appId, retiredAt: null },
+    select: { title: true },
+  });
+  const seen = new Set<string>();
+  for (const r of rows) {
+    const key = r.title.trim().toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+  }
+  return true;
+}
+
 export async function journeysForPlanning(env: AgentEnv, appId: string): Promise<CatalogJourneyState[]> {
   const rows = await env.db.appJourney.findMany({
     where: { appId, retiredAt: null },

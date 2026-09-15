@@ -162,6 +162,36 @@ async function main() {
       titles(unchanged.walk).join() === "bad", titles(unchanged.walk).join());
   }
 
+  console.log("\nA deferred journey is only counted against us once we know how many journeys there are");
+  {
+    const { catalogIsDeduplicated } = await import("@/agent/journey-catalog");
+    const db = (titles: string[]) =>
+      ({ db: { appJourney: { findMany: async () => titles.map((title) => ({ title })) } } }) as never;
+
+    // checkmyapp.dev as production actually holds it (CHE-247): the same journey
+    // written twice. A "cannot keep every journey checked" ticket built on that
+    // count sends the next reader to raise the budget instead of fixing identity.
+    const asProduction = await catalogIsDeduplicated(
+      db([
+        "Check a web app (primary value action)",
+        "Analyze a web app by URL (primary value action)",
+        "Sign up via the free pricing CTA",
+        "Sign up via the free pricing CTA",
+      ]),
+      "app-1",
+    );
+    check("a catalog with two rows of one title is not countable", asProduction === false, String(asProduction));
+
+    const spacingAndCase = await catalogIsDeduplicated(db(["Start a check", "  start a CHECK "]), "app-1");
+    check("…and neither is one that differs only by case or padding", spacingAndCase === false, String(spacingAndCase));
+
+    const clean = await catalogIsDeduplicated(db(["Start a check", "Sign in", "Enable daily monitoring"]), "app-1");
+    check("a catalog that says each thing once is countable", clean === true, String(clean));
+
+    const empty = await catalogIsDeduplicated(db([]), "app-1");
+    check("an empty catalog is countable rather than an error", empty === true, String(empty));
+  }
+
   console.log("\nThe budget is a budget");
   {
     const journeys = Array.from({ length: 12 }, (_, i) =>

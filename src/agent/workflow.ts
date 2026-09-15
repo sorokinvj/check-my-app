@@ -45,7 +45,7 @@ import { discoverApp, type KnownMap, type ProposedJourney, type RunInput } from 
 import { loadKnownMap } from "./known-map";
 import { loadAppKnowledge, type AppKnowledge } from "./knowledge";
 import { walkOneJourney, type WalkRun } from "./execution";
-import { recordJourneyCost } from "./journey-catalog";
+import { catalogIsDeduplicated, recordJourneyCost } from "./journey-catalog";
 import { orderByFocus } from "./limits";
 import { parseActions, replayJourney, type ReplayResult } from "./journey-replay";
 import { claimedHands, drivenControls, gateFindings } from "./findings-gate";
@@ -890,8 +890,23 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
           // because the catalog has outgrown what one run can keep inside the
           // carry window. The owner is paying for an app to be checked and part
           // of it was not — that is ours to fix, not theirs to live with.
+          //
+          // But only when we know how many journeys the app really has. A
+          // catalog that still holds one journey under several titles (CHE-247:
+          // checkmyapp.dev carries "Start a check" as twelve rows) is not a big
+          // app we cannot cover — it is a list we have not deduplicated, and a
+          // ticket saying "cannot keep every journey checked" would send the
+          // next reader to raise the budget instead of fixing identity. Rule 8:
+          // a claim we cannot separate from our own defect is not a finding.
           const deferred = plan.taken ? (plan.deferred ?? []) : [];
-          const extraGaps = deferred.length
+          const countable = deferred.length > 0 && run.appId ? await catalogIsDeduplicated(env, run.appId) : false;
+          if (deferred.length > 0 && !countable) {
+            console.log(
+              `[partial] ${deferred.length} deferred journey(s) not filed as a gap — ` +
+                `the catalog still holds duplicate titles (CHE-247)`,
+            );
+          }
+          const extraGaps = countable
             ? [
                 {
                   label: GAP_CLASSES.journey_rotation.label,
