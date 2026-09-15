@@ -12,6 +12,7 @@ import { setIntegrationEndpoints } from "./actions";
 import { ApiKeys } from "@/components/api-keys";
 import { watchTrialState, PLAN_LIMITS } from "@/lib/plans";
 import type { UserPlan } from "@/lib/enums";
+import { teamOwned } from "@/lib/tenant-db";
 
 // Owner home (protected). Lists the apps this owner has under daily QA.
 export default async function DashboardPage({
@@ -22,7 +23,7 @@ export default async function DashboardPage({
   const { integration, added, extensionAdded } = await searchParams;
   const { user, db, team } = await requireUser();
   const apps = await db.app.findMany({
-    where: { ownerId: user.id },
+    where: { ...teamOwned(team.id), ownerId: user.id },
     include: {
       watch: true,
       policy: true,
@@ -32,7 +33,7 @@ export default async function DashboardPage({
     orderBy: { createdAt: "desc" },
   });
   const apiKeys = await db.apiKey.findMany({
-    where: { ownerId: user.id },
+    where: { ...teamOwned(team.id), ownerId: user.id },
     orderBy: { createdAt: "desc" },
     select: { id: true, name: true, lastUsedAt: true, createdAt: true },
   });

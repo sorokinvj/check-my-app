@@ -29,6 +29,7 @@ import { unreachedPages } from "@/lib/coverage";
 import { parseJson } from "@/lib/json";
 import type { FindingDetail } from "@/lib/types";
 import { productProse, splitSentences } from "@/lib/verdict-language";
+import { publicRow } from "@/lib/tenant-db";
 
 // ─── Shape ───────────────────────────────────────────────────────────────────
 
@@ -203,7 +204,7 @@ export async function loadReview(
   publicId: string,
   origin: string,
 ): Promise<Review | null> {
-  const run = await prisma.run.findUnique({ where: { publicId }, select: REVIEW_SELECT });
+  const run = await prisma.run.findUnique({ ...publicRow(), where: { publicId }, select: REVIEW_SELECT });
   if (run && !extensionReportPublished(run)) return buildReview({ ...run, verdict: null, bottomLine: null, anatomy: null, journeys: [], findings: [] }, origin);
   return run ? buildReview(run, origin) : null;
 }

@@ -6,6 +6,7 @@ import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { requireUser } from "@/lib/auth";
 import { exchangeCode, fetchFirstTeam } from "@/lib/tracker/linear-oauth";
 import { encryptSecret } from "@/lib/crypto";
+import { alreadyScoped } from "@/lib/tenant-db";
 
 function back(req: NextRequest, status: string) {
   return NextResponse.redirect(new URL(`/dashboard?linear=${status}`, req.nextUrl.origin));
@@ -35,7 +36,7 @@ export async function GET(req: NextRequest) {
   jar.delete("linear_oauth_nonce");
 
   const { user, db } = await requireUser();
-  const app = await db.app.findFirst({ where: { id: appId, ownerId: user.id } });
+  const app = await db.app.findFirst({ ...alreadyScoped("the unique key names the owner"), where: { id: appId, ownerId: user.id } });
   if (!app) return fail(req);
 
   const { env } = getCloudflareContext();

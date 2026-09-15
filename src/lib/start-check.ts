@@ -12,6 +12,7 @@ import { appSlugFromUrl } from "@/lib/utils";
 import { captureServer, serverDistinctId } from "@/lib/analytics-server";
 import type { CreateCheckInput } from "@/lib/validation";
 import { extensionColumns } from "@/lib/extension-target";
+import { alreadyScoped } from "@/lib/tenant-db";
 
 export interface StartCheckOptions {
   // The validated submission (createCheckSchema output).
@@ -70,13 +71,13 @@ export async function startCheck(
   const appId =
     opts.ownerId && !opts.ephemeral
       ? ((
-          await db.app.findUnique({
+          await db.app.findUnique({ ...alreadyScoped("the unique key names the owner"),
             where: { ownerId_appSlug: { ownerId: opts.ownerId, appSlug } },
             select: { id: true },
           })
         )?.id ?? null)
       : null;
-  const run = await db.run.create({
+  const run = await db.run.create({ ...alreadyScoped("created with its team"),
     data: {
       runNumber: await nextRunNumber(db),
       appId,

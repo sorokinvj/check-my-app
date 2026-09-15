@@ -3,6 +3,7 @@
 
 import type { UserPlan, WatchFrequency } from "./enums";
 import type { PrismaClient } from "@/generated/prisma/client";
+import { ownerScoped } from "@/lib/tenant-db";
 
 export interface PlanLimits {
   // 0 = no Daily Watch (one-off runs only).
@@ -133,7 +134,7 @@ export async function anonRunsToday(
   cap: number = ANON_RUNS_PER_DAY_SITE,
 ): Promise<{ used: number; cap: number; dayStartIso: string }> {
   const dayStart = utcDayStart(now);
-  const used = await db.run.count({
+  const used = await db.run.count({ ...ownerScoped(),
     where: { ownerId: null, paidCheckoutSessionId: null, createdAt: { gte: dayStart } },
   });
   return { used, cap, dayStartIso: dayStart.toISOString() };
@@ -228,7 +229,7 @@ export async function assertCanAddWatch(
     return { ok: false, reason: `Your plan doesn't allow ${opts.frequency} checks.` };
   }
   if (!opts.existingWatchId) {
-    const count = await db.watch.count({ where: { ownerId: opts.ownerId, active: true } });
+    const count = await db.watch.count({ ...ownerScoped(), where: { ownerId: opts.ownerId, active: true } });
     const reason = watchCapReason(opts.plan, count);
     if (reason) return { ok: false, reason };
   }
@@ -258,7 +259,7 @@ export async function assertCanStartRun(
 ): Promise<RunGate> {
   if (owner) {
     if (owner.plan !== "free") return { ok: true };
-    const used = await db.run.count({ where: { ownerId: owner.id } });
+    const used = await db.run.count({ ...ownerScoped(), where: { ownerId: owner.id } });
     if (used >= FREE_RUNS_LIFETIME) {
       return {
         ok: false,
@@ -286,7 +287,7 @@ export async function assertCanStartRun(
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
   // Same exclusion as the site count: a $1 run this visitor paid for is not
   // the free one they get a day.
-  const used = await db.run.count({
+  const used = await db.run.count({ ...ownerScoped(),
     where: { anonKeyHash, paidCheckoutSessionId: null, createdAt: { gte: since } },
   });
   if (used >= ANON_RUNS_PER_DAY) {
@@ -332,7 +333,7 @@ export async function fullRechecksUsed(
   ownerId: string,
   now: Date = new Date(),
 ): Promise<number> {
-  return db.run.count({
+  return db.run.count({ ...ownerScoped(),
     where: { ownerId, forceFull: true, createdAt: { gte: utcMonthStart(now) } },
   });
 }

@@ -8,6 +8,7 @@ import { assertCanAddWatch } from "@/lib/plans";
 import type { UserPlan, WatchFrequency } from "@/lib/enums";
 import { extensionColumns, parseExtensionLink } from "@/lib/extension-target";
 import { createCheckSchema, extensionOptionsFromForm } from "@/lib/validation";
+import { alreadyScoped } from "@/lib/tenant-db";
 
 // Persist an onboarded App + its Watch + TicketPolicy in one nested write.
 // D1 has no transactions, but the spike (CHE-21) proved nested create works and
@@ -72,7 +73,7 @@ export async function createApp(
   // One App per (owner, slug). Pre-check for a clear message, and catch the
   // unique-constraint race (D1 has no transactions, so a double-submit can slip
   // past the check) rather than surfacing a raw 500.
-  const dupe = await db.app.findUnique({
+  const dupe = await db.app.findUnique({ ...alreadyScoped("the unique key names the owner"),
     where: { ownerId_appSlug: { ownerId: user.id, appSlug } },
     select: { id: true },
   });
@@ -81,7 +82,7 @@ export async function createApp(
   }
 
   try {
-    await db.app.create({
+    await db.app.create({ ...alreadyScoped("created with its team"),
       data: {
         ownerId: user.id,
         teamId: team.id,

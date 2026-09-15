@@ -19,6 +19,7 @@ import type { UserPlan } from "@/lib/enums";
 import type { AppLens, RunEvent } from "@/lib/types";
 import { OG_IMAGE } from "@/lib/site-metadata";
 import { extensionDisplayName, extensionReportPublished } from "@/lib/extension-target";
+import { alreadyScoped, publicRow } from "@/lib/tenant-db";
 
 export const dynamic = "force-dynamic";
 
@@ -38,7 +39,7 @@ function formatDuration(start: Date, end: Date | null): string | null {
 // here is how many problems we found on it, and nothing about how we looked.
 export async function generateMetadata({ params }: { params: Promise<{ id: string }> }) {
   const prisma = await getDbFromContext();
-  const run = await prisma.run.findUnique({
+  const run = await prisma.run.findUnique({ ...publicRow(),
     where: { publicId: (await params).id },
     select: { appSlug: true, targetKind: true, targetUrl: true, extensionEvidence: true, verdict: true, _count: { select: { findings: true } } },
   });
@@ -85,7 +86,7 @@ export default async function VerdictPage({
         ? "That run no longer exists."
         : (recheck ?? null);
   const prisma = await getDbFromContext();
-  const run = await prisma.run.findUnique({
+  const run = await prisma.run.findUnique({ ...publicRow(),
     where: { publicId: (await params).id },
     include: {
       journeys: { include: { steps: { orderBy: { order: "asc" } } }, orderBy: { order: "asc" } },
@@ -137,7 +138,7 @@ export default async function VerdictPage({
   // onboarded app's slug never borrows that app's repo connection.
   const viewerApp =
     viewer && !run.ephemeral
-      ? await prisma.app.findUnique({
+      ? await prisma.app.findUnique({ ...alreadyScoped("the unique key names the owner"),
         where: { ownerId_appSlug: { ownerId: viewer.id, appSlug: run.appSlug } },
         include: { repo: { select: { repoFullName: true } } },
       })
@@ -189,14 +190,14 @@ export default async function VerdictPage({
   const carriedRunNumbers = Object.fromEntries(
     carriedRunIds.length
       ? (
-          await prisma.run.findMany({
+          await prisma.run.findMany({ ...publicRow(),
             where: { id: { in: carriedRunIds } },
             select: { id: true, runNumber: true },
           })
         ).map((r) => [r.id, r.runNumber])
       : [],
   );
-  const newerRun = await prisma.run.findFirst({
+  const newerRun = await prisma.run.findFirst({ ...publicRow(),
     where: { baselineRunId: run.id, status: { in: ["completed", "partial"] } },
     orderBy: { createdAt: "desc" },
     select: { publicId: true, completedAt: true },

@@ -10,6 +10,7 @@ import { assertCanStartRun, fullRecheckGate, fullRechecksUsed } from "@/lib/plan
 import { effectiveEphemeralTtlDays, effectiveSiteCap } from "@/lib/site-cap";
 import { ephemeralExpiry } from "@/lib/ephemeral";
 import { triggerRun } from "@/lib/trigger";
+import { alreadyScoped, publicRow } from "@/lib/tenant-db";
 
 export type RecheckResult =
   | { kind: "not_found" }
@@ -54,7 +55,7 @@ export async function createRecheckRun(
     ephemeralTtlDays: effectiveEphemeralTtlDays,
   },
 ): Promise<RecheckResult> {
-  const prev = await prisma.run.findUnique({
+  const prev = await prisma.run.findUnique({ ...publicRow(),
     where: { publicId },
     select: {
       id: true,
@@ -104,7 +105,7 @@ export async function createRecheckRun(
         reason: "A full re-check is available to the owner of this app. Sign in to run one.",
       };
     }
-    const fresh = await prisma.run.findFirst({
+    const fresh = await prisma.run.findFirst({ ...publicRow(),
       where: {
         appSlug: prev.appSlug,
         status: "completed",
@@ -140,9 +141,9 @@ export async function createRecheckRun(
   // On-demand runs discard their password after completion. Only the same
   // owner's saved extension may supply credentials for the next explicit run.
   const saved = prev.targetKind === "extension" && prev.appId && prev.ownerId
-    ? await prisma.app.findFirst({ where: { id: prev.appId, ownerId: prev.ownerId, targetKind: "extension", extensionId: prev.extensionId },
+    ? await prisma.app.findFirst({ ...alreadyScoped("the previous run names its own app"), where: { id: prev.appId, ownerId: prev.ownerId, targetKind: "extension", extensionId: prev.extensionId },
       select: { testEmail: true, testPasswordEnc: true, extensionConfig: true, userNotes: true } }) : null;
-  const run = await prisma.run.create({
+  const run = await prisma.run.create({ ...alreadyScoped("created with its team"),
     data: {
       runNumber: await nextRunNumber(prisma),
       targetUrl: prev.targetUrl,
