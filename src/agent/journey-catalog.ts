@@ -45,6 +45,83 @@ export interface ResolvedJourney {
 }
 
 /**
+ * How many consecutive full checks may map an app without finding a journey
+ * before that journey is retired.
+ *
+ * Three, not one: a journey can be missed for a run because a page was slow, an
+ * A/B test hid an entry point, or the model spent its exploration budget
+ * elsewhere. Three in a row is the product having changed, not a bad night.
+ */
+export const MISSED_DISCOVERIES_BEFORE_RETIRING = 3;
+
+/**
+ * CHE-232 — what a full check's proposals say about the journeys it did NOT
+ * propose. Called once per run, after discovery, and only for a run that
+ * actually mapped the app: a smoke pass and a partial run propose nothing, and
+ * counting their silence as absence would retire the whole catalog in three
+ * quiet days.
+ *
+ * Returns the journeys retired by this call, so the caller can say so.
+ */
+export async function noteDiscoveryCoverage(
+  env: AgentEnv,
+  appId: string,
+  proposed: Array<{ title: string; surface?: string | null; extensionScenario?: string | null }>,
+  at: Date = new Date(),
+): Promise<string[]> {
+  const rows = await env.db.appJourney.findMany({
+    where: { appId, retiredAt: null },
+    select: { id: true, key: true, title: true, aliases: true, surface: true, scenario: true, missedDiscoveries: true },
+  });
+  if (rows.length === 0) return [];
+
+  const candidates: Array<JourneyCandidate & { id: string; missedDiscoveries: number }> = rows.map((r) => ({
+    id: r.id,
+    key: r.key,
+    title: r.title,
+    aliases: parseJson<string[]>(r.aliases) ?? [r.title],
+    surface: r.surface,
+    scenario: r.scenario,
+    missedDiscoveries: r.missedDiscoveries,
+  }));
+
+  // Which catalog rows this run's proposals landed on — by the same identity
+  // rules the walk uses, so a rewording counts as having been seen.
+  const seen = new Set<string>();
+  for (const p of proposed) {
+    const hit = matchJourney(p.title, candidates, p.surface, p.extensionScenario) as
+      | (JourneyCandidate & { id: string })
+      | null;
+    if (hit) seen.add(hit.id);
+  }
+
+  const retired: string[] = [];
+  for (const row of candidates) {
+    if (seen.has(row.id)) {
+      if (row.missedDiscoveries > 0) {
+        await env.db.appJourney.update({ where: { id: row.id }, data: { missedDiscoveries: 0 } });
+      }
+      continue;
+    }
+    const missed = row.missedDiscoveries + 1;
+    if (missed < MISSED_DISCOVERIES_BEFORE_RETIRING) {
+      await env.db.appJourney.update({ where: { id: row.id }, data: { missedDiscoveries: missed } });
+      continue;
+    }
+    await env.db.appJourney.update({
+      where: { id: row.id },
+      data: {
+        missedDiscoveries: missed,
+        retiredAt: at,
+        retiredReason: `Not found by the last ${missed} checks that mapped this app`,
+      },
+    });
+    retired.push(row.title);
+  }
+  return retired;
+}
+
+/**
  * The stored form of a scenario: lower-cased and trimmed, or null when nobody
  * told us. Kept here rather than in journey-key.ts because it is storage
  * hygiene, not an identity rule — `sameScenario` compares the same way.
@@ -195,8 +272,10 @@ export async function recordWalk(
         : {}),
       consecutiveBad,
       failingSince: consecutiveBad === 0 ? null : (row.failingSince ?? at),
-      // A journey that walked again is a journey the product still has.
-      ...(walked ? { retiredAt: null, retiredReason: null } : {}),
+      // A journey that walked again is a journey the product still has — its
+      // retirement is undone and its miss counter cleared, so a page that comes
+      // back brings its history with it instead of starting a row beside it.
+      ...(walked ? { retiredAt: null, retiredReason: null, missedDiscoveries: 0 } : {}),
       ...metric,
     },
   });

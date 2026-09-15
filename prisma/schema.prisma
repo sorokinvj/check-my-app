@@ -277,6 +277,13 @@ model AppJourney {
   metricAt       DateTime?
   // A journey the product no longer has. Kept, never deleted (it is the record
   // of what the app used to do) and never walked again.
+  //
+  // CHE-232: `missedDiscoveries` is how many consecutive FULL checks mapped the
+  // app without finding this journey. Only a full check maps — a smoke pass and
+  // a partial run propose nothing, so neither moves this. At three, the journey
+  // retires; a journey walked again has it cleared and its retirement undone,
+  // so a page that comes back brings its history with it.
+  missedDiscoveries Int @default(0)
   retiredAt     DateTime?
   retiredReason String?
 
