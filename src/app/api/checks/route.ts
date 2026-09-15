@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getDbFromContext } from "@/lib/db";
 import { getOwnerFromRequest } from "@/lib/auth";
+import { optionalTeamContext } from "@/lib/auth";
 import { hashClientKey } from "@/lib/crypto";
 import { assertCanStartRun } from "@/lib/plans";
 import { effectiveEphemeralTtlDays, effectiveSiteCap } from "@/lib/site-cap";
@@ -88,9 +89,12 @@ export async function POST(req: Request) {
   // Run quota (CHE-40). Checked after Turnstile so bot floods never burn a real
   // client's allowance, and before the insert so a rejected run is never billed.
   const anonKeyHash = owner ? null : await hashClientKey(clientIp);
+  // CHE-253: the quota is the team's, not the person's — inviting a colleague
+  // must not mint a second allowance.
+  const context = await optionalTeamContext(prisma, owner);
   const gate = await assertCanStartRun(
     prisma,
-    owner ? { id: owner.id, plan: owner.plan as UserPlan } : null,
+    owner && context ? { id: owner.id, plan: context.team.plan as UserPlan } : null,
     anonKeyHash,
     { siteCap: effectiveSiteCap() },
   );
@@ -103,6 +107,7 @@ export async function POST(req: Request) {
   const run = await startCheck(prisma, {
     input,
     ownerId: owner?.id ?? null,
+    teamId: context?.team.id ?? null,
     anonKeyHash,
     ephemeral: expiresAt ? { expiresAt } : undefined,
     distinctId: distinctIdFromCookies(req.headers.get("cookie")),

@@ -20,7 +20,7 @@ export default async function DashboardPage({
   searchParams: Promise<{ integration?: string; added?: string; extensionAdded?: string }>;
 }) {
   const { integration, added, extensionAdded } = await searchParams;
-  const { user, db } = await requireUser();
+  const { user, db, team } = await requireUser();
   const apps = await db.app.findMany({
     where: { ownerId: user.id },
     include: {
@@ -37,7 +37,7 @@ export default async function DashboardPage({
     select: { id: true, name: true, lastUsedAt: true, createdAt: true },
   });
   // API key creation is a Business+ feature (CHE-62); mirrors the pricing page.
-  const apiAccess = PLAN_LIMITS[user.plan as UserPlan].apiAccess;
+  const apiAccess = PLAN_LIMITS[team.plan as UserPlan].apiAccess;
 
   // For connected apps, pull the workspace teams so the owner can pick which one
   // tickets land in (best-effort — a transient Linear error just hides the picker).
@@ -131,7 +131,7 @@ export default async function DashboardPage({
             // CHE-54: a free-plan watch runs on a 7-day trial. The scheduler
             // stops running an expired one, so the card must not keep claiming
             // it's watching.
-            const trial = watchTrialState(app.watch, user.plan as UserPlan);
+            const trial = watchTrialState(app.watch, team.plan as UserPlan);
             return (
               <li key={app.id} className="card flex flex-wrap items-start justify-between gap-4 p-5">
                 <div className="min-w-0 space-y-1">

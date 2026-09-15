@@ -159,7 +159,10 @@ async function main() {
     watchId: string | null;
     appId: string | null;
     ownerId: string | null;
-    owner: { plan: string } | null;
+    // CHE-253: the plan hangs off the run's TEAM, not its owner — a person does
+    // not have a plan, the team they act for does.
+    teamId: string | null;
+    team: { plan: string } | null;
   };
 
   function prevRow(ownerId: string | null, plan: string | null): PrevRow {
@@ -176,7 +179,8 @@ async function main() {
       watchId: null,
       appId: null,
       ownerId,
-      owner: plan ? { plan } : null,
+      teamId: ownerId ? `team_${ownerId}` : null,
+      team: plan ? { plan } : null,
     };
   }
 

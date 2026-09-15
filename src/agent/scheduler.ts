@@ -85,11 +85,14 @@ export async function runDueWatches(
       testPasswordEnc: true,
       appId: true,
       ownerId: true,
-      // Free-trial gate (CHE-54): the owner's plan is read fresh on every tick,
-      // so an upgrade resumes the watch without anything else having to update it.
+      teamId: true,
+      // Free-trial gate (CHE-54): the plan is read fresh on every tick, so an
+      // upgrade resumes the watch without anything else having to update it.
+      // CHE-253: it is the TEAM's plan — the watch is paid for by the team, not
+      // by whoever happened to enable it.
       trialEndsAt: true,
       trialNoticeSentAt: true,
-      owner: { select: { plan: true } },
+      team: { select: { plan: true } },
       // Owner-configured scope/notes live on the App; watch runs must carry
       // them (run #19 self-check submitted a real paid check because the
       // "don't press the button" scope hint never reached the agent).
@@ -104,11 +107,11 @@ export async function runDueWatches(
     if (started.length >= MAX_PER_TICK) break;
 
     try {
-      if (shouldSkipWatch(watch, (watch.owner?.plan ?? null) as UserPlan | null, now)) {
+      if (shouldSkipWatch(watch, (watch.team?.plan ?? null) as UserPlan | null, now)) {
         skipped++;
         console.log(
           `[scheduler] watch ${watch.id} (${watch.appSlug}) skipped — free trial ended ` +
-            `${watch.trialEndsAt?.toISOString()}, owner still on free`,
+            `${watch.trialEndsAt?.toISOString()}, team still on free`,
         );
         await pauseExpiredTrial(env, bindings, watch, now);
         continue;
@@ -143,7 +146,11 @@ export async function runDueWatches(
       // happens — as a smoke pass, which still notices the app going down —
       // and the deep walk resumes tomorrow. Without this, Growth (5 apps on a
       // 6-hourly cadence) costs ~$264/mo against $99 of revenue.
-      const budget = PLAN_LIMITS[(watch.owner?.plan ?? "free") as UserPlan].dailyBudgetUsd;
+      // The LIMIT is the team's plan; the SUM below stays keyed on appId. A
+      // team with five apps must not share one app's daily budget — that would
+      // be a pricing change nobody decided, visible only as apps quietly
+      // dropping to smoke passes (CHE-260).
+      const budget = PLAN_LIMITS[(watch.team?.plan ?? "free") as UserPlan].dailyBudgetUsd;
       const dayStart = new Date(now);
       dayStart.setUTCHours(0, 0, 0, 0);
       const spentToday = watch.appId
@@ -181,6 +188,7 @@ export async function runDueWatches(
           baselineRunId: baseline?.id ?? null,
           appId: watch.appId,
           ownerId: watch.ownerId,
+          teamId: watch.teamId,
           status: "queued",
         },
         select: { id: true },

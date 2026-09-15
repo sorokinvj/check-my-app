@@ -122,6 +122,13 @@ model Run {
   appId    String?
   owner    User?   @relation(fields: [ownerId], references: [id])
   ownerId  String?
+  // CHE-253: whose run this is, now that "whose" can be more than one person.
+  // Null on anonymous and ephemeral runs, exactly like ownerId. `ownerId` stays
+  // filled on every owned run — isOwnRun (src/agent/notify-verdict.ts) reads it
+  // to decide the self-check silence, and a run that arrived with only a team
+  // would strand that rule (CHE-156).
+  team     Team?   @relation(fields: [teamId], references: [id])
+  teamId   String?
   // Anonymous counterpart of ownerId: a salted one-way hash of the submitter's
   // IP, set only on anonymous runs so the free-run quota (CHE-40) can be counted
   // per client without ever storing an IP. Null on owner and scheduler runs.
@@ -155,6 +162,7 @@ model Run {
   @@index([watchId])
   @@index([appId])
   @@index([ownerId])
+  @@index([teamId])
   @@index([anonKeyHash])
   @@index([ephemeral, expiresAt])
 }
@@ -461,6 +469,10 @@ model Watch {
   appId    String? @unique
   owner    User?   @relation(fields: [ownerId], references: [id])
   ownerId  String?
+  // CHE-253: the team whose plan pays for this watch and whose members may
+  // configure it. Null only on legacy ownerless watches.
+  team     Team?   @relation(fields: [teamId], references: [id])
+  teamId   String?
 
   runs        Run[]
   lastRunAt   DateTime?
@@ -477,6 +489,7 @@ model Watch {
   updatedAt   DateTime @updatedAt
 
   @@index([ownerId])
+  @@index([teamId])
   @@index([appSlug])
 }
 
@@ -533,17 +546,19 @@ model User {
 
   id          String  @id @default(cuid())
   clerkUserId String  @unique
-  clerkOrgId  String? // active org for team/multi-tenant accounts
   email       String
   name        String?
   role        String  @default("requester") // requester | provider_human | agent_operator | admin
-  plan        String  @default("free")       // free | starter | growth | business | enterprise
 
-  // Stripe billing (CHE-40 phase 3). Set by /api/billing/checkout + the Stripe
-  // webhook; null for free/manual accounts. Customer is 1:1 with a user.
-  stripeCustomerId     String? @unique
-  stripeSubscriptionId String?
+  // CHE-253 (Teams T0): plan, stripeCustomerId, stripeSubscriptionId and
+  // clerkOrgId used to live here. They are the TEAM's now — a person does not
+  // have a plan, the team they act for does. Keeping a copy on the user would
+  // be two columns meaning the same thing, which is how a rule ends up keyed
+  // on the wrong subject (CHE-156).
 
+  memberships Membership[]
+  // What this person did, kept apart from who owns it: a row's `ownerId` is
+  // attribution and is never rewritten when somebody leaves a team.
   apps    App[]
   runs    Run[]
   watches Watch[]
@@ -551,8 +566,67 @@ model User {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
 
-  @@index([clerkOrgId])
+// ─── Teams (CHE-253) ─────────────────────────────────────────────────────────
+// A team owns the apps, pays the bill and grants the access. A personal account
+// IS a team of one (isPersonal), created for every user the moment they exist,
+// so there is exactly one billing subject and one access subject in the code
+// and nothing branches on "team or not".
+//
+// Clerk is identity only. Membership and scope live here because Clerk's own
+// organizations give two roles (org:admin, org:member) and a third needs custom
+// roles — free in development, requiring the B2B Authentication add-on in
+// production, with a 20-member ceiling without it. Verified 2026-09-15.
+
+model Team {
+  id   String @id @default(cuid())
+  name String
+  // True for the team created automatically for one person. Not special-cased
+  // anywhere in the product: it is a team, with one admin, that happens to have
+  // been created for them rather than by them.
+  isPersonal Boolean @default(true)
+
+  // What the team pays for. Moved here from User by the same migration that
+  // created this table, value for value — nobody's plan changed on deploy day.
+  plan String @default("free") // free | starter | growth | business | enterprise
+
+  // Stripe billing. The customer is 1:1 with a TEAM; when the person who
+  // subscribed leaves, the subscription stays with the team that paid.
+  stripeCustomerId     String? @unique
+  stripeSubscriptionId String?
+
+  memberships Membership[]
+  apps        App[]
+  runs        Run[]
+  watches     Watch[]
+  apiKeys     ApiKey[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// Who is on a team and what they may do. scope is admin | member | reader —
+// the table of what each may do is src/lib/scopes.ts (CHE-254), never a prompt
+// and never a per-route comparison.
+model Membership {
+  id     String @id @default(cuid())
+  team   Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  teamId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+  scope  String @default("member") // TeamScope — see src/lib/scopes.ts
+
+  // Who brought them in. Null on the admin of a personal team, which nobody
+  // invited, and on rows the backfill created.
+  invitedByUserId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([teamId, userId])
+  @@index([userId])
+  @@index([teamId])
 }
 
 // Owner API keys (CHE-52): let a coding agent act as the owner over the public
@@ -561,14 +635,19 @@ model User {
 // with a key are attributed to the owner and follow the owner's plan quota.
 model ApiKey {
   id         String    @id @default(cuid())
+  // Attribution: who minted it. The key is the TEAM's (CHE-253) — a CI hook
+  // does not stop working because the person who created it left.
   owner      User      @relation(fields: [ownerId], references: [id], onDelete: Cascade)
   ownerId    String
+  team       Team?     @relation(fields: [teamId], references: [id])
+  teamId     String?
   name       String // owner-facing label, e.g. "CI post-deploy hook"
   keyHash    String    @unique // SHA-256 hex of the raw `cma_<32 hex>` key
   lastUsedAt DateTime?
   createdAt  DateTime  @default(now())
 
   @@index([ownerId])
+  @@index([teamId])
 }
 
 // One owner ↔ one target app. Holds the canonical appSlug for that owner; a URL
@@ -576,9 +655,16 @@ model ApiKey {
 // here (encrypted); anonymous one-off runs never create an App.
 model App {
   id        String  @id @default(cuid())
+  // Attribution: the person who added it. Ownership is the team's (CHE-253) —
+  // removing a person removes nothing they touched.
   owner     User    @relation(fields: [ownerId], references: [id])
   ownerId   String
-  orgId     String?
+  // The team this app belongs to. Nullable only because SQLite cannot add a
+  // NOT NULL column to a populated table without a default; every App has one,
+  // and scripts/verify-team-backfill.ts is what makes that true rather than
+  // hoped for.
+  team      Team?   @relation(fields: [teamId], references: [id])
+  teamId    String?
   targetUrl String
   targetKind String @default("website")
   extensionId String?
@@ -617,8 +703,14 @@ model App {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // One owner ↔ one target app, unchanged by T0 on purpose. With a personal
+  // team per person, "one team ↔ one target" says the same thing today, and
+  // moving the constraint would rewrite every `ownerId_appSlug` lookup in the
+  // product for no behaviour gained. It moves in T5, when a second member can
+  // add an app and the two stop being the same sentence.
   @@unique([ownerId, appSlug])
   @@index([ownerId])
+  @@index([teamId])
 }
 
 // The owner's connected issue tracker. type='linear' for now, behind a Tracker
@@ -718,6 +810,11 @@ model IssueLink {
 model SettledSignature {
   id              String   @id @default(cuid())
   ownerId         String?
+  // CHE-253: "we were told this is not a bug" is the team's knowledge, not one
+  // member's — a colleague must not re-file what the team already settled.
+  // Plain id, not a relation, for the same reason ownerId is: this row is meant
+  // to outlive what it describes.
+  teamId          String?
   appSlug         String
   dedupKey        String
   externalIssueId String
@@ -729,6 +826,7 @@ model SettledSignature {
   settledAt       DateTime @default(now())
 
   @@index([ownerId, appSlug])
+  @@index([teamId, appSlug])
   @@index([externalIssueId])
 }
 

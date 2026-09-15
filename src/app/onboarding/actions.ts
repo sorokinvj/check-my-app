@@ -27,7 +27,7 @@ export async function createApp(
   _prevState: CreateAppResult,
   formData: FormData,
 ): Promise<CreateAppResult> {
-  const { user, db } = await requireUser();
+  const { user, db, team } = await requireUser();
 
   const target = createCheckSchema.shape.url.safeParse(String(formData.get("targetUrl") ?? ""));
   if (!target.success) return { error: "Enter your app URL or a Chrome Web Store extension link." };
@@ -53,7 +53,7 @@ export async function createApp(
   // Tier gate (CHE-34): Daily Watch availability + cadence + count per plan.
   const gate = isExtension ? { ok: true as const } : await assertCanAddWatch(db, {
     ownerId: user.id,
-    plan: user.plan as UserPlan,
+    plan: team.plan as UserPlan,
     frequency,
   });
   if (!gate.ok) return { error: gate.reason };
@@ -84,7 +84,7 @@ export async function createApp(
     await db.app.create({
       data: {
         ownerId: user.id,
-        orgId: user.clerkOrgId ?? null,
+        teamId: team.id,
         targetUrl,
         ...extensionColumns(targetUrl, extension.success ? extension.data : undefined),
         appSlug,

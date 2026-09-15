@@ -5,7 +5,8 @@ async function main() {
   const mocks: Record<string, string> = {
     'next/server': 'export const NextResponse = { json: (value, init) => new Response(JSON.stringify(value), init) };',
     '@/lib/db': 'export const getDbFromContext = async () => fixture.db;',
-    '@/lib/auth': 'export const getOptionalUser = async () => fixture.user;',
+    // CHE-253: routes resolve the team the caller acts for alongside the user.
+    '@/lib/auth': 'export const getOptionalUser = async () => fixture.user; export const optionalTeamContext = async (_db, user) => user ? { team: { id: `team_${user.id}`, name: user.email ?? user.id, isPersonal: true, plan: fixture.plan ?? "free", stripeCustomerId: null, stripeSubscriptionId: null }, scope: "admin" } : null;',
     '@/lib/crypto': 'export const encryptSecret = () => "encrypted-fixture";',
     '@/lib/github': 'export class GitHubError extends Error {} export const validateRepoAccess = async () => { fixture.validations++; return { defaultBranch: "main" }; };',
   };
