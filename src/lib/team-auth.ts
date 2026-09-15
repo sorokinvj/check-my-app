@@ -1,0 +1,72 @@
+// CHE-255 (Teams T2): one way to ask "may this caller do this", for routes and
+// for server actions.
+//
+// The registry (src/lib/route-scopes.ts) says which action a route is. This is
+// where that answer is enforced, and it is deliberately the only place that
+// combines the three questions a handler used to answer for itself:
+//
+//   who is calling      — a browser session or an API key. getOwnerFromRequest
+//                         already tells them apart and returns the same User
+//                         row for both, so a key is not a second kind of caller
+//                         here (which is how a key ended up refused by a route
+//                         that only knew about sessions — CHE-246).
+//   for which team      — activeTeamContext, never inferred from the row being
+//                         acted on.
+//   with what scope     — can(scope, action) from the one table (CHE-254).
+//
+// A refusal is a sentence, not a bare status: the person reading it is a
+// colleague of whoever can grant it, and the copy says so.
+
+import { NextResponse } from "next/server";
+import { getOwnerFromRequest, requireUser } from "./auth";
+import { activeTeamContext, type TeamRow } from "./teams";
+import { can, refusal, type TeamAction, type TeamScope } from "./scopes";
+import type { PrismaClient } from "@/generated/prisma/client";
+
+export type ScopeGrant = {
+  user: NonNullable<Awaited<ReturnType<typeof getOwnerFromRequest>>>["user"];
+  team: TeamRow;
+  scope: TeamScope;
+  via: "clerk" | "api_key";
+};
+
+export type ScopeDecision = { ok: true; grant: ScopeGrant } | { ok: false; response: NextResponse };
+
+// For API routes. Returns the refusal as a response rather than throwing, so a
+// handler keeps its own shape and the copy stays with the rule.
+export async function requireScope(
+  db: PrismaClient,
+  req: Request,
+  action: TeamAction,
+  // What an unauthenticated caller is told. The default is fine for an API; a
+  // route with its own conversion path (Enable Daily Watch, Upgrade) passes the
+  // sentence that belongs to it.
+  unauthenticated = "Sign in to do that",
+): Promise<ScopeDecision> {
+  const caller = await getOwnerFromRequest(db, req);
+  if (!caller) {
+    return {
+      ok: false,
+      response: NextResponse.json({ error: unauthenticated }, { status: 401 }),
+    };
+  }
+  const { team, scope } = await activeTeamContext(db, caller.user);
+  if (!can(scope, action)) {
+    return {
+      ok: false,
+      response: NextResponse.json({ error: refusal(scope, action) }, { status: 403 }),
+    };
+  }
+  return { ok: true, grant: { user: caller.user, team, scope, via: caller.via } };
+}
+
+// For server actions, where there is no Response to return and an
+// unauthenticated caller is redirected to sign in by requireUser. A refusal
+// throws with the same sentence the API would have answered: a server action
+// that quietly did nothing would be the dead control this product flags on
+// other people's apps (CHE-108).
+export async function requireActionScope(action: TeamAction) {
+  const { user, db, team, scope } = await requireUser();
+  if (!can(scope, action)) throw new Error(refusal(scope, action) ?? "Not allowed");
+  return { user, db, team, scope };
+}

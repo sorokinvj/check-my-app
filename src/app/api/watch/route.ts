@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getDbFromContext } from "@/lib/db";
+import { requireScope } from "@/lib/team-auth";
 import { getOptionalUser } from "@/lib/auth";
 import { optionalTeamContext } from "@/lib/auth";
 import { EPHEMERAL_WATCH_REFUSAL, enableWatchForRun } from "@/lib/watch-enable";
@@ -14,8 +15,9 @@ export async function POST(req: Request) {
   // CHE-193: our own checker never enables a watch. First, before anything else.
   if (isSelfCheckRequest(req.headers)) return selfCheckReadOnlyResponse();
   const db = await getDbFromContext();
-  const user = await getOptionalUser(db);
-  const context = await optionalTeamContext(db, user);
+  const decision = await requireScope(db, req, "watch.configure", "Sign in to enable Daily Watch");
+  if (!decision.ok) return decision.response;
+  const { user, team } = decision.grant;
 
   const json = await req.json().catch(() => null);
   const parsed = createWatchSchema.safeParse(json);
@@ -25,7 +27,7 @@ export async function POST(req: Request) {
 
   const result = await enableWatchForRun(
     db,
-    user && context ? { id: user.id, teamId: context.team.id, plan: context.team.plan } : null,
+    { id: user.id, teamId: team.id, plan: team.plan },
     {
       runPublicId: parsed.data.runId,
       frequency: parsed.data.frequency,

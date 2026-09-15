@@ -1,6 +1,7 @@
 // Linear OAuth callback (CHE-31). Verifies CSRF state, exchanges the code for an
 // access token, and stores it (encrypted) as the App's TrackerIntegration.
 import { NextResponse, type NextRequest } from "next/server";
+import { can, refusal } from "@/lib/scopes";
 import { cookies } from "next/headers";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { requireUser } from "@/lib/auth";
@@ -35,7 +36,10 @@ export async function GET(req: NextRequest) {
   if (jar.get("linear_oauth_nonce")?.value !== nonce) return fail(req);
   jar.delete("linear_oauth_nonce");
 
-  const { user, db } = await requireUser();
+  const { user, db, scope } = await requireUser();
+  if (!can(scope, "integration.connect")) {
+    return NextResponse.json({ error: refusal(scope, "integration.connect") }, { status: 403 });
+  }
   const app = await db.app.findFirst({ ...alreadyScoped("the unique key names the owner"), where: { id: appId, ownerId: user.id } });
   if (!app) return fail(req);
 
