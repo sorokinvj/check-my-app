@@ -100,4 +100,12 @@ export const ACTION_RULES: Record<string, RouteRule> = {
   // token they hold is the capability, and the invitation row decides
   // (src/lib/invites.ts), which is exactly what `row` means.
   "src/app/invite/[token]/actions.ts#acceptInviteAction": { kind: "row", decidedIn: "src/lib/invites.ts" },
+  "src/app/team/actions.ts#inviteMemberAction": { kind: "team", action: "member.invite" },
+  "src/app/team/actions.ts#revokeInviteAction": { kind: "team", action: "member.invite" },
+  "src/app/team/actions.ts#changeScopeAction": { kind: "team", action: "member.scope.change" },
+  "src/app/team/actions.ts#removeMemberAction": { kind: "team", action: "member.remove" },
+  // Leaving is not an admin action: everybody on the team may do it, and the
+  // last-admin rule (src/lib/membership.ts) is what stops the one case where
+  // it would be destructive.
+  "src/app/team/actions.ts#leaveTeamAction": { kind: "team", action: "read" },
 };
