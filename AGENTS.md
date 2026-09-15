@@ -72,9 +72,12 @@ exist. A ticket number goes in a comment only after that ticket exists.
 **Times are UTC.** Do not introduce a named timezone; the owner reads UTC.
 
 **Several sessions work in this repo at once, and they share one deployed
-worker.** If you were given the right to merge (most sessions are not — see
-Boundaries), a push to `main` deploys both workers immediately, and that lands
-on whatever is running in production right now:
+worker.** Files answer "will this rebase cleanly"; the worker answers "will
+this kill something that is running". Only the second one has cost a run.
+
+If you were given the right to merge (most sessions are not — see Boundaries),
+a push to `main` deploys both workers immediately, and that lands on whatever is
+running in production right now:
 
 - a **website** check re-executes the Workflow step it was in, so the run's cost
   roughly doubles;
