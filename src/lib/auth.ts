@@ -10,7 +10,8 @@ import { redirect } from "next/navigation";
 import { getDbFromContext } from "./db";
 import { upsertUserFromClerk } from "./users";
 import { resolveApiKeyOwner } from "./apiKeys";
-import { activeTeamContext, type TeamRow } from "./teams";
+import { ACTIVE_TEAM_COOKIE, activeTeamContext, type TeamRow } from "./teams";
+import { cookies } from "next/headers";
 import type { TeamScope } from "./scopes";
 import type { PrismaClient } from "@/generated/prisma/client";
 
@@ -19,6 +20,19 @@ import type { PrismaClient } from "@/generated/prisma/client";
 // would have to re-answer "which team is this" from whatever row it happens to
 // be rendering, and tenancy inferred from the row on screen is the mistake this
 // epic exists to make impossible.
+// CHE-261 (T8): which team this browser last chose. A cookie is a request, not
+// an authority — activeTeamContext honours it only if the person is actually a
+// member of that team, so editing it by hand gets you your own team back.
+export async function preferredTeamId(): Promise<string | null> {
+  try {
+    return (await cookies()).get(ACTIVE_TEAM_COOKIE)?.value ?? null;
+  } catch {
+    // Read from a context with no request cookies (a background call). No
+    // preference is the honest answer, and the caller falls back to personal.
+    return null;
+  }
+}
+
 export async function requireUser(): Promise<{
   user: NonNullable<Awaited<ReturnType<PrismaClient["user"]["upsert"]>>>;
   db: PrismaClient;
@@ -45,7 +59,7 @@ export async function requireUser(): Promise<{
   // Lazily, like the mirror above: an account created before teams existed, or
   // written straight by a webhook, gets its personal team on first use rather
   // than being refused.
-  const { team, scope } = await activeTeamContext(db, user);
+  const { team, scope } = await activeTeamContext(db, user, await preferredTeamId());
   return { user, db, team, scope };
 }
 
@@ -85,7 +99,7 @@ export async function optionalTeamContext(
   user: { id: string; name?: string | null; email: string } | null,
 ) {
   if (!user) return null;
-  return activeTeamContext(db, user);
+  return activeTeamContext(db, user, await preferredTeamId());
 }
 
 // Request-level owner resolution for API routes (CHE-52): a browser presents a

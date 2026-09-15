@@ -60,6 +60,15 @@ export function alreadyScoped(why: ScopedReason): Record<string, never> {
   return {};
 }
 
+// Scoped to the teams a person belongs to, rather than to one of them. The only
+// honest use is answering "is this row in a team of yours" — the deep-link
+// offer in T8, where the alternative is a 404 on a row the person is entitled
+// to see. It never grants an action: switching teams is still an explicit act,
+// and the scope that decides is the one they have in THAT team.
+export function memberOfRows(userId: string): { team: { memberships: { some: { userId: string } } } } {
+  return { team: { memberships: { some: { userId } } } };
+}
+
 // Addressed by an unguessable publicId, slug or key hash. A verdict link works
 // for whoever holds it — that is the product (CHE-33), not an oversight.
 export function publicRow(): Record<string, never> {

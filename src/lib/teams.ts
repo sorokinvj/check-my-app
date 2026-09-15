@@ -69,25 +69,49 @@ export async function ensurePersonalTeam(
   return team as TeamRow;
 }
 
+// CHE-261 (T8): the cookie that carries the choice. Not a session store and not
+// a database column — a person's chosen team is a property of this browser, and
+// signing in somewhere else should start from their own team rather than
+// wherever they last were.
+export const ACTIVE_TEAM_COOKIE = "cma_team";
+
+// The rule for choosing, separated from the request so it can be asserted
+// without one (scripts/verify-team-context.ts).
+//
+// `preferred` is what the browser asked for. It is honoured ONLY if the person
+// is a member of that team — a cookie is something the holder can edit, so it
+// is a request, never an authority. Anything else falls back to their personal
+// team, and to the oldest membership if (impossibly) they have no personal one.
+export function chooseTeam<T extends { teamId: string }>(
+  memberships: T[],
+  personalId: string,
+  preferred: string | null,
+): T | null {
+  if (preferred) {
+    const asked = memberships.find((m) => m.teamId === preferred);
+    if (asked) return asked;
+  }
+  return memberships.find((m) => m.teamId === personalId) ?? memberships[0] ?? null;
+}
+
 // Which team this person is acting for, and what they may do in it.
 //
-// Today every account has exactly one membership, so "active team" has one
-// answer and no state is needed to find it. When a person can belong to several
-// (T4/T5) the active team becomes an explicit choice carried in the session
-// (T8) — this function is where that choice will be read, so that every page
-// and route keeps taking its team from one place instead of inferring one from
-// the row it happens to be showing.
+// The active team is an explicit choice, carried in a cookie and validated
+// against membership on every request. It is never inferred from the row being
+// shown: a tenancy derived from what you happen to be looking at is how a check
+// gets started against the wrong team's budget, and nobody can say why
+// afterwards.
 export async function activeTeamContext(
   db: PrismaClient,
   user: { id: string; name?: string | null; email: string },
+  preferredTeamId: string | null = null,
 ): Promise<TeamContext> {
   const memberships = await db.membership.findMany({
     where: { userId: user.id },
     include: { team: true },
     orderBy: { createdAt: "asc" },
   });
-  const personal = memberships.find((m) => m.teamId === personalTeamId(user.id));
-  const chosen = personal ?? memberships[0];
+  const chosen = chooseTeam(memberships, personalTeamId(user.id), preferredTeamId);
   if (!chosen) {
     // No membership at all: an account that predates the backfill or was
     // written straight by a webhook. Give it its team rather than refusing the
@@ -96,4 +120,26 @@ export async function activeTeamContext(
     return { team, scope: "admin" };
   }
   return { team: chosen.team as TeamRow, scope: chosen.scope as TeamScope };
+}
+
+// Every team this person belongs to, for the switcher and for the "you are in
+// that team too" offer a deep link makes (T8). Ordered with the personal team
+// first, then by name, so the list does not reshuffle itself between visits.
+export async function teamsOf(
+  db: PrismaClient,
+  userId: string,
+): Promise<{ id: string; name: string; scope: TeamScope; isPersonal: boolean }[]> {
+  const memberships = await db.membership.findMany({
+    where: { userId },
+    include: { team: true },
+  });
+  const personal = personalTeamId(userId);
+  return memberships
+    .map((m) => ({
+      id: m.teamId,
+      name: m.team.name,
+      scope: m.scope as TeamScope,
+      isPersonal: m.teamId === personal,
+    }))
+    .sort((a, b) => (a.isPersonal === b.isPersonal ? a.name.localeCompare(b.name) : a.isPersonal ? -1 : 1));
 }

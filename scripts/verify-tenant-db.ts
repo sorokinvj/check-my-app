@@ -40,7 +40,7 @@ const EXEMPT = new Map<string, string>([
   ["src/lib/db.ts", "builds the client and assigns run numbers; owns no tenant query"],
 ]);
 
-const DECLARATIONS = ["teamOwned", "alreadyScoped", "publicRow", "ownerScoped", "systemWide"] as const;
+const DECLARATIONS = ["teamOwned", "memberOfRows", "alreadyScoped", "publicRow", "ownerScoped", "systemWide"] as const;
 type Declaration = (typeof DECLARATIONS)[number];
 
 function walk(dir: string): string[] {
@@ -180,10 +180,15 @@ check(
 // else's and looks like a feature. Every query there must be team-scoped or
 // pinned to a row already scoped.
 const dashboard = sites.filter((s) => /^src\/app\/dashboard\//.test(s.file) && s.file !== "src/app/dashboard/accuracy/page.tsx");
+// `memberOfRows` is allowed here for one job only: answering "is this row in a
+// team of yours" so a deep link can offer the switch instead of 404ing a row
+// the person is entitled to see (CHE-261). It grants nothing — the scope that
+// decides is the one they have in that team, after they switch.
+const DASHBOARD_OK = ["teamOwned", "alreadyScoped", "memberOfRows"];
 check(
-  "every dashboard query is teamOwned or alreadyScoped",
-  dashboard.every((s) => s.declared === "teamOwned" || s.declared === "alreadyScoped"),
-  dashboard.filter((s) => s.declared !== "teamOwned" && s.declared !== "alreadyScoped").map((s) => `${s.file}:${s.line} ${s.declared}`).join(", ") ||
+  "every dashboard query is teamOwned, alreadyScoped or memberOfRows",
+  dashboard.every((s) => s.declared !== null && DASHBOARD_OK.includes(s.declared)),
+  dashboard.filter((s) => s.declared === null || !DASHBOARD_OK.includes(s.declared)).map((s) => `${s.file}:${s.line} ${s.declared}`).join(", ") ||
     `${dashboard.length} queries`,
 );
 

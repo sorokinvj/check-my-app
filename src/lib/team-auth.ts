@@ -20,6 +20,7 @@
 import { NextResponse } from "next/server";
 import { getOwnerFromRequest, requireUser } from "./auth";
 import { activeTeamContext, type TeamRow } from "./teams";
+import { preferredTeamId } from "./auth";
 import { can, refusal, type TeamAction, type TeamScope } from "./scopes";
 import type { PrismaClient } from "@/generated/prisma/client";
 
@@ -50,7 +51,11 @@ export async function requireScope(
       response: NextResponse.json({ error: unauthenticated }, { status: 401 }),
     };
   }
-  const { team, scope } = await activeTeamContext(db, caller.user);
+  // CHE-261: an API-key caller has no browser and therefore no cookie — it
+  // acts for the team its key belongs to, which resolves to that owner's
+  // personal team today and becomes the key's own team in T10.
+  const preferred = caller.via === "clerk" ? await preferredTeamId() : null;
+  const { team, scope } = await activeTeamContext(db, caller.user, preferred);
   if (!can(scope, action)) {
     return {
       ok: false,

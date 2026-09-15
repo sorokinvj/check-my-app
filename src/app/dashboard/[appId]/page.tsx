@@ -11,7 +11,8 @@ import { setIntegrationEndpoints, updateAppSettings } from "../actions";
 import { DeleteAppSection } from "@/components/delete-app";
 import { fullRechecksRemaining } from "@/lib/plans";
 import type { UserPlan } from "@/lib/enums";
-import { teamOwned } from "@/lib/tenant-db";
+import { memberOfRows, teamOwned } from "@/lib/tenant-db";
+import { switchTeamAction } from "@/app/team/switch-actions";
 
 // Per-app settings (CHE-64, redesigned CHE-81). Three meaning-first sections —
 // the page will keep growing, so hierarchy comes from sections, not from a pile
@@ -33,10 +34,35 @@ export default async function AppSettingsPage({
   const { user, db, team } = await requireUser();
 
   const app = await db.app.findFirst({
-    where: { ...teamOwned(team.id), id: appId, ownerId: user.id },
+    where: { ...teamOwned(team.id), id: appId },
     include: { watch: true, policy: true, tracker: true, repo: true, runs: { orderBy: { createdAt: "desc" }, take: 1, select: { extensionEvidence: true } } },
   });
-  if (!app) notFound();
+  // CHE-261: not in the team you are acting as — but possibly in another of
+  // your teams. Offer the switch; never switch silently (a page that changes
+  // which team you are acting as, because of a link you followed, is how a
+  // check gets started against the wrong budget), and never 404 a row this
+  // person is entitled to see.
+  if (!app) {
+    const elsewhere = await db.app.findFirst({
+      where: { ...memberOfRows(user.id), id: appId },
+      select: { id: true, appSlug: true, teamId: true, team: { select: { name: true } } },
+    });
+    if (!elsewhere?.teamId) notFound();
+    return (
+      <main className="mx-auto w-full max-w-2xl px-4 py-16">
+        <section className="card p-6">
+          <h1 className="text-xl font-semibold">{elsewhere.appSlug} belongs to {elsewhere.team?.name}</h1>
+          <p className="mt-2 text-sm text-fg-muted">
+            You are on that team, but you are currently acting as {team.name}. Switching changes which
+            team&apos;s plan pays for anything you start.
+          </p>
+          <form action={switchTeamAction.bind(null, elsewhere.teamId, `/dashboard/${appId}`)}>
+            <button type="submit" className="btn-primary mt-6">Switch to {elsewhere.team?.name}</button>
+          </form>
+        </section>
+      </main>
+    );
+  }
 
   const pickupLabels = (JSON.parse(app.policy?.pickupLabels ?? "[]") as string[]).join(", ");
   const repoLabel = app.policy?.repoLabel ?? "";
