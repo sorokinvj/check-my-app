@@ -194,6 +194,9 @@ function stubWorld(
       },
     },
     settledSignature: { findFirst: async () => null, create: async () => ({}) },
+    // CHE-256: filing resolves the app's team, because a settlement is the
+    // team's knowledge and must be stored with one.
+    app: { findUnique: async () => ({ teamId: "team_fixture" }) },
   };
 
   const self = {

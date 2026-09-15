@@ -143,6 +143,15 @@ export async function fileFindingTicket(opts: {
   const { db, tracker, appId, finding, run, policy, ownerId } = opts;
   const draft = draftForFinding(finding, run, policy, opts.verdictUrl);
   const key = dedupKeyForFinding(finding, run);
+  // CHE-256: which team's settlements these are. A settlement outlives the App
+  // row it came from (CHE-101), so it is stored with both — the team because
+  // that is whose knowledge it is, the owner because rows written before teams
+  // existed have only that.
+  const app = await db.app.findUnique({ ...alreadyScoped("the caller resolved this app"),
+    where: { id: appId },
+    select: { teamId: true },
+  });
+  const settledScope = app?.teamId ? { teamId: app.teamId } : { ownerId: ownerId ?? undefined };
 
   const existing = await db.issueLink.findUnique({
     where: { appId_dedupKey: { appId, dedupKey: key } },
@@ -154,7 +163,7 @@ export async function fileFindingTicket(opts: {
   // possible way to be filtered out.
   if (!existing) {
     const settled = await db.settledSignature.findFirst({ ...alreadyScoped("settled signatures outlive the app they describe"),
-      where: { ownerId: ownerId ?? undefined, appSlug: run.appSlug, dedupKey: key, outcome: "suppressed" },
+      where: { ...settledScope, appSlug: run.appSlug, dedupKey: key, outcome: "suppressed" },
       orderBy: { settledAt: "desc" },
     });
     if (settled) return { kind: "suppressed", identifier: settled.externalIssueId };
@@ -211,6 +220,7 @@ export async function fileFindingTicket(opts: {
     await db.settledSignature.create({ ...alreadyScoped("settled signatures outlive the app they describe"),
       data: {
         ownerId: ownerId ?? null,
+        teamId: app?.teamId ?? null,
         appSlug: run.appSlug,
         dedupKey: key,
         externalIssueId: existing.externalIssueId,

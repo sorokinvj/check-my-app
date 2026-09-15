@@ -52,6 +52,7 @@ export type ScopedReason =
   | "created with its team"
   | "the App was just scoped to this team"
   | "the previous run names its own app"
+  | "the caller resolved this app"
   | "settled signatures outlive the app they describe";
 
 export function alreadyScoped(why: ScopedReason): Record<string, never> {

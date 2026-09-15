@@ -158,6 +158,10 @@ export async function reconcileIssueLinks(
       await env.db.settledSignature.create({
         data: {
           ownerId: app.ownerId,
+          // CHE-256: the settlement is the TEAM's knowledge — a colleague must
+          // not re-file what the team already had rejected. Written here, not
+          // left for a later reader to find null.
+          teamId: app.teamId,
           appSlug: run.appSlug,
           dedupKey: link.dedupKey,
           externalIssueId: link.externalIssueId,
@@ -315,6 +319,7 @@ export async function verifyFixedLinks(env: AgentEnv, runId: string): Promise<Re
       await env.db.settledSignature.create({
         data: {
           ownerId: app.ownerId,
+          teamId: app.teamId,
           appSlug: run.appSlug,
           dedupKey: link.dedupKey,
           externalIssueId: link.externalIssueId,
