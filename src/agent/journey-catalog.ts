@@ -311,7 +311,13 @@ export async function recordJourneyCost(
  */
 export interface CatalogJourneyState {
   appJourneyId: string;
+  /** Stable slug — the identity a proposal is matched against. */
+  key: string;
   title: string;
+  /** Every title ever resolved to this journey, so a match survives a rewording. */
+  aliases: string[];
+  /** Where it lives ("app", "/settings"), or null when nobody has told us. */
+  surface: string | null;
   /** Ordered step labels from the last walk that produced any; may be empty. */
   plan: string[];
   /** The roll-up of the last walk, or null for a journey nothing has walked. */
@@ -356,7 +362,10 @@ export async function journeysForPlanning(env: AgentEnv, appId: string): Promise
     where: { appId, retiredAt: null },
     select: {
       id: true,
+      key: true,
       title: true,
+      aliases: true,
+      surface: true,
       plan: true,
       status: true,
       lastWalkedAt: true,
@@ -366,7 +375,10 @@ export async function journeysForPlanning(env: AgentEnv, appId: string): Promise
   });
   return rows.map((r) => ({
     appJourneyId: r.id,
+    key: r.key,
     title: r.title,
+    aliases: (parseJson<string[]>(r.aliases) ?? []).filter((a) => typeof a === "string" && a.trim()),
+    surface: r.surface,
     plan: (parseJson<string[]>(r.plan) ?? []).filter((s) => typeof s === "string" && s.trim()),
     status: r.status,
     lastWalkedAt: r.lastWalkedAt ? new Date(r.lastWalkedAt) : null,

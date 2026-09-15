@@ -34,6 +34,8 @@ import type { AgentEnv } from "./env";
 import { FULL_RUN_MAX_AGE_DAYS, findLastWalkedRun } from "./replay";
 import { fullRunGate, gateInputFrom, surveySaysUnchanged, type SurveyOutcome } from "./snapshot";
 import { journeysForPlanning, recordCarry, type CatalogJourneyState } from "./journey-catalog";
+import { matchJourney } from "@/lib/journey-key";
+import type { ProposedJourney } from "./discovery";
 
 // The only journey statuses worth carrying: "ok" (everything worked) and
 // "partial" (everything attempted worked, some steps went unverified). Anything
@@ -186,6 +188,84 @@ export function planRotation(args: {
     carry: left.filter((j) => carriable(j)),
     deferred: left.filter((j) => !carriable(j)),
   };
+}
+
+/**
+ * How many of a full run's walk slots are spent on the catalog's queue rather
+ * than on what discovery proposed.
+ *
+ * The rotation was only ever consulted by partial mode, and partial fires on
+ * 18% of watch runs (checkmyapp.dev 6 of 34, joblander 9 of 45, meetbashar 3 of
+ * 24, month to 2026-09-15). On the other runs the model picks five, and it
+ * picks the flows that read as most important — which is how joblander ends up
+ * with 9 of 23 journeys walked once or never while its primary flows carry
+ * double-digit walk counts.
+ *
+ * Two slots, not five: an app is checked daily to answer "is it still working
+ * this morning", and that question is about the flows people actually use. The
+ * headline journeys keep their daily walk; the rest of the catalog comes round
+ * through these two.
+ */
+export const ROTATION_SLOTS = 2;
+
+/**
+ * A full run's walk list: what discovery proposed, with the last slots given to
+ * the journeys the catalog says have waited longest.
+ *
+ * Pure, so scripts/verify-journey-rotation.ts can hold it to the real rules.
+ * A journey discovery already proposed is never added twice — it is matched
+ * against the catalog by the same identity rules the walk itself uses, so a
+ * rewording does not buy a second slot.
+ */
+export function fullRunQueue(args: {
+  /** What discovery proposed, already ordered by focus (CHE-134). */
+  proposed: ProposedJourney[];
+  /** The app's live journeys; empty for a run with no catalog behind it. */
+  catalog: CatalogJourneyState[];
+  now: Date;
+  budget?: number;
+  rotationSlots?: number;
+}): ProposedJourney[] {
+  const budget = args.budget ?? JOURNEY_WALK_BUDGET;
+  const slots = args.rotationSlots ?? ROTATION_SLOTS;
+  const proposed = args.proposed.slice(0, budget);
+  if (args.catalog.length === 0 || slots <= 0) return proposed;
+
+  // Which catalog journeys the proposal already covers. Same rules as the walk:
+  // a reworded title resolves to its journey rather than looking new.
+  const candidates = args.catalog.map((j) => ({
+    key: j.key,
+    title: j.title,
+    aliases: j.aliases.length ? j.aliases : [j.title],
+    surface: j.surface,
+  }));
+  const covered = new Set<string>();
+  for (const p of proposed) {
+    const hit = matchJourney(p.title, candidates, p.surface);
+    if (hit) covered.add(hit.key);
+  }
+
+  // The catalog's own queue, minus everything this run is already walking.
+  const waiting = planRotation({
+    journeys: args.catalog.filter((j) => !covered.has(j.key)),
+    now: args.now,
+    budget: slots,
+  }).walk;
+  if (waiting.length === 0) return proposed;
+
+  // Discovery keeps the slots the rotation does not need, and its own order:
+  // focus areas first (CHE-134), then whatever it thought mattered most.
+  const keep = Math.max(1, budget - waiting.length);
+  return [
+    ...proposed.slice(0, keep),
+    ...waiting.map((j) => ({
+      title: j.title,
+      // A stored plan when a walk produced one; the title is a worse plan than
+      // real steps and a much better one than none.
+      steps: j.plan.length ? j.plan.slice(0, MAX_PROPOSED_STEPS) : [j.title],
+      surface: j.surface,
+    })),
+  ].slice(0, budget);
 }
 
 // ─── Decision ────────────────────────────────────────────────────────────────

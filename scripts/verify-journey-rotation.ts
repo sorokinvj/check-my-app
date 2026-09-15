@@ -162,6 +162,63 @@ async function main() {
       titles(unchanged.walk).join() === "bad", titles(unchanged.walk).join());
   }
 
+  // CHE-232: the rotation used to be consulted only by partial mode, which is
+  // 18% of watch runs. On a full run the model proposed five and picked its
+  // headline flows every time — joblander has 9 of 23 journeys walked once or
+  // never while its primary flows carry 20-31 walks.
+  console.log("\nA full run gives its last slots to the journeys that have waited longest");
+  {
+    const { fullRunQueue, ROTATION_SLOTS } = await import("@/agent/partial");
+    const proposed = ["Sign up", "Practice an interview", "Install the extension", "Browse roles", "Read the guides"].map(
+      (title) => ({ title, steps: [`Open ${title}`] }),
+    );
+    const catalog = [
+      // What discovery proposed, as the catalog knows it — walked yesterday.
+      ...proposed.map((p, i) => journey({ title: p.title, lastWalkedAt: daysAgo(1), plan: [], status: "ok", appJourneyId: `aj-p${i}` })),
+      // The tail nobody has walked in weeks.
+      journey({ title: "Export your data", lastWalkedAt: daysAgo(19), plan: ["Open settings", "Click export"] }),
+      journey({ title: "Invite a teammate", lastWalkedAt: daysAgo(22) }),
+      journey({ title: "Change your password", lastWalkedAt: daysAgo(4) }),
+    ].map((j) => ({ ...j, key: `k-${j.title.replace(/\W+/g, "-")}`, aliases: [j.title], surface: null }));
+
+    const queue = fullRunQueue({ proposed, catalog, now: NOW });
+    check("the queue is still the budget", queue.length === JOURNEY_WALK_BUDGET, String(queue.length));
+    check(
+      `the last ${ROTATION_SLOTS} slots go to the two stalest journeys`,
+      queue.slice(-ROTATION_SLOTS).map((q) => q.title).join() === "Invite a teammate,Export your data",
+      queue.map((q) => q.title).join(" · "),
+    );
+    check(
+      "discovery keeps the rest, in its own order",
+      queue.slice(0, JOURNEY_WALK_BUDGET - ROTATION_SLOTS).map((q) => q.title).join() === "Sign up,Practice an interview,Install the extension",
+      queue.map((q) => q.title).join(" · "),
+    );
+    check(
+      "a rotated journey brings its stored plan, not just its title",
+      (queue.find((q) => q.title === "Export your data")?.steps ?? []).join() === "Open settings,Click export",
+      JSON.stringify(queue.find((q) => q.title === "Export your data")?.steps),
+    );
+
+    // A journey discovery already proposed must not also take a rotation slot,
+    // however it was worded this time.
+    const reworded = [{ title: "Invite a teammate to your workspace", steps: ["Open settings"] }, ...proposed.slice(0, 4)];
+    const q2 = fullRunQueue({ proposed: reworded, catalog, now: NOW });
+    check(
+      "a reworded proposal does not buy the same journey a second slot",
+      q2.filter((q) => /invite a teammate/i.test(q.title)).length === 1,
+      q2.map((q) => q.title).join(" · "),
+    );
+
+    // The first run of an app has nothing to rotate through.
+    const first = fullRunQueue({ proposed, catalog: [], now: NOW });
+    check("with no catalog the queue is exactly what discovery proposed", first.map((p) => p.title).join() === proposed.map((p) => p.title).join());
+
+    // A short proposal must not be padded past what discovery found.
+    const two = fullRunQueue({ proposed: proposed.slice(0, 2), catalog, now: NOW });
+    check("a two-journey proposal still gets its rotation slots and no more", two.length <= JOURNEY_WALK_BUDGET && two.length >= 2, String(two.length));
+    check("discovery always keeps at least one slot", fullRunQueue({ proposed, catalog, now: NOW, rotationSlots: 99 })[0].title === "Sign up");
+  }
+
   console.log("\nA deferred journey is only counted against us once we know how many journeys there are");
   {
     const { catalogIsDeduplicated } = await import("@/agent/journey-catalog");
