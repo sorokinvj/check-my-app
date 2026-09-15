@@ -38,6 +38,7 @@ export interface ExtensionSession extends ExtensionIdentity {
   productResult?: { confirmed: boolean; observedAt?: number; mode?: string;
     failure?: { source: string; text: string; observedAt: number; surface: string } };
   billing?: { assessment?: { status?: string; twoMinuteSteps?: boolean; expectedMinutes?: number; observedMinutes?: number; cessationMs?: number;
+    postStopChange?: number; postStopSettledMs?: number;
     sessions?: Array<{ id: string; kind: string; dateUtc: string; durationSeconds: number }> } };
 }
 

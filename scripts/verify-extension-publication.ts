@@ -68,10 +68,36 @@ async function main() {
   assert.equal(hasEnvironmentLeak(JSON.stringify(writes)), false);
   assert.equal(hasHomework(JSON.stringify(writes)), false);
   assert.doesNotMatch(JSON.stringify(result), /PRIVATE_|empty panel|not refreshing/);
+  // A charge that goes on moving after the person stopped the session: the
+  // product did what it was asked, and the figure they are spending is still
+  // in motion with nothing saying when it is done.
+  const settledSaved = phases["walk-0"];
+  phases["walk-0"] = { ...settledSaved, chargedAfterStop: 2, chargeSettledMs: 70_000 };
+  const unclear = (await prepareExtensionPublication(env, "new-run", JSON.stringify(evidence)))!;
+  assert.equal(unclear.findings.length, 1, "One journey whose charge kept moving produces one finding");
+  assert.equal(unclear.findings[0].category, "confusing");
+  assert.equal(unclear.findings[0].severity, "medium");
+  assert.equal(unclear.verdict, "mostly_ok", "A product that works and cannot be understood is not broken");
+  assert.match(unclear.findings[0].detail.whatHappened, /by 2 minutes/);
+  assert.match(unclear.findings[0].detail.whatHappened, /70 seconds later/);
+  assert.match(unclear.findings[0].detail.whyItMatters, /stops a session to stop spending/);
+  assert.match(unclear.bottomLine, /final charge unannounced/);
+  assert.equal(hasEnvironmentLeak(JSON.stringify(unclear.findings)), false, "The finding describes their product, never how we watched it");
+  assert.equal(hasHomework(JSON.stringify(unclear.findings)), false, "It never asks the owner to go and check the number themselves");
+  assert.equal(unclear.findings[0].errorSignature, "extension-charge-not-final:interview", "The same journey repeats one signature rather than filing again each run");
+  phases["walk-0"] = { ...settledSaved, chargedAfterStop: 0, chargeSettledMs: 70_000 };
+  assert.deepEqual((await prepareExtensionPublication(env, "new-run", JSON.stringify(evidence)))!.findings, [],
+    "A charge that was already final when the session stopped is not a finding");
+  phases["walk-0"] = settledSaved;
+
   const saved = phases["walk-0"];
+  // Compared against the count so far rather than against 1: what this proves
+  // is that a rejected publication deletes nothing, and that stays true however
+  // many valid publications ran before it.
+  const deletedBeforeRejection = deleted;
   phases["walk-0"] = { ...saved, productResultConfirmed: false };
   await assert.rejects(prepareExtensionPublication(env, "new-run", JSON.stringify(evidence)), /three session outcomes/);
-  assert.equal(deleted, 1, "Invalid evidence is rejected before any published row changes");
+  assert.equal(deleted, deletedBeforeRejection, "Invalid evidence is rejected before any published row changes");
   phases["walk-0"] = { ...saved, cleanupComplete: false };
   await assert.rejects(prepareExtensionPublication(env, "new-run", JSON.stringify(evidence)), /verified observation/);
   phases["walk-0"] = saved;

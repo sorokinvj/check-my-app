@@ -94,6 +94,8 @@ export interface PublicationPhase {
   sustainedSessionsObserved: boolean;
   productFailureObserved: boolean;
   productFailureSignature?: string | null;
+  chargedAfterStop?: number | null;
+  chargeSettledMs?: number | null;
   publicObservation?: ExtensionPublicObservation | null;
 }
 
@@ -152,6 +154,19 @@ export async function prepareExtensionPublication(env: AgentEnv, runId: string, 
         stepRef: { journeyIndex: index, stepIndex: order },
       });
     }
+    // The session stops when the person asks it to — and the figure they are
+    // spending keeps moving afterwards, with nothing on the screen saying when
+    // it is done. The product is not misbehaving; the person is left unable to
+    // answer the only question they stopped for.
+    if (typeof phase.chargedAfterStop === "number" && phase.chargedAfterStop > 0) findings.push({
+      errorSignature: `extension-charge-not-final:${report.scenario}`,
+      title: "The minute balance keeps changing after a session is stopped", category: "confusing", severity: "medium",
+      detail: { where: scenarioNames[report.scenario],
+        whatWeTried: ["Stop the session, then read the account's minute balance until it stops moving."],
+        whatHappened: `The session ended when it was stopped, and the balance went on changing afterwards, by ${phase.chargedAfterStop} minute${phase.chargedAfterStop === 1 ? "" : "s"}`
+          + `${typeof phase.chargeSettledMs === "number" ? `, coming to rest ${Math.round(phase.chargeSettledMs / 1000)} seconds later` : ""}. Nothing on the screen marked the figure as final.`,
+        whyItMatters: "Someone stops a session to stop spending, and the number they check is the one that is still moving. Until the screen says which figure is final, a person cannot tell whether they were charged for the time they used or for longer — and the only way to find out is to keep watching." },
+    });
     const status = report.steps.some(s => s.status === "broken") ? "broken"
       : report.steps.some(s => s.status === "skipped") ? "partial" : "ok";
     await env.db.journey.update({ where: { id: journey.id }, data: { status, summary: report.summary } });
@@ -159,8 +174,15 @@ export async function prepareExtensionPublication(env: AgentEnv, runId: string, 
   const incomplete = reports.filter(r => r.report.steps.some(s => s.status === "skipped"));
   const minuteGaps = reports.filter(r => r.report.steps.some(s => s.gapClass === "extension_minute_accounting"));
   const otherGaps = incomplete.filter(r => r.report.steps.some(s => s.status === "skipped" && s.gapClass !== "extension_minute_accounting"));
-  const verdict: Verdict = findings.length ? "broken" : incomplete.length ? "mostly_ok" : "all_good";
-  const bottomLine = [findings.length ? "A session displayed an error. All started sessions were stopped."
+  // A product that works and cannot be understood is not broken. "Confusing"
+  // has its own weight: it lowers the verdict without claiming a failure that
+  // did not happen (rule 3 — a session that started, answered and stopped is
+  // positive evidence, whatever the balance did afterwards).
+  const broken = findings.filter(finding => finding.category === "broken");
+  const unclear = findings.filter(finding => finding.category === "confusing");
+  const verdict: Verdict = broken.length ? "broken" : findings.length || incomplete.length ? "mostly_ok" : "all_good";
+  const bottomLine = [broken.length ? "A session displayed an error. All started sessions were stopped."
+    : unclear.length ? "Interview assistance, AI practice and their combined use produced new responses and stopped as expected — but a stopped session leaves its final charge unannounced."
     : "Interview assistance, AI practice and their combined use produced new responses and stopped as expected.",
     minuteGaps.length ? `Minute-by-minute charges and final rounding were not confirmed for ${minuteGaps.map(r => scenarioNames[r.report.scenario].toLowerCase()).join(" and ")}.` : "Session minute usage was confirmed, and charging stopped when each session did.",
     otherGaps.length ? "Some additional extension and account controls remain unverified." : "",
