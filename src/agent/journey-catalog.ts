@@ -272,6 +272,53 @@ export async function recordJourneyCost(
 }
 
 /**
+ * CHE-232 — every live journey of the app with the state a plan is made from.
+ *
+ * This is the catalog's answer to "what should tonight's run walk?", and it
+ * replaces reading one baseline run's rows. The difference that matters is the
+ * clock: a run's rows carry ONE date for every journey on them, so a journey
+ * walked eleven days ago and one walked last night were indistinguishable.
+ * Here each journey carries its own `lastWalkedAt`, which is what makes a
+ * rotation possible at all.
+ */
+export interface CatalogJourneyState {
+  appJourneyId: string;
+  title: string;
+  /** Ordered step labels from the last walk that produced any; may be empty. */
+  plan: string[];
+  /** The roll-up of the last walk, or null for a journey nothing has walked. */
+  status: string | null;
+  lastWalkedAt: Date | null;
+  /** The run that actually walked it — where a carried copy's evidence comes from. */
+  lastWalkedRunId: string | null;
+  consecutiveBad: number;
+}
+
+export async function journeysForPlanning(env: AgentEnv, appId: string): Promise<CatalogJourneyState[]> {
+  const rows = await env.db.appJourney.findMany({
+    where: { appId, retiredAt: null },
+    select: {
+      id: true,
+      title: true,
+      plan: true,
+      status: true,
+      lastWalkedAt: true,
+      lastWalkedRunId: true,
+      consecutiveBad: true,
+    },
+  });
+  return rows.map((r) => ({
+    appJourneyId: r.id,
+    title: r.title,
+    plan: (parseJson<string[]>(r.plan) ?? []).filter((s) => typeof s === "string" && s.trim()),
+    status: r.status,
+    lastWalkedAt: r.lastWalkedAt ? new Date(r.lastWalkedAt) : null,
+    lastWalkedRunId: r.lastWalkedRunId,
+    consecutiveBad: r.consecutiveBad,
+  }));
+}
+
+/**
  * CHE-232 — the app's journeys as a map to confirm (known-map.ts). Best
  * established first: a journey walked twenty times is the one discovery should
  * keep calling by its own name, and the prompt only shows the first few.

@@ -52,6 +52,7 @@ import { claimedHands, drivenControls, gateFindings } from "./findings-gate";
 import { synthesizeVerdict, type SynthesizedFinding } from "./synthesis";
 import { autoFileFindings } from "./autofile";
 import { fileCapabilityGaps, fileDeliveryGap } from "./capability-gaps";
+import { GAP_CLASSES } from "./gap-classes";
 import { auditCreatedResources } from "./cleanup";
 import { reconcileIssueLinks, reverifyInstructions, verifyFixedLinks } from "./reconcile";
 import {
@@ -885,7 +886,22 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
       // fails the run, exactly like autofile.
       await step.do("capability-gaps", async () => {
         try {
-          for (const note of await fileCapabilityGaps(env, runId)) {
+          // CHE-232: journeys the rotation could neither walk tonight nor carry,
+          // because the catalog has outgrown what one run can keep inside the
+          // carry window. The owner is paying for an app to be checked and part
+          // of it was not — that is ours to fix, not theirs to live with.
+          const deferred = plan.taken ? (plan.deferred ?? []) : [];
+          const extraGaps = deferred.length
+            ? [
+                {
+                  label: GAP_CLASSES.journey_rotation.label,
+                  attempted: "Check every journey this app has, inside the window a check stays good for",
+                  observed: `Not reached this run: ${deferred.slice(0, 8).join(" · ")}`,
+                  gapClass: "journey_rotation" as const,
+                },
+              ]
+            : [];
+          for (const note of await fileCapabilityGaps(env, runId, { extraGaps })) {
             await appendEvent(env, runId, "writing", note);
           }
         } catch (err) {
@@ -1129,6 +1145,16 @@ function modeEvents(
         `${plan.rewalk.length + plan.carry.length} journeys ` +
         `(${plan.carry.length} carried from #${plan.baselineRunNumber})`,
     });
+    // CHE-232 + rule 2: coverage stated plainly, in the owner's terms — which
+    // journeys of their app this check did not reach. The ticket on our board
+    // is the rest of the answer; this line is the honest minimum while it exists.
+    const deferred = plan.deferred ?? [];
+    if (deferred.length > 0) {
+      events.push({
+        icon: "warn",
+        text: `Not checked this time: ${deferred.slice(0, 5).join(" · ")}${deferred.length > 5 ? ` and ${deferred.length - 5} more` : ""}`,
+      });
+    }
   } else if (!smoke.taken) {
     // When the smoke check ran and went red it already said "running the full
     // check"; repeating the partial mode's reason there would just be noise.
