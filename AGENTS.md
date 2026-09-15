@@ -71,6 +71,24 @@ exist. A ticket number goes in a comment only after that ticket exists.
 
 **Times are UTC.** Do not introduce a named timezone; the owner reads UTC.
 
+**A tenant query says whose rows it may see.** Every query for an App, Run,
+Watch, ApiKey or SettledSignature in `src/app` and `src/lib` carries one of the
+five declarations in `src/lib/tenant-db.ts` — `teamOwned`, `alreadyScoped`,
+`publicRow`, `ownerScoped`, `systemWide` — and `scripts/verify-tenant-db.ts`
+fails the build for one that carries none (CHE-256). Write the declaration when
+you write the query; it is checked over the registry of call sites, so the first
+one without it is caught, not the hundredth.
+
+**Do not wrap Prisma arguments in a generic helper.** Prisma computes its types
+from the exact argument object, so a helper of the shape `f<T>(args: T): T`
+re-infers them and `orderBy: { createdAt: "desc" }` widens to `string`. The
+danger is not the widening — it is that **the compiler goes quiet**: nothing
+fails, the query keeps working, and type checking is silently off everywhere the
+helper is used. A helper that makes the type checker less able to help is worse
+than no helper. Spread a small object into `where` instead, which keeps every
+type intact (this is why the declarations above are spreads, and the wrapper
+version of them was written first and reverted).
+
 **Several sessions work in this repo at once, and they share one deployed
 worker.** Files answer "will this rebase cleanly"; the worker answers "will
 this kill something that is running". Only the second one has cost a run.
