@@ -95,7 +95,7 @@ export async function POST(req: Request) {
   const context = await optionalTeamContext(prisma, owner);
   const gate = await assertCanStartRun(
     prisma,
-    owner && context ? { id: owner.id, plan: context.team.plan as UserPlan } : null,
+    context ? { id: context.team.id, plan: context.team.plan as UserPlan } : null,
     anonKeyHash,
     { siteCap: effectiveSiteCap() },
   );

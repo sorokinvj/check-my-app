@@ -129,7 +129,7 @@ export async function updateAppSettings(appId: string, formData: FormData) {
   // Cadence gate (CHE-34): editing an existing watch doesn't count against the
   // per-plan cap, but the tier still can't select a faster cadence than allowed.
   const gate = app.targetKind === "extension" ? { ok: true as const } : await assertCanAddWatch(db, {
-    ownerId: user.id,
+    teamId: team.id,
     plan: team.plan as UserPlan,
     frequency,
     existingWatchId: app.watch?.id ?? null,

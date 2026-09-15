@@ -80,7 +80,7 @@ export default async function AppSettingsPage({
   // CHE-137: full re-checks are an allowance per owner and UTC month (the
   // regular re-check after a deploy is not limited). Shown where the owner
   // decides when their app is checked.
-  const fullRechecks = await fullRechecksRemaining(db, { id: user.id, plan: team.plan as UserPlan });
+  const fullRechecks = await fullRechecksRemaining(db, { id: team.id, plan: team.plan as UserPlan });
   const fullRechecksLine =
     fullRechecks.limit === null
       ? "Full re-checks this month: unlimited"

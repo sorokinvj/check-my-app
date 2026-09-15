@@ -93,7 +93,13 @@ export async function createRecheckRun(
   if (prev.targetKind === "extension" && prev.ownerId && !opts.full) {
     // Extension checks always open a fresh installed product. They cannot use
     // the unmetered website survey path to bypass the on-demand allowance.
-    const gate = await assertCanStartRun(prisma, { id: prev.ownerId, plan: (prev.team?.plan ?? "free") as UserPlan }, null, { siteCap: deps.siteCap() });
+    const gate = await assertCanStartRun(
+      prisma,
+      // CHE-260: the run's TEAM pays for it, whoever pressed the button.
+      prev.teamId ? { id: prev.teamId, plan: (prev.team?.plan ?? "free") as UserPlan } : null,
+      null,
+      { siteCap: deps.siteCap() },
+    );
     if (!gate.ok) return { kind: "quota", reason: gate.reason };
   }
   if (isAnonymous) {
@@ -132,7 +138,7 @@ export async function createRecheckRun(
   let remaining: number | null | undefined;
   if (opts.full && prev.ownerId) {
     const plan = (prev.team?.plan ?? "free") as UserPlan;
-    const used = await fullRechecksUsed(prisma, prev.ownerId, deps.now());
+    const used = await fullRechecksUsed(prisma, prev.teamId ?? "", deps.now());
     const gate = fullRecheckGate(plan, used, deps.now());
     if (!gate.ok) return { kind: "quota", reason: gate.reason };
     remaining = gate.remaining;

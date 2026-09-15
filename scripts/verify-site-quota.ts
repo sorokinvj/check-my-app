@@ -38,6 +38,8 @@ function check(name: string, ok: boolean, detail = "") {
 
 type CountWhere = {
   ownerId?: string | null;
+  // CHE-260: the owner's lifetime allowance became the team's.
+  teamId?: string | null;
   anonKeyHash?: string;
   paidCheckoutSessionId?: string | null;
   createdAt?: { gte: Date };
@@ -57,7 +59,7 @@ function stubDb(counts: { site: number; visitor: number; owner: number; sitePaid
           return where.paidCheckoutSessionId === null ? counts.site - (counts.sitePaid ?? 0) : counts.site;
         }
         if (where.anonKeyHash) return counts.visitor;
-        if (typeof where.ownerId === "string") return counts.owner;
+        if (typeof where.teamId === "string") return counts.owner;
         throw new Error(`unexpected count where: ${JSON.stringify(where)}`);
       },
     },
@@ -122,7 +124,7 @@ async function main() {
   // the only thing that applies.
   {
     const { db, calls } = stubDb({ site: ANON_RUNS_PER_DAY_SITE, visitor: 0, owner: 0 });
-    const gate = await assertCanStartRun(db, { id: "owner-1", plan: "free" }, null);
+    const gate = await assertCanStartRun(db, { id: "team_owner-1", plan: "free" }, null);
     check("owner (free, 0 runs) with site cap hit → ok", gate.ok, JSON.stringify(gate));
     check("owner: the site-wide count was never consulted",
       !calls.some((w) => w.ownerId === null), `${calls.length} count calls`);

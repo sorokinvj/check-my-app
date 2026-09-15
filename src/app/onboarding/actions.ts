@@ -54,7 +54,7 @@ export async function createApp(
 
   // Tier gate (CHE-34): Daily Watch availability + cadence + count per plan.
   const gate = isExtension ? { ok: true as const } : await assertCanAddWatch(db, {
-    ownerId: user.id,
+    teamId: team.id,
     plan: team.plan as UserPlan,
     frequency,
   });
