@@ -85,6 +85,25 @@ function main() {
     block.includes(`${KNOWN_MAP_CAPS.journeys}. "Journey ${KNOWN_MAP_CAPS.journeys}"`) &&
       !block.includes(`"Journey ${KNOWN_MAP_CAPS.journeys + 1}"`),
   );
+  // CHE-247: the model can only reuse a journey's exact title if it is shown
+  // that journey. checkmyapp.dev carried 34 catalog rows while the map showed
+  // five, and twelve of those rows were the same journey under twelve names —
+  // each invented because the previous one was invisible.
+  check(
+    `every journey up to ${KNOWN_MAP_CAPS.journeys} is named, not just the best-established few`,
+    [1, 6, 12, KNOWN_MAP_CAPS.journeys].every((n) => block.includes(`${n}. "Journey ${n}"`)),
+    `missing: ${[1, 6, 12, KNOWN_MAP_CAPS.journeys].filter((n) => !block.includes(`${n}. "Journey ${n}"`)).join()}`,
+  );
+  check(
+    `steps are shown for the first ${KNOWN_MAP_CAPS.journeysWithSteps} journeys`,
+    block.includes(`1) j${KNOWN_MAP_CAPS.journeysWithSteps}-step-1`),
+    `no steps under journey ${KNOWN_MAP_CAPS.journeysWithSteps}`,
+  );
+  check(
+    "…and not for the ones past that, which are listed by name alone",
+    !block.includes(`j${KNOWN_MAP_CAPS.journeysWithSteps + 1}-step-1`),
+    `steps leaked for journey ${KNOWN_MAP_CAPS.journeysWithSteps + 1}`,
+  );
   check(
     `steps capped at ${KNOWN_MAP_CAPS.steps}`,
     block.includes(`${KNOWN_MAP_CAPS.steps}) j1-step-${KNOWN_MAP_CAPS.steps}`) &&
