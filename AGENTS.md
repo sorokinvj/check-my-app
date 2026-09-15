@@ -71,6 +71,40 @@ exist. A ticket number goes in a comment only after that ticket exists.
 
 **Times are UTC.** Do not introduce a named timezone; the owner reads UTC.
 
+**Several sessions work in this repo at once, and they share one deployed
+worker.** Files answer "will this rebase cleanly"; the worker answers "will
+this kill something that is running". Only the second one has cost a run.
+
+If you were given the right to merge (most sessions are not — see Boundaries),
+a push to `main` deploys both workers immediately, and that lands on whatever is
+running in production right now:
+
+- a **website** check re-executes the Workflow step it was in, so the run's cost
+  roughly doubles;
+- an **extension** check *dies*. Every deploy rebuilds and rolls the container
+  image, and the run inside it is killed — "Runtime signalled the container to
+  exit due to a new version rollout: 143" ended run #195 mid-discovery. Worse
+  when it holds a paid session: that session is left with nobody to stop it.
+
+So before `gh pr merge`, check what is in flight:
+
+```
+npx wrangler d1 execute checkmyapp --remote --json --config wrangler.jsonc \
+  --command "select count(*) as n from Run where status not in ('completed','partial','failed','canceled')"
+```
+
+Merge at `n = 0`. Note `partial` is terminal (`TERMINAL_STATUSES` in
+`src/agent/scheduler.ts`) — a row sitting at `partial` is a finished run, not a
+stuck one.
+
+`n = 0` is necessary and not sufficient: a scheduled watch tick can start a
+minute later. Daily ticks are checkmyapp.dev 17:00, joblander 18:15,
+meetbashar 21:30 UTC, each 25-40 minutes. Another session's on-demand run does
+not appear on any schedule, so **say what you are about to merge** to the other
+sessions (`ListAgents`, then `SendMessage`) and wait for an answer when someone
+is mid-run. This has been done by hand between two sessions all of 2026-09-15
+and it is the only thing that has kept two deploys off one worker.
+
 ## Shape of the codebase
 
 - `src/app` — Next.js App Router, deployed to Cloudflare via OpenNext.
