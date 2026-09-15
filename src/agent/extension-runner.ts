@@ -103,8 +103,16 @@ export class ExtensionRunner extends Container<AgentBindings> {
     let evidence: unknown = await this.ctx.storage.get("finalEvidence");
     const recovered = evidence !== undefined;
     evidence ??= { disposed: false, ...(identity ? { session: { ...identity, applicationCleanup: "unverified" } } : {}), cleanupFailure: "Executor unreachable" };
+    // A dead executor has nothing left to tell us about the application's paid
+    // state — and asking starts a second one, because a container fetch boots
+    // an instance and waits for its port. Every failed run in CHE-233 paid for
+    // that twice over: the step hung long enough for the runtime to cancel it
+    // as never-returning, and the Workflow retried the whole attempt.
+    const executorAlive = this.ctx.container ? this.ctx.container.running : true;
     try {
-      if (!recovered) {
+      if (!recovered && !executorAlive) {
+        evidence = { ...(evidence as object), cleanupFailure: "Executor was no longer running" };
+      } else if (!recovered) {
         if (identity) {
           try {
             const snapshot = await super.fetch(new Request("http://runner/state", {

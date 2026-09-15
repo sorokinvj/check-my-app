@@ -57,6 +57,32 @@ async function main() {
   await resumed.expire();
   assert.equal((await resumed.finalEvidence() as { disposed: boolean }).disposed, true);
   assert.equal((records.get("lease") as { closed: boolean }).closed, true);
-  console.log("Extension owner: concurrent cleanup, durable recovery, disposal and artifact minimization pass");
+  // A container that already died must not be spoken to. Asking it anything
+  // boots a second one and waits for its port, which is what turned each
+  // CHE-233 failure into a hung Workflow step and three retried attempts.
+  const deadRecords = new Map<string, unknown>();
+  const deadStorage = { get: async (key: string) => structuredClone(deadRecords.get(key)), put: async (key: string, value: unknown) => { deadRecords.set(key, structuredClone(value)); }, transaction: async (action: (storage: unknown) => Promise<void>) => action(deadStorage) };
+  const deadPending: Promise<void>[] = [];
+  let deadDestroys = 0, deadArtifact = "";
+  const deadCtx = { storage: deadStorage, container: { running: false }, waitUntil: (promise: Promise<void>) => { deadPending.push(promise); } };
+  const deadEnv = { deletedSchedules: [] as string[], EVIDENCE: { put: async (_key: string, value: string) => { deadArtifact = value; } },
+    destroy: async () => { deadDestroys++; },
+    transport: async () => { throw new Error("cleanup spoke to a container that had already exited"); } };
+  const orphan = new ExtensionRunner(deadCtx, deadEnv);
+  deadRecords.set("lease", { token: "t".repeat(64), expiresAt: Date.now() + 600_000, closed: false, ownerRunId: "dead-attempt" });
+  deadRecords.set("identity", { ownerRunId: "dead-attempt", sessionId: "dead-session" });
+  await orphan.expire();
+  await Promise.all(deadPending);
+  assert.equal(deadDestroys, 1, "The attempt is still torn down");
+  assert.equal((deadRecords.get("lease") as { closed: boolean }).closed, true, "A dead executor still closes its lease");
+  const deadEvidence = await orphan.finalEvidence() as { disposed: boolean; cleanupFailure?: string };
+  assert.equal(deadEvidence.disposed, false, "Nothing was disposed, and the record may not pretend otherwise");
+  assert.equal(deadEvidence.cleanupFailure, "Executor was no longer running");
+  // The artifact stays minimized — the reason lives in the durable record, not
+  // in the stored evidence — but it must still be written, and it must not
+  // claim a disposal that never happened.
+  assert.match(deadArtifact, /"disposed":false/, "A dead executor still leaves an artifact, and it says nothing was disposed");
+
+  console.log("Extension owner: concurrent cleanup, durable recovery, disposal, artifact minimization and no resurrection pass");
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });
