@@ -54,7 +54,25 @@ export const KNOWN_MAP_CAPS = {
   pages: 40,
   actions: 30,
   services: 15,
-  journeys: 5,
+  // CHE-247: every live journey the app has, not the five best-established.
+  //
+  // Five was the right number when the map came from one run's rows — a run
+  // proposes at most five, so five was all there was. Against the catalog it
+  // was the thing manufacturing duplicates: the model is told to reuse a known
+  // journey's title word for word while being shown five of thirty-four, and a
+  // journey it cannot see is one it invents a new name for. The new row starts
+  // at walkCount 1, can never reach the top five, is never shown again, and the
+  // next rewording opens another. 17 of checkmyapp.dev's 34 rows have been
+  // walked once or never — that tail is this loop.
+  //
+  // A title is about ten tokens, so the whole catalog is a few hundred — the
+  // cap was not buying anything. Steps are the expensive part and keep their
+  // own, smaller cap below.
+  journeys: 40,
+  // How many of those journeys are shown with their steps, best-established
+  // first. The rest are listed by title alone: the model needs to SEE a journey
+  // to reuse its name, but only needs its plan when it is going to walk it.
+  journeysWithSteps: 8,
   steps: 12,
 } as const;
 
@@ -259,11 +277,13 @@ export function knownMapBlock(known: KnownMap): string {
   const journeys = known.journeys.slice(0, KNOWN_MAP_CAPS.journeys);
   if (journeys.length) {
     lines.push(
-      "Journeys walked then:\n" +
+      "This app's journeys:\n" +
         journeys
           .map((j, i) => {
-            const steps = j.steps.slice(0, KNOWN_MAP_CAPS.steps);
-            const head = `${i + 1}. "${j.title}"`;
+            // Steps for the best-established few; the rest by name, so every
+            // journey is visible to be recognised and reused (CHE-247).
+            const steps = i < KNOWN_MAP_CAPS.journeysWithSteps ? j.steps.slice(0, KNOWN_MAP_CAPS.steps) : [];
+            const head = `${i + 1}. "${j.title}"${j.surface ? ` [${j.surface}]` : ""}`;
             return steps.length
               ? `${head}\n${steps.map((s, n) => `   ${n + 1}) ${s}`).join("\n")}`
               : head;
