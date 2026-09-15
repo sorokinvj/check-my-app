@@ -228,7 +228,18 @@ export function sameSurface(a: string | null | undefined, b: string | null | und
   return x === y;
 }
 
-/** Lower-cased path with no trailing slash, or "app". Null when absent. */
+/**
+ * Lower-cased path with no trailing slash, or "app". Null when absent — and
+ * null when what we were handed is not a path at all.
+ *
+ * The column is filled by a model answering "where does this journey live",
+ * and it answers with whatever it likes. CHE-247 found "/pricing → /sign-up"
+ * stored as a surface: an arrow notation the old version turned into a path by
+ * prefixing a slash, which then split a journey from a byte-identical twin.
+ * A description of a route is not a route. Anything with whitespace or an
+ * arrow in it is a sentence about the journey, and we would rather know
+ * nothing about where it lives than record a place that does not exist.
+ */
 export function normalizeSurface(surface: string | null | undefined): string | null {
   if (typeof surface !== "string") return null;
   const trimmed = surface.trim().toLowerCase();
@@ -242,6 +253,8 @@ export function normalizeSurface(surface: string | null | undefined): string | n
   } catch {
     // Not a URL after all — fall through and treat it as a path.
   }
+  // A path is one location: no spaces, no arrows, no commas, no "and".
+  if (/[\s,]|→|->|\band\b/.test(path)) return null;
   if (!path.startsWith("/")) path = `/${path}`;
   path = path.replace(/\/+$/, "");
   return path || "/";
@@ -277,16 +290,26 @@ export function matchJourney(
   surface?: string | null,
 ): JourneyCandidate | null {
   const sig = signatureOf(title);
-  // Only journeys that live in the same place can be the same journey
-  // (CHE-235). Unknown on either side stays compatible.
-  const here = candidates.filter((c) => sameSurface(surface, c.surface));
-  // An alias is a title we have already resolved to this entry; trust it over
-  // any rule below, so a merge (or a correction) never silently reverses.
   const normalized = sig.normalized;
-  for (const c of here) {
+
+  // A title we have already resolved to an entry — its own, or an alias — is
+  // the same journey wherever the model says it lives this time. CHE-247: run
+  // #197 proposed "Sign in / OAuth through Clerk" on a surface it called
+  // "/core"; the login journey had 21 walks, the alias "Sign in / sign up via
+  // Clerk", and a surface of "/authenticated" — and got a second row, because
+  // surface was filtered on BEFORE this rule could fire. A place the model
+  // invented cannot be allowed to outrank a title we have already agreed on.
+  for (const c of candidates) {
     const aliases = c.aliases ?? [c.title];
     if (aliases.some((a) => normalizeTitle(a) === normalized)) return c;
   }
+
+  // Everything below is a judgement about similar-but-not-identical titles, and
+  // there surface earns its keep (CHE-235): a page holds several journeys —
+  // joblander's /settings has coach preferences, the resume upload and the
+  // extension pairing — and without this they fold into one "settings" intent.
+  // Unknown on either side stays compatible.
+  const here = candidates.filter((c) => sameSurface(surface, c.surface));
   for (const c of here) {
     if (sameJourney(sig, signatureOf(c.title))) return c;
   }
