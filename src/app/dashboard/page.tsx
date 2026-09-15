@@ -13,6 +13,8 @@ import { ApiKeys } from "@/components/api-keys";
 import { watchTrialState, PLAN_LIMITS } from "@/lib/plans";
 import type { UserPlan } from "@/lib/enums";
 import { teamOwned } from "@/lib/tenant-db";
+import { teamsOf } from "@/lib/teams";
+import { TeamSwitcher } from "@/components/team-switcher";
 
 // Owner home (protected). Lists the apps this owner has under daily QA.
 export default async function DashboardPage({
@@ -22,8 +24,10 @@ export default async function DashboardPage({
 }) {
   const { integration, added, extensionAdded } = await searchParams;
   const { user, db, team } = await requireUser();
+  // CHE-261: the TEAM's apps. Filtering by ownerId here would show each member
+  // a different dashboard of the same team — the exact thing teams remove.
   const apps = await db.app.findMany({
-    where: { ...teamOwned(team.id), ownerId: user.id },
+    where: { ...teamOwned(team.id) },
     include: {
       watch: true,
       policy: true,
@@ -33,7 +37,7 @@ export default async function DashboardPage({
     orderBy: { createdAt: "desc" },
   });
   const apiKeys = await db.apiKey.findMany({
-    where: { ...teamOwned(team.id), ownerId: user.id },
+    where: { ...teamOwned(team.id) },
     orderBy: { createdAt: "desc" },
     select: { id: true, name: true, lastUsedAt: true, createdAt: true },
   });
@@ -97,6 +101,7 @@ export default async function DashboardPage({
       <div className="mb-8 flex flex-wrap items-center justify-between gap-4">
         <div>
           <p className="section-label">your apps</p>
+          <TeamSwitcher teams={await teamsOf(db, user.id)} activeTeamId={team.id} />
           <h1 className="text-3xl font-semibold tracking-tight">Dashboard</h1>
         </div>
         <div className="flex flex-wrap items-center gap-4">

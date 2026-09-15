@@ -108,4 +108,8 @@ export const ACTION_RULES: Record<string, RouteRule> = {
   // last-admin rule (src/lib/membership.ts) is what stops the one case where
   // it would be destructive.
   "src/app/team/actions.ts#leaveTeamAction": { kind: "team", action: "read" },
+  // Switching is not an action inside a team — it chooses which team you are
+  // acting as. What decides is membership in the team being switched TO, so the
+  // rule lives with the switch itself rather than in the scope table.
+  "src/app/team/switch-actions.ts#switchTeamAction": { kind: "row", decidedIn: "src/app/team/switch-actions.ts" },
 };
