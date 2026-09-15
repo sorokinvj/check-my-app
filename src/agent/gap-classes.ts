@@ -40,9 +40,14 @@ export type GapClass =
   | "extension_session_cleanup"
   | "extension_minute_accounting"
   | "unpriced_journey"
+  | "journey_rotation"
   | "unclassified";
 
 export const GAP_CLASSES: Record<GapClass, { label: string; why: string }> = {
+  journey_rotation: {
+    label: "Checker cannot keep every journey of a large app checked",
+    why: "An app with more journeys than a run can walk gets a rotation, and a journey at the back of a long queue can age past the point where its last check still means anything. The owner is paying for their app to be checked, and part of it was not — a bigger app must not quietly buy less coverage.",
+  },
   unpriced_journey: {
     label: "Checker cannot say what a journey costs its user",
     why: "The price of a journey — how many actions it takes and how many people finish — is the sentence an outside observer is paid for, and the one a green check mark cannot replace. A journey we walked end to end and left unpriced is a judgement we owe the owner and did not deliver.",

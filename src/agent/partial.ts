@@ -33,7 +33,7 @@
 import type { AgentEnv } from "./env";
 import { FULL_RUN_MAX_AGE_DAYS, findLastWalkedRun } from "./replay";
 import { fullRunGate, gateInputFrom, surveySaysUnchanged, type SurveyOutcome } from "./snapshot";
-import { recordCarry } from "./journey-catalog";
+import { journeysForPlanning, recordCarry, type CatalogJourneyState } from "./journey-catalog";
 
 // The only journey statuses worth carrying: "ok" (everything worked) and
 // "partial" (everything attempted worked, some steps went unverified). Anything
@@ -44,6 +44,20 @@ const CARRIABLE_STATUSES = new Set(["ok", "partial"]);
 // The re-walk proposal reuses the baseline's own step labels. Long journeys get
 // clipped so the walking prompt stays a plan, not a transcript.
 const MAX_PROPOSED_STEPS = 12;
+
+/**
+ * How many journeys one run may actually walk. The same number discovery is
+ * allowed to propose (discovery.ts), for the same reason: a walk is the
+ * expensive thing, and five of them is what a daily check can afford.
+ *
+ * It is also what makes the rotation necessary. joblander's catalog holds 23
+ * live journeys; at five a run, a full circuit takes five days, which is inside
+ * the seven-day window carried evidence is allowed to live in
+ * (FULL_RUN_MAX_AGE_DAYS). A catalog bigger than budget × window cannot be kept
+ * inside that window at all — that is a coverage gap of ours, and the plan says
+ * so rather than quietly carrying month-old evidence as if it were last night's.
+ */
+export const JOURNEY_WALK_BUDGET = 5;
 
 /** A journey copied forward from an earlier run instead of walked again. */
 export interface CarriedJourney {
@@ -76,6 +90,13 @@ export interface PartialPlan {
   anatomy: string | null;
   carry: CarriedJourney[];
   rewalk: RewalkJourney[];
+  /**
+   * CHE-232: journeys this run neither walked nor carried — the budget could not
+   * reach them and their evidence is already too old to stand on. Empty in every
+   * ordinary case; non-empty means the catalog has outgrown what a run can keep
+   * verified, which is a coverage gap of ours to say out loud, never a silence.
+   */
+  deferred?: string[];
   /** Oldest real walk among the carried journeys — the weakest link we're standing on. */
   oldestVerifiedAt: string;
 }
@@ -87,11 +108,91 @@ export interface PartialSkipped {
 
 export type PartialDecision = PartialPlan | PartialSkipped;
 
+// ─── Which journeys this run walks (CHE-232) ─────────────────────────────────
+
+/** One journey's place in tonight's plan, decided from the catalog alone. */
+export interface Rotation {
+  /** Walked again tonight: due, or the oldest green ones filling the budget. */
+  walk: CatalogJourneyState[];
+  /** Green and recent enough to stand on; copied forward with its own date. */
+  carry: CatalogJourneyState[];
+  /**
+   * Neither walked nor carried: its evidence is too old to stand on and the
+   * budget did not reach it. This is our coverage gap, never a silence — the
+   * caller says so out loud and files it (rule 2).
+   */
+  deferred: CatalogJourneyState[];
+}
+
+/**
+ * Tonight's plan, from the catalog's own state. Pure on purpose: everything it
+ * needs is in the arguments, so scripts/verify-journey-rotation.ts can hold the
+ * real rules against real shapes without a database.
+ *
+ * The order of the walk list is the order of urgency, and it is the whole
+ * design:
+ *
+ *   1. journeys that ended badly — a failing journey is re-checked every run,
+ *      however long the queue behind it, because it is the one the owner is
+ *      waiting on (longest failing streak first);
+ *   2. journeys nothing has ever walked — a catalog row discovery proposed but
+ *      no run reached is not "green", it is unknown;
+ *   3. everything else oldest-first, which is the rotation: with a budget of
+ *      five a day, the twenty-third journey comes round on the fifth day
+ *      instead of never.
+ *
+ * A journey whose evidence has aged past `maxAgeDays` can no longer be carried
+ * — carrying it would date last month's walk as tonight's — so it is due even
+ * when it is green, and if the budget cannot reach it, it is deferred rather
+ * than pretended about.
+ */
+export function planRotation(args: {
+  journeys: CatalogJourneyState[];
+  now: Date;
+  budget?: number;
+  maxAgeDays?: number;
+  /** When the survey says nothing changed, age alone never forces a walk (CHE-132). */
+  ageCounts?: boolean;
+}): Rotation {
+  const budget = args.budget ?? JOURNEY_WALK_BUDGET;
+  const maxAgeDays = args.maxAgeDays ?? FULL_RUN_MAX_AGE_DAYS;
+  const ageCounts = args.ageCounts ?? true;
+
+  const isGreen = (j: CatalogJourneyState) => j.status !== null && CARRIABLE_STATUSES.has(j.status);
+  const ageOf = (j: CatalogJourneyState) =>
+    j.lastWalkedAt ? ageInDays(j.lastWalkedAt, args.now) : Number.POSITIVE_INFINITY;
+  // Evidence we could not date, or that predates the window, cannot be carried.
+  const carriable = (j: CatalogJourneyState) =>
+    isGreen(j) && Boolean(j.lastWalkedRunId) && j.lastWalkedAt !== null && ageOf(j) <= maxAgeDays;
+
+  const bad = args.journeys.filter((j) => j.status !== null && !isGreen(j));
+  const unwalked = args.journeys.filter((j) => j.status === null || j.lastWalkedAt === null);
+  const rest = args.journeys.filter((j) => !bad.includes(j) && !unwalked.includes(j));
+
+  bad.sort((a, b) => b.consecutiveBad - a.consecutiveBad || ageOf(b) - ageOf(a));
+  rest.sort((a, b) => ageOf(b) - ageOf(a));
+
+  // Expired greens are due for the same reason a bad one is: what we hold about
+  // them is no longer good enough to stand on. Only when age counts at all.
+  const expired = ageCounts ? rest.filter((j) => !carriable(j)) : [];
+  const fresh = rest.filter((j) => !expired.includes(j));
+
+  const queue = [...bad, ...unwalked, ...expired, ...fresh];
+  const walk = queue.slice(0, budget);
+  const left = queue.slice(budget);
+
+  return {
+    walk,
+    carry: left.filter((j) => carriable(j)),
+    deferred: left.filter((j) => !carriable(j)),
+  };
+}
+
 // ─── Decision ────────────────────────────────────────────────────────────────
 
 export async function planPartialRun(
   env: AgentEnv,
-  run: { id: string; watchId: string | null },
+  run: { id: string; watchId: string | null; appId?: string | null },
   survey?: SurveyOutcome | null,
   now: Date = new Date(),
 ): Promise<PartialDecision> {
@@ -141,6 +242,16 @@ export async function planPartialRun(
         ? "the test account changed since the last full walk — re-checking everything"
         : "test credentials were added since the last full walk — re-checking everything",
     };
+  }
+
+  // CHE-232: the catalog decides, when there is one. Each journey brings its own
+  // last-walked date, so the plan is per journey instead of per baseline run —
+  // and an app with more journeys than a run can afford gets a rotation rather
+  // than a fixed five that never reaches the rest. The old baseline-row path
+  // below still runs for anything with no catalog behind it.
+  const catalog = run.appId ? await journeysForPlanning(env, run.appId) : [];
+  if (catalog.length > 0) {
+    return planFromCatalog(env, { catalog, baseline, survey, now });
   }
 
   const journeys = await env.db.journey.findMany({
@@ -248,6 +359,116 @@ export async function planPartialRun(
 
 function ageInDays(then: Date, now: Date): number {
   return (now.getTime() - then.getTime()) / 86_400_000;
+}
+
+/**
+ * CHE-232 — the plan, built from the catalog's rotation.
+ *
+ * The shape it returns is the one the workflow already knows: journeys to walk
+ * with a plan each, journeys to copy forward with their own provenance. What
+ * changed is where both halves come from. A carried journey's evidence is
+ * fetched from the run that really walked THAT journey, not from one baseline
+ * run everything is copied off, so "verified on" is true per journey.
+ */
+async function planFromCatalog(
+  env: AgentEnv,
+  args: {
+    catalog: CatalogJourneyState[];
+    baseline: { id: string; runNumber: number; anatomy: string | null; completedAt: Date | null };
+    survey?: SurveyOutcome | null;
+    now: Date;
+  },
+): Promise<PartialDecision> {
+  const rotation = planRotation({
+    journeys: args.catalog,
+    now: args.now,
+    // CHE-132 again: on an app the survey saw unchanged, age alone never turns a
+    // green journey into a due one.
+    ageCounts: !surveySaysUnchanged(args.survey),
+  });
+
+  if (rotation.walk.length === 0) {
+    return {
+      taken: false,
+      reason: surveySaysUnchanged(args.survey)
+        ? "nothing changed and every journey was healthy recently — no journey needs re-walking"
+        : "nothing was wrong last time — re-checking everything",
+    };
+  }
+  if (rotation.carry.length === 0) {
+    // Nothing to stand on: this is a full walk wearing a partial's clothes, and
+    // the full rung does it properly (discovery included, so a journey the app
+    // has grown since is not missed).
+    return { taken: false, reason: "no journey is recent enough to carry — walking them all" };
+  }
+
+  // Where each carried journey's evidence actually lives: the run that walked
+  // THAT journey. One query for all of them, then matched up per journey.
+  const walkedRunIds = [...new Set(rotation.carry.map((j) => j.lastWalkedRunId as string))];
+  const [sourceJourneys, sourceRuns] = await Promise.all([
+    env.db.journey.findMany({
+      where: { runId: { in: walkedRunIds }, appJourneyId: { in: rotation.carry.map((j) => j.appJourneyId) } },
+      select: { id: true, runId: true, appJourneyId: true },
+    }),
+    env.db.run.findMany({
+      where: { id: { in: walkedRunIds } },
+      select: { id: true, runNumber: true, completedAt: true },
+    }),
+  ]);
+  const rowFor = new Map(sourceJourneys.map((j) => [`${j.runId}:${j.appJourneyId}`, j]));
+  const runFor = new Map(sourceRuns.map((r) => [r.id, r]));
+
+  const rewalk: RewalkJourney[] = rotation.walk.map((j, i) => ({
+    order: i,
+    title: j.title,
+    // A title is a worse plan than real steps and a much better one than none.
+    steps: j.plan.length ? j.plan.slice(0, MAX_PROPOSED_STEPS) : [j.title],
+    previousStatus: j.status ?? "never walked",
+  }));
+
+  const carry: CarriedJourney[] = [];
+  let oldest: Date | null = null;
+  for (const j of rotation.carry) {
+    const row = rowFor.get(`${j.lastWalkedRunId}:${j.appJourneyId}`);
+    const source = runFor.get(j.lastWalkedRunId as string);
+    if (!row || !source?.completedAt) {
+      // The catalog says this journey was walked, and the walk is not there to
+      // copy. Undateable evidence is unusable evidence (the same rule the old
+      // path applies), so the whole run falls through to a full walk rather
+      // than carrying a journey we cannot show.
+      return { taken: false, reason: `couldn't find the walk behind "${j.title}"` };
+    }
+    if (!oldest || source.completedAt < oldest) oldest = source.completedAt;
+    carry.push({
+      sourceJourneyId: row.id,
+      order: rewalk.length + carry.length,
+      title: j.title,
+      sourceRunId: source.id,
+      sourceRunNumber: source.runNumber,
+    });
+  }
+
+  if (rotation.deferred.length > 0) {
+    // Not a silence and not a carry: journeys the budget could not reach whose
+    // evidence is already too old to stand on. Said out loud here; the run feed
+    // and our own board get it from the plan (rule 2).
+    console.log(
+      `[partial] ${rotation.deferred.length} journey(s) deferred — catalog is larger than ` +
+        `${JOURNEY_WALK_BUDGET}/run can keep inside ${FULL_RUN_MAX_AGE_DAYS} days: ` +
+        rotation.deferred.map((j) => j.title).join(" · "),
+    );
+  }
+
+  return {
+    taken: true,
+    baselineRunId: args.baseline.id,
+    baselineRunNumber: args.baseline.runNumber,
+    anatomy: args.baseline.anatomy,
+    carry,
+    rewalk,
+    deferred: rotation.deferred.map((j) => j.title),
+    oldestVerifiedAt: (oldest ?? args.baseline.completedAt ?? args.now).toISOString(),
+  };
 }
 
 // ─── Carrying journeys forward ───────────────────────────────────────────────
