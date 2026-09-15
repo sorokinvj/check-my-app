@@ -45,7 +45,7 @@ import { discoverApp, type KnownMap, type ProposedJourney, type RunInput } from 
 import { loadKnownMap } from "./known-map";
 import { loadAppKnowledge, type AppKnowledge } from "./knowledge";
 import { walkOneJourney, type WalkRun } from "./execution";
-import { catalogIsDeduplicated, journeysForPlanning, recordJourneyCost } from "./journey-catalog";
+import { catalogIsDeduplicated, journeysForPlanning, noteDiscoveryCoverage, recordJourneyCost } from "./journey-catalog";
 import { orderByFocus } from "./limits";
 import { parseActions, replayJourney, type ReplayResult } from "./journey-replay";
 import { claimedHands, drivenControls, gateFindings } from "./findings-gate";
@@ -587,6 +587,27 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
       // without this the model picks its five headline flows every run and the
       // long tail of a big app is never walked again. Partial runs already plan
       // from the catalog, and they are one run in five.
+      // CHE-232: a journey the product no longer has retires after three full
+      // checks that mapped the app and did not find it. Only here, and only on
+      // a full run: a smoke pass and a partial run propose nothing, and reading
+      // their silence as absence would retire a whole catalog in three quiet
+      // days. Best-effort by contract, like every other catalog write.
+      if (!plan.taken && run.appId && discovery?.journeys?.length) {
+        await step.do("journey-retirement", async () => {
+          try {
+            const retired = await noteDiscoveryCoverage(env, run.appId as string, discovery.journeys);
+            if (retired.length) {
+              await appendEvent(env, runId, "discovery", {
+                icon: "info",
+                text: `No longer part of this app: ${retired.slice(0, 4).join(" · ")}${retired.length > 4 ? ` and ${retired.length - 4} more` : ""}`,
+              });
+            }
+          } catch (err) {
+            console.warn(`[journey] retirement pass skipped: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        });
+      }
+
       const fullWalkList = await step.do("walk-queue", async (): Promise<ProposedJourney[]> => {
         const focused = orderByFocus(discovery?.journeys ?? [], run.focusAreas);
         if (!run.appId) return focused;
