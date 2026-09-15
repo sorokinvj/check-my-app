@@ -34,6 +34,20 @@ for (const reason of reasons) {
   assert.doesNotMatch(reason, /\d|@|https?:/, `A refusal reason may not carry account values: "${reason}"`);
 }
 
+// Same blind spot one level up: the cleanup's own refusal. Read the constants
+// out of the runner so a new one is covered when it is written.
+const runner = readFileSync(new URL("../src/agent/extension-runner.ts", import.meta.url), "utf8");
+const failures = [...runner.matchAll(/cleanupFailure: ["`]([^"`$]+)["`]/g)].map(match => match[1]);
+assert.ok(failures.length >= 2, `Every cleanupFailure constant must be covered here; found ${failures.length}`);
+for (const cleanupFailure of failures) {
+  assert.equal(extensionArtifactEvidence({ disposed: false, cleanupFailure }).cleanupFailure, cleanupFailure,
+    `A phase that failed cleanup for "${cleanupFailure}" must say so in its artifact`);
+}
+assert.equal(Object.hasOwn(extensionArtifactEvidence({ disposed: true }), "cleanupFailure"), false,
+  "A clean phase carries no failure field at all");
+assert.equal(Object.hasOwn(extensionArtifactEvidence({ cleanupFailure: { note: "not a string" } }), "cleanupFailure"), false,
+  "Only the runner's own text is carried, never an object from somewhere else");
+
 assert.equal(extensionArtifactEvidence(undefined).disposed, false);
 assert.deepEqual(extensionArtifactEvidence({ session: { sessions: "invalid" } }).session.sessions, []);
 console.log("Extension artifacts preserve owned result and minute evidence without prior account history");
