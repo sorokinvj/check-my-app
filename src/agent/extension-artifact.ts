@@ -24,8 +24,14 @@ export function extensionArtifactEvidence(value: unknown) {
         ...(record(session.productResult).failure ? { failure: pick(record(session.productResult).failure, ["source", "text", "observedAt", "surface"]) } : {}),
         ...(record(session.productResult).practice ? { practice: pick(record(session.productResult).practice, ["confirmed", "observedAt", "answer"]) } : {}),
       },
+      // `reason` is kept: it is the only field that says which of the eleven
+      // checks refused, and without it a paid run that could not be confirmed
+      // records the same silent "inconclusive" whatever went wrong (CHE-250 —
+      // run #194 stopped two sessions and left no way to tell why its billing
+      // was unverified). Every reason is a constant written here, never a
+      // balance, a history row or anything else from the account.
       billing: { assessment: {
-        ...pick(assessment, ["status", "cleanupConfirmed", "expectedMinutes", "observedMinutes", "twoMinuteSteps", "cessationMs"]),
+        ...pick(assessment, ["status", "cleanupConfirmed", "reason", "expectedMinutes", "observedMinutes", "twoMinuteSteps", "cessationMs"]),
         sessions: (Array.isArray(assessment.sessions) ? assessment.sessions : []).map(row => pick(row, ["kind", "dateUtc", "durationSeconds"])),
       } },
     },
