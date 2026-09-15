@@ -14,6 +14,12 @@ export function extensionArtifactEvidence(value: unknown) {
   const assessment = record(record(session.billing).assessment);
   return {
     disposed: final.disposed === true,
+    // Why the cleanup did not finish, alongside the fact that it didn't. Run
+    // #195 lost its executor to a container rollout and recorded "Executor was
+    // no longer running" durably — and then dropped it here, leaving an
+    // artifact that says only `disposed: false` about a phase we do understand.
+    // Same four constants the cleanup writes; none of them is account data.
+    ...(typeof final.cleanupFailure === "string" ? { cleanupFailure: final.cleanupFailure } : {}),
     session: {
       ...pick(session, ["extensionId", "name", "packageVersion", "installedVersion", "artifactSha256", "sessionId", "ownerRunId", "scenario", "startedAt", "closedAt", "applicationCleanup", "billingCleanup"]),
       sessions: (Array.isArray(session.sessions) ? session.sessions : []).map(entry => ({
