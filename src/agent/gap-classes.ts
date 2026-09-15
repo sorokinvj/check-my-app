@@ -54,7 +54,7 @@ export const GAP_CLASSES: Record<GapClass, { label: string; why: string }> = {
   },
   extension_minute_accounting: {
     label: "Checker cannot establish each extension session's minute usage",
-    why: "A stable balance after Stop proves cessation, but does not establish minute-by-minute charges or independently rounded session totals. Missing UI evidence must remain a coverage gap, never a billing pass or a customer defect.",
+    why: "A balance that settles after Stop proves cessation, but does not establish minute-by-minute charges or independently rounded session totals. Missing UI evidence must remain a coverage gap, never a billing pass or a customer defect.",
   },
   extension_runtime: {
     label: "Checker cannot complete an installed Chrome extension check",
