@@ -24,6 +24,10 @@ import {
   inviteState,
 } from "@/lib/invites";
 import { sendTeamInvite } from "@/lib/email";
+import { seatGate } from "@/lib/seats";
+import { syncTeamSeats } from "@/lib/billing-sync";
+import { getStripeEnv } from "@/lib/stripe";
+import type { UserPlan } from "@/lib/enums";
 import type { TeamScope } from "@/lib/scopes";
 import type { PrismaClient } from "@/generated/prisma/client";
 
@@ -45,6 +49,10 @@ export async function inviteMemberAction(formData: FormData): Promise<void> {
     scope: String(formData.get("scope") ?? "member"),
   });
   if (!parsed.ok) throw new Error(parsed.reason);
+
+  const members = await membersOf(db, team.id);
+  const seats = seatGate(team.plan as UserPlan, members, parsed.scope, Boolean(team.stripeSubscriptionId));
+  if (!seats.ok) throw new Error(seats.reason);
 
   const already = await db.membership.findFirst({
     where: { teamId: team.id, user: { email: parsed.email } },
@@ -104,6 +112,10 @@ export async function changeScopeAction(userId: string, formData: FormData): Pro
     where: { teamId: team.id, userId },
     data: { scope },
   });
+  // CHE-259: promoting a reader adds a paid seat, demoting frees one. Derived
+  // from the memberships rather than incremented, so a missed sync is put right
+  // by the next change instead of compounding.
+  await syncTeamSeats(db, getStripeEnv(getCloudflareContext().env as Record<string, unknown>), team.id);
   revalidatePath("/team");
 }
 
@@ -115,6 +127,7 @@ export async function removeMemberAction(userId: string): Promise<void> {
   // Only the membership goes. Their apps, checks and tickets belong to the
   // team, and ownerId on those rows is attribution — the record of who did it.
   await db.membership.deleteMany({ where: { teamId: team.id, userId } });
+  await syncTeamSeats(db, getStripeEnv(getCloudflareContext().env as Record<string, unknown>), team.id);
   revalidatePath("/team");
 }
 
@@ -126,5 +139,6 @@ export async function leaveTeamAction(): Promise<void> {
   const decision = decideLeave(members, user.id);
   if (!decision.ok) throw new Error(decision.reason);
   await db.membership.deleteMany({ where: { teamId: team.id, userId: user.id } });
+  await syncTeamSeats(db, getStripeEnv(getCloudflareContext().env as Record<string, unknown>), team.id);
   revalidatePath("/team");
 }

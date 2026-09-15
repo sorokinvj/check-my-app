@@ -12,6 +12,9 @@ import { redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth";
 import { decideAccept, hashInviteToken } from "@/lib/invites";
 import { personalTeamId } from "@/lib/teams";
+import { syncTeamSeats } from "@/lib/billing-sync";
+import { getStripeEnv } from "@/lib/stripe";
+import { getCloudflareContext } from "@opennextjs/cloudflare";
 
 export async function acceptInviteAction(token: string): Promise<void> {
   const { user, db } = await requireUser();
@@ -64,6 +67,9 @@ export async function acceptInviteAction(token: string): Promise<void> {
     where: { id: invite!.id },
     data: { acceptedAt: new Date(), acceptedByUserId: user.id },
   });
+  // CHE-259: the seat exists now, so the subscription should say so. Silent and
+  // best-effort — a Stripe outage must not leave somebody half-joined.
+  await syncTeamSeats(db, getStripeEnv(getCloudflareContext().env as Record<string, unknown>), decision.teamId);
 
   // Their personal team still exists and still holds their own apps; this adds
   // a second one rather than replacing anything (T8 adds the switch between

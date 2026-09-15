@@ -2,6 +2,8 @@ import { requireUser } from "@/lib/auth";
 import { can } from "@/lib/scopes";
 import { REMOVAL_KEEPS_EVERYTHING, decideLeave } from "@/lib/membership";
 import { inviteState } from "@/lib/invites";
+import { seatSummary } from "@/lib/seats";
+import type { UserPlan } from "@/lib/enums";
 import {
   changeScopeAction,
   inviteMemberAction,
@@ -97,6 +99,7 @@ export default async function TeamPage() {
             </li>
           ))}
         </ul>
+        <p className="mt-4 text-xs text-fg-muted">{seatSummary(team.plan as UserPlan, memberships.map((m) => ({ scope: m.scope as "admin" | "member" | "reader" })))}</p>
         {mayManage && <p className="mt-4 text-xs text-fg-muted">{REMOVAL_KEEPS_EVERYTHING}</p>}
       </section>
 

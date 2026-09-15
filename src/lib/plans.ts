@@ -31,6 +31,13 @@ export interface PlanLimits {
   // "30 runs a month" Starter promise was dropped with this (owner,
   // 2026-09-06).
   fullRechecksPerMonth: number | null;
+  // CHE-259: how many BILLABLE seats the plan carries before the subscription's
+  // quantity has to grow. A billable seat is an admin or a member — the two
+  // scopes that can spend the team's plan. Readers are free, deliberately: a
+  // team should be able to give its designer, its support person and its
+  // investor a way to read what broke without anyone counting heads.
+  // null = no ceiling (enterprise talks to a human).
+  includedSeats: number | null;
 }
 
 export const PLAN_LIMITS: Record<UserPlan, PlanLimits> = {
@@ -46,6 +53,7 @@ export const PLAN_LIMITS: Record<UserPlan, PlanLimits> = {
     // A trial should be able to show its best work once a day.
     dailyBudgetUsd: 1.2,
     fullRechecksPerMonth: 0,
+    includedSeats: 1,
   },
   starter: {
     maxWatches: 1,
@@ -54,6 +62,7 @@ export const PLAN_LIMITS: Record<UserPlan, PlanLimits> = {
     apiAccess: false,
     dailyBudgetUsd: 1.2,
     fullRechecksPerMonth: 5,
+    includedSeats: 3,
   },
   growth: {
     maxWatches: 5,
@@ -64,6 +73,7 @@ export const PLAN_LIMITS: Record<UserPlan, PlanLimits> = {
     // plus smoke on the other ticks fits inside it.
     dailyBudgetUsd: 0.8,
     fullRechecksPerMonth: 20,
+    includedSeats: 10,
   },
   business: {
     maxWatches: 50,
@@ -72,6 +82,7 @@ export const PLAN_LIMITS: Record<UserPlan, PlanLimits> = {
     apiAccess: true,
     dailyBudgetUsd: 4,
     fullRechecksPerMonth: 100,
+    includedSeats: 50,
   },
   enterprise: {
     maxWatches: Number.MAX_SAFE_INTEGER,
@@ -80,6 +91,7 @@ export const PLAN_LIMITS: Record<UserPlan, PlanLimits> = {
     apiAccess: true,
     dailyBudgetUsd: 10,
     fullRechecksPerMonth: null,
+    includedSeats: null,
   },
 };
 
