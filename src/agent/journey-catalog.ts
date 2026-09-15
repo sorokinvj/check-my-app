@@ -49,22 +49,39 @@ export interface ResolvedJourney {
  * have not seen. Runs without an App (anonymous one-off checks, PR previews)
  * get the key and no row: there is no history for them to accumulate.
  */
+/**
+ * The stored form of a scenario: lower-cased and trimmed, or null when nobody
+ * told us. Kept here rather than in journey-key.ts because it is storage
+ * hygiene, not an identity rule — `sameScenario` compares the same way.
+ */
+export function normalizeScenario(scenario: string | null | undefined): string | null {
+  const text = typeof scenario === "string" ? scenario.trim().toLowerCase() : "";
+  return text || null;
+}
+
 export async function resolveJourney(
   env: AgentEnv,
   run: { appId?: string | null },
   title: string,
   surface?: string | null,
+  /**
+   * CHE-247: what the executor was gated to do on this journey, when anything
+   * can say so — the extension scenario today. Different known scenarios are
+   * different journeys whatever the titles say; unknown matches anything.
+   */
+  scenario?: string | null,
 ): Promise<ResolvedJourney> {
   const trimmed = title.trim();
   const where = normalizeSurface(surface);
+  const play = normalizeScenario(scenario);
   if (!run.appId) {
-    return { appJourneyId: null, key: journeyKey(trimmed, [], where), isNew: false };
+    return { appJourneyId: null, key: journeyKey(trimmed, [], where, play), isNew: false };
   }
 
   const rows = await env.db.appJourney.findMany({
     where: { appId: run.appId },
     orderBy: { createdAt: "asc" },
-    select: { id: true, key: true, title: true, aliases: true, surface: true },
+    select: { id: true, key: true, title: true, aliases: true, surface: true, scenario: true },
   });
   const candidates: Array<JourneyCandidate & { id: string }> = rows.map((r) => ({
     id: r.id,
@@ -72,12 +89,13 @@ export async function resolveJourney(
     title: r.title,
     aliases: parseJson<string[]>(r.aliases) ?? [r.title],
     surface: r.surface,
+    scenario: r.scenario,
   }));
 
-  const hit = matchJourney(trimmed, candidates, where) as (JourneyCandidate & { id: string }) | null;
+  const hit = matchJourney(trimmed, candidates, where, play) as (JourneyCandidate & { id: string }) | null;
   if (hit) return { appJourneyId: hit.id, key: hit.key, isNew: false };
 
-  const key = journeyKey(trimmed, candidates.map((c) => c.key), where);
+  const key = journeyKey(trimmed, candidates.map((c) => c.key), where, play);
   try {
     const created = await env.db.appJourney.create({
       data: {
@@ -86,6 +104,7 @@ export async function resolveJourney(
         title: trimmed,
         aliases: JSON.stringify([trimmed]),
         ...(where ? { surface: where } : {}),
+        ...(play ? { scenario: play } : {}),
       },
     });
     return { appJourneyId: created.id, key, isNew: true };
@@ -123,6 +142,8 @@ export async function recordWalk(
     plan: string[];
     /** CHE-235: where the journey lives, when this run was told. */
     surface?: string | null;
+    /** CHE-247: what the executor was gated to do, when anything can say so. */
+    scenario?: string | null;
     /** CHE-235: the price this run may record — already judged by journeyMetric. */
     metric?: JourneyMetric | null;
     at?: Date;
@@ -136,6 +157,7 @@ export async function recordWalk(
       consecutiveBad: true,
       failingSince: true,
       surface: true,
+      scenario: true,
       price: true,
       conversion: true,
     },
@@ -162,6 +184,12 @@ export async function recordWalk(
       ...(args.plan.length ? { plan: JSON.stringify(args.plan) } : {}),
       // A surface we have been told sticks; one we have not been told never
       // overwrites what we know.
+      // CHE-247: a scenario we have been told sticks, like a surface. It is
+      // ground truth from the executor, so it is written once and never
+      // overwritten by a run that did not carry one.
+      ...(normalizeScenario(args.scenario) && !row.scenario
+        ? { scenario: normalizeScenario(args.scenario) }
+        : {}),
       ...(normalizeSurface(args.surface) && !row.surface
         ? { surface: normalizeSurface(args.surface) }
         : {}),

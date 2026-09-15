@@ -209,6 +209,38 @@ export interface JourneyCandidate {
    * page it belongs to ("/settings"). Undefined/null = not known.
    */
   surface?: string | null;
+  /**
+   * CHE-247: what the product actually does on this journey, when something
+   * other than a model can say so — today the extension executor's scenario
+   * ("interview", "practice", "practice-extension"). Undefined/null = not known.
+   *
+   * Unlike surface, this is not a model's answer to a question. It is gated in
+   * code: `extensionToolAllowed` refuses `extension_start_practice` outside a
+   * practice scenario and `extension_start_session` outside interview. Which is
+   * why it outranks the title rules below rather than filtering ahead of them.
+   */
+  scenario?: string | null;
+}
+
+/**
+ * Two journeys with different KNOWN scenarios are different journeys, whatever
+ * their titles say.
+ *
+ * Measured on production titles: "Interview assistance and session minutes" and
+ * "Practice with interview assistance" share two of the shorter title's three
+ * tokens — 0.67 against a 0.60 threshold — so the combined two-meter scenario
+ * was absorbed into the single-meter one and had no history of its own
+ * anywhere. No token rule could have separated them: the words genuinely
+ * overlap, and what differs is what the product does.
+ *
+ * Unknown on either side stays compatible, so a journey that predates the
+ * column is never split from its own history.
+ */
+export function sameScenario(a: string | null | undefined, b: string | null | undefined): boolean {
+  const x = typeof a === "string" ? a.trim().toLowerCase() : "";
+  const y = typeof b === "string" ? b.trim().toLowerCase() : "";
+  if (!x || !y) return true;
+  return x === y;
 }
 
 /**
@@ -288,9 +320,16 @@ export function matchJourney(
   title: string,
   candidates: JourneyCandidate[],
   surface?: string | null,
+  scenario?: string | null,
 ): JourneyCandidate | null {
   const sig = signatureOf(title);
   const normalized = sig.normalized;
+
+  // CHE-247: the scenario decides before anything a model wrote is consulted.
+  // A title is a description; a scenario is what the executor was gated to do.
+  // So this filters even the alias rule below: two rows with different known
+  // scenarios are different journeys even with byte-identical titles.
+  candidates = candidates.filter((c) => sameScenario(scenario, c.scenario));
 
   // A title we have already resolved to an entry — its own, or an alias — is
   // the same journey wherever the model says it lives this time. CHE-247: run
@@ -326,6 +365,7 @@ export function journeyKey(
   title: string,
   taken: Iterable<string> = [],
   surface?: string | null,
+  scenario?: string | null,
 ): string {
   const sig = signatureOf(title);
   const base =
@@ -333,6 +373,14 @@ export function journeyKey(
     (sig.tokens.length ? sig.tokens.slice(0, 3).join("-") : slugFallback(sig.normalized));
   const used = new Set(taken);
   if (!used.has(base)) return base;
+  // CHE-247: a scenario says what the product does, so it is the first thing to
+  // reach for when a key is taken — "interview-assistanc-practice-extension"
+  // reads, and it survives a rewording where "-2" would only say "another one".
+  const play = typeof scenario === "string" ? scenario.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") : "";
+  if (play) {
+    const scoped = `${base}-${play}`;
+    if (scoped !== base && !used.has(scoped)) return scoped;
+  }
   // Taken by a journey somewhere else in the product: say where this one lives
   // rather than counting. "settings-account" reads; "settings-2" does not.
   const page = normalizeSurface(surface);

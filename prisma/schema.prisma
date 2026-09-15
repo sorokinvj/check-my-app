@@ -223,6 +223,14 @@ model AppJourney {
   // have not been told yet, and matches anything rather than splitting a
   // journey off from its own history.
   surface String?
+  // CHE-247: what the product DOES on this journey, when something other than a
+  // model can say so — today the extension executor's scenario ("interview",
+  // "practice", "practice-extension"). Gated in code rather than described in
+  // prose, so identity checks it BEFORE any title rule: two rows with different
+  // known scenarios are different journeys even with byte-identical titles.
+  // NULL matches anything, so nothing that predates the column is split off
+  // from its own history.
+  scenario String?
 
   // Current state, updated by every run that walks it. status is the same
   // StepStatus roll-up the per-run row carries.
@@ -292,6 +300,8 @@ model Journey {
   // CHE-235: "app" or the path this journey belongs to, and what this check
   // said the journey costs its user — price in actions, conversion out of 100.
   surface      String?
+  // CHE-247: the scenario this check was gated to (see AppJourney.scenario).
+  scenario     String?
   price        Int?
   conversion   Int?
   // What this check cost: the walking loop plus its judge, the same number that
