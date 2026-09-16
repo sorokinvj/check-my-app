@@ -89,12 +89,47 @@ function trimmed(path: string): string {
   return p || "/";
 }
 
+/**
+ * Collapse path segments that belong to ONE VISIT rather than to a page.
+ *
+ * `normalizePath` already collapses bare numeric and hex segments, which is
+ * enough for a failure signature. It is not enough for a funnel, and running
+ * the derivation over every trail in production is what showed it — two real
+ * funnels came out as:
+ *
+ *   / → /login → /dashboard → /practice/coaching_1788470882972 → /settings
+ *   /check → /onboarding → /dashboard → /dashboard/cmtmsvbyx0001rz1tkzevj5dc
+ *
+ * A session id and a cuid. Stored, each would drift on the next run — and
+ * worse, "how many people reached /practice/coaching_1788470882972" measures a
+ * single session of a single walk, which is a number about us wearing the
+ * clothes of a number about the customer.
+ *
+ * Kept narrow on purpose. Every rule here erases a distinction, and erasing a
+ * real one merges two pages into a stage that is neither.
+ */
+function collapseVolatile(path: string): string {
+  return path
+    .split("/")
+    .map((seg) => {
+      if (!seg) return seg;
+      // A cuid: 'c' then 24 lowercase alphanumerics. Our own ids, and common.
+      if (/^c[a-z0-9]{24}$/.test(seg)) return ":id";
+      // Any segment carrying a long digit run — epoch milliseconds, order
+      // numbers, "coaching_1788470882972". Eight digits is past the point where
+      // a number is part of a page's name (v2, 2024, 101-getting-started).
+      if (/\d{8,}/.test(seg)) return ":id";
+      return seg;
+    })
+    .join("/");
+}
+
 /** The pages a walk moved through, in order, before any funnel reasoning. */
 export function pagesWalked(actions: readonly RecordedOutcome[]): string[] {
   return actions
     .map((a) => a?.outcome?.urlAfter)
     .filter((u): u is string => typeof u === "string" && u.length > 0)
-    .map((u) => trimmed(normalizePath(u)))
+    .map((u) => collapseVolatile(trimmed(normalizePath(u))))
     .filter((p) => p.startsWith("/"));
 }
 

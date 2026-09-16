@@ -166,6 +166,41 @@ function main() {
       JSON.stringify(deriveFunnel(walk("https://x.dev/", "https://x.dev/pricing", "https://x.dev/pricing/")).stages));
   }
 
+  console.log("\nA funnel must not carry one visit's ids (found by running this over all 180 real trails)");
+  {
+    // Both of these came out of production as derived funnels before the fix.
+    // Stored, each would drift on the next run — and "how many people reached
+    // /practice/coaching_1788470882972" measures one session of one walk.
+    const session = deriveFunnel(walk("https://joblander.app/dashboard", "https://joblander.app/practice/coaching_1788470882972"));
+    check("a session id in a segment collapses",
+      session.stages.join(" → ") === "/dashboard → /practice/:id", JSON.stringify(session.stages));
+
+    const cuid = deriveFunnel(walk("https://checkmyapp.dev/check", "https://checkmyapp.dev/dashboard/cmtmsvbyx0001rz1tkzevj5dc"));
+    check("a cuid collapses",
+      cuid.stages.join(" → ") === "/check → /dashboard/:id", JSON.stringify(cuid.stages));
+
+    const runA = deriveFunnel(walk("https://x.dev/a", "https://x.dev/s/coaching_1788470882972"));
+    const runB = deriveFunnel(walk("https://x.dev/a", "https://x.dev/s/coaching_1799999999999"));
+    check("…so two walks of the same journey agree, which is what makes a comparison mean anything",
+      !funnelDrifted(runA.stages, runB.stages), `${runA.stages.join(",")} vs ${runB.stages.join(",")}`);
+
+    // The rules erase distinctions, so they must stay narrow: a version, a year
+    // and a numbered slug are part of a page's NAME, not one visit's identity.
+    check("a short number in a slug survives — /tutorials/101-getting-live-insights is a page",
+      pagesWalked(walk("https://x.dev/tutorials/101-getting-live-insights"))[0] === "/tutorials/101-getting-live-insights",
+      pagesWalked(walk("https://x.dev/tutorials/101-getting-live-insights"))[0]);
+    // A bare numeric segment was already an ":id" under the shared normaliser
+    // long before this ticket, so a year-partitioned path collapses too. Left
+    // as it is rather than special-cased: for a funnel "the blog archive" is
+    // one stage whichever year it is, and carving an exception into a rule the
+    // signatures also use is how the two start disagreeing.
+    check("a bare year collapses, like every other bare number (pre-existing)",
+      pagesWalked(walk("https://x.dev/blog/2026/review"))[0] === "/blog/:id/review",
+      pagesWalked(walk("https://x.dev/blog/2026/review"))[0]);
+    check("a word that merely starts with c is not a cuid",
+      pagesWalked(walk("https://x.dev/checkout"))[0] === "/checkout");
+  }
+
   console.log("\nThe derivation is a function of the walk and nothing else");
   {
     const once = deriveFunnel(REAL_TUTORIALS);
