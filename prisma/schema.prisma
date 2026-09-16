@@ -299,6 +299,12 @@ model AppJourney {
   funnelDerivedAt DateTime?
   funnelDriftAt   DateTime?
 
+  // CHE-239: what the customer's analytics say happened, one point per run.
+  // Deliberately a relation and not a column: `conversion` above is OUR opinion
+  // formed by walking; these are THEIR counts. A number whose provenance is
+  // ambiguous is worse than either number alone.
+  metricPoints JourneyMetricPoint[]
+
   checks Journey[]
 
   createdAt DateTime @default(now())
@@ -306,6 +312,38 @@ model AppJourney {
 
   @@unique([appId, key])
   @@index([appId, retiredAt])
+}
+
+// CHE-239: what the customer's own analytics say happened on a journey — one
+// point per run, so "conversion fell from 31% to 12% over three weeks" is a
+// question the data can answer. A single mutable column can only say what today
+// looks like, and by the time anyone asks why, the before is gone.
+//
+// Separate from AppJourney.conversion on purpose: that is OUR opinion formed by
+// walking, this is THEIR count. Nobody can act on a number without knowing
+// which of the two it is.
+model JourneyMetricPoint {
+  id           String     @id @default(cuid())
+  journey      AppJourney @relation(fields: [appJourneyId], references: [id], onDelete: Cascade)
+  appJourneyId String
+  /// The run that asked. A point outlives the run row it came from.
+  runId        String?
+  measuredAt   DateTime   @default(now())
+  /// How far back the question looked. Per point, because changing the window
+  /// changes the question and a series that mixes them is a trend about nothing.
+  windowDays   Int
+  /// 0-100, or null when we counted and the sample was below the floor. Null
+  /// here is a real answer; a run whose query FAILED writes no row at all.
+  conversion   Int?
+  /// People who reached the first stage — what makes `conversion` trustworthy
+  /// or absent. Always present.
+  sampleSize   Int
+  /// Per-stage counts in funnel order, as JSON. Counts only, never a person.
+  steps        String?
+  source       String     @default("posthog")
+  createdAt    DateTime   @default(now())
+
+  @@index([appJourneyId, measuredAt])
 }
 
 // ─── Journeys & steps ────────────────────────────────────────────────────────

@@ -222,6 +222,15 @@ export async function sweepExpiredEphemeralRuns(
   await eachChunk(runIds, (ids) =>
     db.pendingCheck.updateMany({ where: { runId: { in: ids } }, data: { runId: null } }),
   );
+  // CHE-239: a measurement point is DETACHED, not deleted. It belongs to the
+  // journey, not to the run — it is a record of what the customer's own traffic
+  // did on a given day, and it cost a query against their analytics to obtain.
+  // The run that happened to ask is gone; what it learned is still true, and
+  // deleting it would put a hole in a series whose whole value is continuity.
+  // Same reasoning as verdicts, which are detached and never deleted.
+  await eachChunk(runIds, (ids) =>
+    db.journeyMetricPoint.updateMany({ where: { runId: { in: ids } }, data: { runId: null } }),
+  );
   await eachChunk(runIds, (ids) => db.run.deleteMany({ ...systemWide("janitor"), where: { id: { in: ids } } }));
 
   // Not touched on purpose: Run.baselineRunId, Journey.carriedFromRunId,

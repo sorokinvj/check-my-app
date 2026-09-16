@@ -153,6 +153,7 @@ interface World {
   appSnapshot: Row[];
   generatedTest: Row[];
   pendingCheck: Row[];
+  journeyMetricPoint: Row[];
   watch: Row[];
   user: Row[];
   app: Row[];
@@ -170,6 +171,7 @@ function world(): World {
     appSnapshot: [],
     generatedTest: [],
     pendingCheck: [],
+    journeyMetricPoint: [],
     watch: [],
     user: [],
     app: [],
@@ -190,6 +192,7 @@ function stubDb(w: World) {
     appSnapshot: table(w.appSnapshot, "appSnapshot", log),
     generatedTest: table(w.generatedTest, "generatedTest", log),
     pendingCheck: table(w.pendingCheck, "pendingCheck", log),
+    journeyMetricPoint: table(w.journeyMetricPoint, "journeyMetricPoint", log),
     watch: table(w.watch, "watch", log),
     user: table(w.user, "user", log),
     counter: { upsert: async () => ({ name: "runNumber", value: ++counter }) },
@@ -470,6 +473,7 @@ async function main() {
       journey: base.journey, step: base.step, finding: base.finding, evidence: base.evidence,
       llmUsage: base.llmUsage, createdResource: base.createdResource, appSnapshot: base.appSnapshot,
       generatedTest: base.generatedTest, pendingCheck: base.pendingCheck, watch: base.watch, user: base.user, counter: base.counter,
+      journeyMetricPoint: base.journeyMetricPoint,
       app: {
         findMany: async ({ where }: { where: Where }) => withOwner(apps, where),
         deleteMany: async ({ where }: { where: Where }) => ({ count: apps.filter((a) => matches(a, where)).length }),
@@ -591,7 +595,12 @@ async function main() {
 
     // What src/lib/ephemeral.ts does, table by table.
     const DELETED = ["Journey", "Step", "Finding", "Evidence", "GeneratedTest", "LlmUsage", "CreatedResource", "AppSnapshot"];
-    const DETACHED = ["PendingCheck"];
+    // CHE-239: a measurement point is detached rather than deleted. It belongs
+    // to the journey, not the run — a record of what the customer's own traffic
+    // did that day, obtained at the cost of a query against their analytics.
+    // The run that asked is gone; what it learned is still true, and deleting it
+    // would put a hole in a series whose whole value is continuity.
+    const DETACHED = ["PendingCheck", "JourneyMetricPoint"];
     const REFERENCES = [
       "Run.baselineRunId",
       "Journey.carriedFromRunId",
