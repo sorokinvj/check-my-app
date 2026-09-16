@@ -82,20 +82,51 @@ check(
 // recognise is silently dropped, and "we passed it" would look identical to
 // "it worked".
 
-const clerkTypes = readFileSync(
-  join(ROOT, "node_modules/@clerk/shared/dist/types/clerk.d.ts"),
-  "utf8",
-);
-const signInProps = clerkTypes.slice(clerkTypes.indexOf("type SignInProps ="), clerkTypes.indexOf("type SignInModalProps"));
-check(
-  "SignInProps in the installed Clerk actually has oidcPrompt",
-  /oidcPrompt\?: string/.test(signInProps),
-);
-check(
-  "…and SignInButtonProps still does not — the reason the header is a link",
-  /type SignInButtonProps = [^;]*/.test(clerkTypes) &&
-    !/type SignInButtonProps = [^;]*oidcPrompt/.test(clerkTypes),
-);
+// The path is WALKED UP rather than hardcoded. Several sessions work in git
+// worktrees, which have no `node_modules` of their own — Node's module
+// resolution walks up the tree, which is why `npx tsx` works there at all, but a
+// relative path does not. The first version of this file hardcoded one and
+// turned `verify:all` red in every worktree for a reason that had nothing to do
+// with the code being checked (found by the `journeys` session).
+const CLERK_TYPES = "node_modules/@clerk/shared/dist/types/clerk.d.ts";
+function findUp(relative: string): string | null {
+  let dir = ROOT;
+  for (let i = 0; i < 6; i++) {
+    const candidate = join(dir, relative);
+    try {
+      statSync(candidate);
+      return candidate;
+    } catch {
+      const parent = join(dir, "..");
+      if (parent === dir) break;
+      dir = parent;
+    }
+  }
+  return null;
+}
+
+const clerkTypesPath = findUp(CLERK_TYPES);
+if (!clerkTypesPath) {
+  // Stated, not silent. A dependency we cannot read is "unknown", and unknown
+  // is the one answer this suite must never print as a pass — but it is also
+  // not a defect in the product, so it does not fail the run either.
+  console.log(
+    `SKIP  the installed Clerk types could not be read — no ${CLERK_TYPES} at or above ${ROOT}. ` +
+      `The two dependency assertions below did not run.`,
+  );
+} else {
+  const clerkTypes = readFileSync(clerkTypesPath, "utf8");
+  const signInProps = clerkTypes.slice(clerkTypes.indexOf("type SignInProps ="), clerkTypes.indexOf("type SignInModalProps"));
+  check(
+    "SignInProps in the installed Clerk actually has oidcPrompt",
+    /oidcPrompt\?: string/.test(signInProps),
+  );
+  check(
+    "…and SignInButtonProps still does not — the reason the header is a link",
+    /type SignInButtonProps = [^;]*/.test(clerkTypes) &&
+      !/type SignInButtonProps = [^;]*oidcPrompt/.test(clerkTypes),
+  );
+}
 
 console.log(failures === 0 ? "\nall pass" : `\n${failures} FAILED`);
 process.exit(failures === 0 ? 0 : 1);
