@@ -10,11 +10,36 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { setIntegrationEndpoints } from "./actions";
 import { ApiKeys } from "@/components/api-keys";
+import { AnalyticsConnection } from "@/components/analytics-connection";
+import { isStranded } from "@/lib/posthog/token";
 import { watchTrialState, PLAN_LIMITS } from "@/lib/plans";
 import type { UserPlan } from "@/lib/enums";
 import { teamOwned } from "@/lib/tenant-db";
 import { teamsOf } from "@/lib/teams";
 import { TeamSwitcher } from "@/components/team-switcher";
+
+/**
+ * The analytics connection as the screen needs it (CHE-236).
+ *
+ * The connection is the TEAM's, not an app's — every app the team watches reads
+ * the same one. Tokens never leave this function: what the page receives is the
+ * three facts it states, one of which is whether the connection is still alive.
+ */
+async function analyticsConnection(
+  db: Awaited<ReturnType<typeof requireUser>>["db"],
+  teamId: string,
+) {
+  const row = await db.postHogIntegration.findFirst({
+    where: { ...teamOwned(teamId) },
+    select: { organizationName: true, region: true, expiresAt: true, refreshTokenEnc: true },
+  });
+  if (!row) return null;
+  return {
+    organizationName: row.organizationName,
+    region: row.region,
+    stranded: isStranded(row, new Date()),
+  };
+}
 
 // Owner home (protected). Lists the apps this owner has under daily QA.
 export default async function DashboardPage({
@@ -60,15 +85,32 @@ export default async function DashboardPage({
     }),
   );
 
+  const posthog = await analyticsConnection(db, team.id);
+
   // CHE-67: the Connect Linear flow bounces back here with a hint when the
   // integration isn't set up yet or the OAuth handshake failed — surface it as
-  // a small inline notice instead of the old raw JSON error page.
+  // a small inline notice instead of the old raw JSON error page. CHE-236 adds
+  // the PostHog outcomes: every branch either route can take ends on one of
+  // these sentences, because a person who pressed Connect and was told nothing
+  // will press it again.
   const integrationNotice =
     integration === "linear_unconfigured"
       ? "Linear isn't connected yet — the integration is being set up."
       : integration === "linear_failed"
         ? "Couldn't connect Linear — please try again."
-        : null;
+        : integration === "posthog_connected"
+          ? "PostHog is connected — we can read your funnels, and only read them."
+          : integration === "posthog_declined"
+            ? "PostHog wasn't connected — the request was declined on PostHog's screen."
+            : integration === "posthog_unavailable"
+              ? "PostHog couldn't be reached just now — please try again in a minute."
+              : integration === "posthog_scopes"
+                ? "PostHog changed what it offers — we've stopped rather than ask for the wrong access."
+                : integration === "posthog_unreadable"
+                  ? "PostHog connected but returned no readable account — nothing was saved. Please try again."
+                  : integration === "posthog_failed"
+                    ? "Couldn't connect PostHog — please try again."
+                    : null;
 
   return (
     <main className="mx-auto w-full max-w-3xl px-4 py-12">
@@ -90,7 +132,15 @@ export default async function DashboardPage({
         <div className="card mb-6 flex items-start justify-between gap-4 p-4">
           <div>
             <p className="section-label">integration</p>
-            <p className="text-sm text-status-confusing">{integrationNotice}</p>
+            <p
+            className={
+              integration === "posthog_connected"
+                ? "text-sm text-status-ok"
+                : "text-sm text-status-confusing"
+            }
+          >
+            {integrationNotice}
+          </p>
           </div>
           <Link href="/dashboard" className="text-xs text-fg-muted hover:text-fg" aria-label="Dismiss">
             Dismiss ✕
@@ -265,6 +315,8 @@ export default async function DashboardPage({
           })}
         </ul>
       )}
+
+      <AnalyticsConnection connection={posthog} />
 
       <ApiKeys
         apiAccess={apiAccess}

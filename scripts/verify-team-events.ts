@@ -45,6 +45,9 @@ const MUST_LOG: [string, string][] = [
   ["src/app/dashboard/actions.ts", "deleteApp"],
   ["src/app/dashboard/actions.ts", "setAppNotifiers"],
   ["src/app/dashboard/actions.ts", "setTrackerTeam"],
+  // CHE-236: ending the team's analytics access. "Why did the funnel numbers
+  // stop" must have a name and a date behind it, not a reconstruction.
+  ["src/app/dashboard/actions.ts", "disconnectPostHog"],
 ];
 
 function bodyOf(text: string, fn: string): string {

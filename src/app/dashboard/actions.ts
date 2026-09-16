@@ -8,7 +8,9 @@ import { redirect } from "next/navigation";
 import { headers } from "next/headers";
 import { isSelfCheckRequest, selfCheckRedirectPath } from "@/lib/self-check";
 import { requireUser } from "@/lib/auth";
-import { credentialFingerprint, encryptSecret } from "@/lib/crypto";
+import { getCloudflareContext } from "@opennextjs/cloudflare";
+import { discoverPostHog, revokeToken } from "@/lib/posthog/oauth";
+import { credentialFingerprint, decryptSecret, encryptSecret } from "@/lib/crypto";
 import { generateApiKey, hashApiKey } from "@/lib/apiKeys";
 import { PLAN_LIMITS, assertCanAddWatch } from "@/lib/plans";
 import { TEAM_SCOPES, mintRefusal, type TeamScope } from "@/lib/scopes";
@@ -68,6 +70,51 @@ export async function setIntegrationEndpoints(appId: string, formData: FormData)
   else if (webhookSecret) data.webhookSecretEnc = encryptSecret(webhookSecret);
 
   await db.app.update({ ...alreadyScoped("already read in this request"), where: { id: appId }, data });
+  revalidatePath("/dashboard");
+}
+
+// Disconnect analytics (CHE-236). Two things happen, in this order, and the
+// second is the one a flag-flipping implementation skips:
+//
+//   1. the grant is revoked at PostHog, so the customer's own "apps with
+//      access" list stops naming us — otherwise we have told them we stopped
+//      reading while their screen says we can;
+//   2. the row is DELETED. Not `active: false`, not `revokedAt`: a stored
+//      token that nothing reads is still a stored token, and "disconnect"
+//      means the credential is gone, not shelved.
+//
+// Revocation is attempted first but cannot block deletion. If PostHog is down,
+// the person still asked us to stop reading their analytics, and we stop.
+export async function disconnectPostHog(): Promise<void> {
+  const { user, db, team } = await requireActionScope("integration.connect");
+  const row = await db.postHogIntegration.findFirst({ where: { ...teamOwned(team.id) } });
+  if (!row) return;
+
+  const { env } = getCloudflareContext();
+  const appUrl = ((env as Record<string, string | undefined>).APP_URL ?? "https://checkmyapp.dev").replace(/\/+$/, "");
+  try {
+    const endpoints = await discoverPostHog();
+    const clientId = `${appUrl}/.well-known/posthog-client.json`;
+    // The refresh token is the grant; revoking it is what ends the access
+    // rather than just retiring one short-lived token.
+    if (row.refreshTokenEnc) {
+      await revokeToken({ endpoints, clientId, token: decryptSecret(row.refreshTokenEnc), hint: "refresh_token" });
+    }
+    await revokeToken({ endpoints, clientId, token: decryptSecret(row.accessTokenEnc), hint: "access_token" });
+  } catch (err) {
+    console.warn(`[posthog-oauth] revoke on disconnect failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  await db.postHogIntegration.deleteMany({ where: { ...teamOwned(team.id), id: row.id } });
+  // CHE-264: "why did the funnel numbers stop" has an answer, and it is a name
+  // and a date rather than a reconstruction.
+  await recordTeamEvent(db, {
+    teamId: team.id,
+    actorUserId: user.id,
+    action: "integration.disconnected",
+    subject: row.organizationName ?? "PostHog",
+    summary: `disconnected PostHog${row.organizationName ? ` (${row.organizationName})` : ""}`,
+  });
   revalidatePath("/dashboard");
 }
 
