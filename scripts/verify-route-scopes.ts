@@ -190,13 +190,21 @@ function fileFor(key: string): string {
   return join("src/app", path, "route.ts");
 }
 
-const teamRules = all.filter(([, r]) => r.kind === "team") as [string, Extract<RouteRule, { kind: "team" }>][];
+// A `funnel` rule names an action for its signed-in callers, so it is enforced
+// exactly like a `team` rule. Missing this was the shape of CHE-265 itself: a
+// new kind that the guard did not know about was silently exempt.
+const teamRules = all.filter(
+  ([, r]) => r.kind === "team" || r.kind === "funnel",
+) as [string, Extract<RouteRule, { kind: "team" | "funnel" }>][];
 const unenforced = teamRules.filter(([key, rule]) => {
   const text = readFileSync(join(ROOT, fileFor(key)), "utf8");
   const asksByName =
     text.includes(`requireScope(`) && text.includes(`"${rule.action}"`) ||
     text.includes(`requireActionScope("${rule.action}")`) ||
-    (text.includes("can(scope,") && text.includes(`"${rule.action}"`));
+    (text.includes("can(scope,") && text.includes(`"${rule.action}"`)) ||
+    // CHE-265: a funnel asks the same table through funnelAllows, which answers
+    // "a stranger may, this signed-in caller may not".
+    (text.includes("funnelAllows(") && text.includes(`"${rule.action}"`));
   return !asksByName;
 });
 check(
@@ -205,12 +213,33 @@ check(
   unenforced.map(([k, r]) => `${k} (${r.action})`).join(", ") || `${teamRules.length} enforced`,
 );
 
+const KNOWN_KINDS = ["team", "public", "row", "funnel"];
+const unknownKind = all.filter(([, r]) => !KNOWN_KINDS.includes(r.kind));
+check(
+  "every rule is of a kind this guard knows — a new kind is not silently exempt",
+  unknownKind.length === 0,
+  unknownKind.map(([k, r]) => `${k}: ${r.kind}`).join(", ") || KNOWN_KINDS.join(", "),
+);
+
+// A funnel serves strangers AND signed-in callers, so it must name the action
+// its signed-in callers are judged by. Without one it is a `public` route
+// wearing a different word.
+const funnels = all.filter(([, r]) => r.kind === "funnel") as [string, Extract<RouteRule, { kind: "funnel" }>][];
+check(
+  "every funnel names the action its signed-in callers are judged by",
+  funnels.every(([, r]) => TEAM_ACTIONS.includes(r.action)),
+  funnels.map(([k, r]) => `${k} → ${r.action}`).join(", ") || "none",
+);
+
 const counts = {
   team: all.filter(([, r]) => r.kind === "team").length,
+  funnel: funnels.length,
   public: all.filter(([, r]) => r.kind === "public").length,
   row: all.filter(([, r]) => r.kind === "row").length,
 };
-console.log(`\n        team: ${counts.team}  ·  public: ${counts.public}  ·  row: ${counts.row}\n`);
+console.log(
+  `\n        team: ${counts.team}  ·  funnel: ${counts.funnel}  ·  public: ${counts.public}  ·  row: ${counts.row}\n`,
+);
 
 console.log(failures === 0 ? "all pass" : `${failures} FAILED`);
 process.exit(failures === 0 ? 0 : 1);

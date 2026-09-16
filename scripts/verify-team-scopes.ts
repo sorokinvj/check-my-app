@@ -21,6 +21,7 @@
 
 import {
   ADMIN_ONLY,
+  funnelAllows,
   SPENDS_MONEY,
   TEAM_ACTIONS,
   TEAM_SCOPES,
@@ -182,6 +183,30 @@ check(
   "a member denied billing is pointed at an admin",
   refusal("member", "billing.manage") === "Only an admin of this team can do that.",
   String(refusal("member", "billing.manage")),
+);
+
+// ─── 5. A stranger's door does not widen for a reader (CHE-265) ─────────────
+//
+// Found by T12's dogfood, in production: a reader-scope API key started a
+// check. `POST /api/checks` was registered `public`, `public` means "anyone",
+// and so authentication made the caller LESS restricted than their own scope.
+// The rule is asserted here by name because the failure is invisible — a run
+// starts, nothing errors, and the bill arrives later.
+
+check(
+  "a stranger may use the funnel",
+  funnelAllows(null, "run.start"),
+);
+check(
+  "a READER may not — being a reader on a team is not a way to gain a stranger's capabilities",
+  !funnelAllows("reader", "run.start"),
+);
+for (const scope of ["member", "admin"] as TeamScope[]) {
+  check(`a ${scope} may`, funnelAllows(scope, "run.start"));
+}
+check(
+  "the same holds for every action a funnel could ever name",
+  TEAM_ACTIONS.every((a) => funnelAllows(null, a) && funnelAllows("admin", a) === can("admin", a)),
 );
 
 // The full table, printed. A reviewer should be able to read what this ticket

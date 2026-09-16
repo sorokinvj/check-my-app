@@ -203,3 +203,14 @@ export function mintRefusal(minter: TeamScope, keyScope: TeamScope): string | nu
   if (canMintKey(minter, keyScope)) return null;
   return `You can't create a ${keyScope} key — a key can't do more than the person who made it.`;
 }
+
+// CHE-265: a route open to strangers, reached by somebody who is signed in.
+//
+// `null` means nobody is signed in — the public funnel applies and the caller
+// is welcome. A scope means they ARE signed in, and their own scope decides:
+// being a reader on a team is not a way to gain the capabilities of a stranger.
+// The leak this closes is the reverse of the one people expect — authentication
+// made the caller LESS restricted, because "public" had only one meaning.
+export function funnelAllows(scope: TeamScope | null, action: TeamAction): boolean {
+  return scope === null ? true : can(scope, action);
+}

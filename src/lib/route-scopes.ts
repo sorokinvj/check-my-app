@@ -27,7 +27,15 @@ export type RouteRule =
   // is mutable by whoever holds its unguessable id, an owned one only by its
   // owner (CHE-33). `decidedIn` names the file that holds the rule, so the
   // answer is one grep away rather than one guess.
-  | { kind: "row"; decidedIn: string };
+  | { kind: "row"; decidedIn: string }
+  // Open to strangers AND used by people who are signed in — the public funnel.
+  // A stranger is welcome; a signed-in caller is judged by `action`, using
+  // their own scope. This kind exists because its absence was a real leak
+  // (CHE-265): `POST /api/checks` was registered `public`, `public` means
+  // "anyone", and a reader-scope API key started a check in production. A route
+  // that serves both kinds of caller needs both answers, or the looser one wins
+  // for everybody.
+  | { kind: "funnel"; action: TeamAction; why: PublicReason };
 
 export type PublicReason =
   | "the anonymous funnel — a stranger's first check"
@@ -46,7 +54,11 @@ export const ROUTE_RULES: Record<string, RouteRule> = {
   "GET /api/billing/one-check": { kind: "public", why: "the anonymous funnel — a stranger's first check" },
 
   // The public funnel and the pages anyone may read.
-  "POST /api/checks": { kind: "public", why: "the anonymous funnel — a stranger's first check" },
+  "POST /api/checks": {
+    kind: "funnel",
+    action: "run.start",
+    why: "the anonymous funnel — a stranger's first check",
+  },
   "GET /api/checks/lookup": { kind: "public", why: "addressed by an unguessable id" },
   "GET /api/checks/today": { kind: "public", why: "public by design — today's checks are readable by anyone" },
   "GET /api/evidence/[...path]": { kind: "public", why: "addressed by an unguessable id" },

@@ -18,7 +18,7 @@
 // colleague of whoever can grant it, and the copy says so.
 
 import { NextResponse } from "next/server";
-import { getOwnerFromRequest, requireUser } from "./auth";
+import { getOptionalUser, getOwnerFromRequest, requireUser } from "./auth";
 import { resolveApiKeyGrant } from "./apiKeys";
 import { activeTeamContext, type TeamRow } from "./teams";
 import { preferredTeamId } from "./auth";
@@ -92,4 +92,18 @@ export async function requireActionScope(action: TeamAction) {
   const { user, db, team, scope } = await requireUser();
   if (!can(scope, action)) throw new Error(refusal(scope, action) ?? "Not allowed");
   return { user, db, team, scope };
+}
+
+// CHE-265: who is calling, for a route that also serves strangers.
+//
+// Returns null when nobody is signed in. An API key answers with the KEY's
+// scope — not its minter's, which is the whole point of T10 — and a browser
+// session answers with the person's scope in their active team.
+export async function callerScope(db: PrismaClient, req: Request): Promise<TeamScope | null> {
+  const grant = await resolveApiKeyGrant(db, req);
+  if (grant?.team) return grant.scope as TeamScope;
+  const user = await getOptionalUser(db);
+  if (!user) return null;
+  const { scope } = await activeTeamContext(db, user, await preferredTeamId());
+  return scope;
 }
