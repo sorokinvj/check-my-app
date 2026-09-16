@@ -287,6 +287,18 @@ model AppJourney {
   retiredAt     DateTime?
   retiredReason String?
 
+  // CHE-238: the funnel this journey's walk implies — the ordered pages a
+  // person moves through — derived from what the walk recorded, never from
+  // anything the customer was asked to define. The first derivation wins and a
+  // later disagreement is noted in funnelDriftAt rather than applied, because a
+  // funnel that changes shape silently makes every comparison meaningless.
+  // funnelRefusal names OUR gap when there is no funnel (rule 2); it is what a
+  // "[Checker gap]" is filed from and never reaches a verdict.
+  funnelStages    String?
+  funnelRefusal   String?
+  funnelDerivedAt DateTime?
+  funnelDriftAt   DateTime?
+
   checks Journey[]
 
   createdAt DateTime @default(now())

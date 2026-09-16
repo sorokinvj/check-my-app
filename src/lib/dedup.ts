@@ -8,6 +8,30 @@ import crypto from "node:crypto";
 // path normalized (origin/query stripped, locale prefix dropped, numeric/hash
 // segments collapsed). Same broken endpoint → same signature, whatever the
 // prose around it says.
+/**
+ * A URL or path reduced to the thing two visits have in common.
+ *
+ * Origin and query dropped, locale prefix dropped, numeric and hash segments
+ * collapsed to `:id`. Extracted from `requestSignature` (where it lived inline)
+ * when CHE-238 needed the same reduction for funnel steps: two callers that
+ * normalise paths *almost* identically is how a signature and a funnel come to
+ * disagree about whether two visits were the same page.
+ *
+ * Deliberately byte-identical to what `requestSignature` did inline. Trailing
+ * slashes are NOT stripped here even though `/pricing/` and `/pricing` are the
+ * same page: every open ticket's dedup key was computed with the old behaviour,
+ * and changing it during a refactor would refile them all — the exact failure
+ * CHE-59 created this file to stop. The funnel does that reduction on its own
+ * side, where nothing is keyed on the result.
+ */
+export function normalizePath(urlOrPath: string): string {
+  let path = urlOrPath.replace(/^https?:\/\/[^/]+/i, "").toLowerCase();
+  path = path.replace(/[?#].*$/, "").replace(/[.,;:!)]+$/, "");
+  path = path.replace(/^\/(en|de|fr|es|pt|it|nl|ru)(\/|$)/, "/");
+  path = path.replace(/\/\d+(?=\/|$)/g, "/:id").replace(/\/[0-9a-f-]{16,}(?=\/|$)/gi, "/:id");
+  return path;
+}
+
 export function requestSignature(texts: Array<string | null | undefined>): string | null {
   const joined = texts.filter(Boolean).join(" \n ");
   const req = joined.match(
@@ -16,11 +40,7 @@ export function requestSignature(texts: Array<string | null | undefined>): strin
   if (!req) return null;
   const status = joined.match(/\b([45]\d{2})\b/);
   if (!status) return null;
-  let path = req[2].replace(/^https?:\/\/[^/]+/i, "").toLowerCase();
-  path = path.replace(/[?#].*$/, "").replace(/[.,;:!)]+$/, "");
-  path = path.replace(/^\/(en|de|fr|es|pt|it|nl|ru)(\/|$)/, "/");
-  path = path.replace(/\/\d+(?=\/|$)/g, "/:id").replace(/\/[0-9a-f-]{16,}(?=\/|$)/gi, "/:id");
-  return `${req[1].toUpperCase()} ${path} ${status[1]}`;
+  return `${req[1].toUpperCase()} ${normalizePath(req[2])} ${status[1]}`;
 }
 
 // Stable dedup key for a recurring regression (CHE-32). Same (journey, failing

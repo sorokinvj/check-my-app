@@ -102,6 +102,31 @@ async function ourBoard(env: AgentEnv): Promise<GapBoard | null> {
  * journeys (partial runs) are excluded for the same reason they are carried —
  * this run did not walk them, so it owed them no judgement.
  */
+/**
+ * CHE-238: journeys this run walked that we could not reduce to a funnel.
+ *
+ * Read from the catalog for the same reason pricing is: the refusal is recorded
+ * where the journey lives, so a journey that has never once produced a funnel is
+ * visible even across runs that each thought they had merely had an off day.
+ *
+ * `funnelStages IS NULL` and a refusal recorded together means we have never
+ * derived one — a journey that HAS a stored funnel and merely wandered today is
+ * not a gap, because the funnel it is measured along still stands.
+ */
+async function unfunnelledJourneys(env: AgentEnv, runId: string): Promise<string[]> {
+  const rows = await env.db.journey.findMany({
+    where: {
+      runId,
+      carriedFromRunId: null,
+      appJourneyId: { not: null },
+      appJourney: { funnelStages: null, funnelRefusal: { not: null } },
+    },
+    select: { title: true, appJourney: { select: { funnelRefusal: true } } },
+    take: 20,
+  });
+  return rows.map((r) => `${r.title} (${r.appJourney?.funnelRefusal ?? "no reason recorded"})`);
+}
+
 async function unpricedJourneys(env: AgentEnv, runId: string): Promise<string[]> {
   const rows = await env.db.journey.findMany({
     where: { runId, carriedFromRunId: null, appJourneyId: { not: null }, appJourney: { price: null } },
@@ -191,7 +216,24 @@ export async function fileCapabilityGaps(
         ]
       : [];
 
-  const allGaps = [...gaps, ...orphanGaps, ...unpricedGaps, ...(opts.extraGaps ?? []).map(gap => ({ ...gap, actions: null, journey: { title: "Extension verification" } }))];
+  // CHE-238: a journey we walked and could not turn into a funnel. Our gap,
+  // filed on our board — never a caveat pushed at the customer (rule 2).
+  const unfunnelled = await unfunnelledJourneys(env, runId);
+  const unfunnelledGaps =
+    unfunnelled.length > 0
+      ? [
+          {
+            label: GAP_CLASSES.unfunnelled_journey.label,
+            attempted: "Derive each walked journey's funnel from the path the walk took through it",
+            observed: `Walked and left without a funnel: ${unfunnelled.slice(0, 5).join(" · ")}`,
+            gapClass: "unfunnelled_journey",
+            actions: null,
+            journey: { title: "Journey funnels" },
+          },
+        ]
+      : [];
+
+  const allGaps = [...gaps, ...orphanGaps, ...unpricedGaps, ...unfunnelledGaps, ...(opts.extraGaps ?? []).map(gap => ({ ...gap, actions: null, journey: { title: "Extension verification" } }))];
   if (allGaps.length === 0) return [];
 
   const board = opts.board ?? (await ourBoard(env));

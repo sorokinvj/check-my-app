@@ -26,6 +26,8 @@ import { emptyUsage, mergeUsage, type LlmConfig, type UsageTotals } from "./llm"
 import { credentialsAlreadyRejected, recordCredentialRejection } from "./credentials";
 import { WALK_WRAP_UP_ITERATIONS, walkingIterationCap } from "./limits";
 import { walkingVision } from "./harness";
+import { deriveFunnel } from "@/lib/funnel";
+import { parseJson } from "@/lib/json";
 import { adjudicateStep } from "./judge";
 import { classifyGap, gapEvidenceText } from "./gap-classes";
 import { cutUndrivenClaims, type GateStep } from "./findings-gate";
@@ -65,6 +67,23 @@ function journeyStatus(statuses: StepStatus[]): string {
 
 // The forced-extraction path asks for raw code, but models still wrap it in a
 // ```ts fence about half the time. Strip a single leading/trailing fence.
+/**
+ * The funnel this journey's walk implies (CHE-238).
+ *
+ * The steps each carry their own slice of the machine trail; the funnel is
+ * derived from all of them in order, because a conversion path crosses steps —
+ * "landed, tried the thing, hit the login wall" is three steps and one funnel.
+ *
+ * Returns a refusal rather than nothing when there is no funnel: that refusal
+ * is a statement about our own capability and is what a "[Checker gap]" is
+ * filed from (rule 2), so losing it would turn a gap of ours into silence.
+ */
+function funnelFromWalk(steps: readonly GateStep[]) {
+  return deriveFunnel(
+    steps.flatMap((s) => parseJson<Array<{ outcome?: { urlAfter?: string | null } | null }>>(s.actions) ?? []),
+  );
+}
+
 function errText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
@@ -443,6 +462,9 @@ export async function walkOneJourney(args: {
         surface: proposed.surface,
         scenario: proposed.extensionScenario,
         metric,
+        // CHE-238: the funnel is the pages this walk actually moved through.
+        // The customer is never asked to define one.
+        funnel: funnelFromWalk(walkedSteps),
       }).catch((err) => console.warn(`[journey] catalog not updated: ${errText(err)}`));
     } catch (err) {
       // Per-journey isolation: one failure must not abort the rest of the run.
@@ -471,6 +493,7 @@ export async function walkOneJourney(args: {
         surface: proposed.surface,
         scenario: proposed.extensionScenario,
         metric,
+        funnel: funnelFromWalk(walkedSteps),
       }).catch((e) => console.warn(`[journey] catalog not updated: ${errText(e)}`));
     } finally {
       await closeAgentContext(browser, context);
