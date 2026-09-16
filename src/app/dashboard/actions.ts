@@ -12,6 +12,7 @@ import { credentialFingerprint, encryptSecret } from "@/lib/crypto";
 import { generateApiKey, hashApiKey } from "@/lib/apiKeys";
 import { PLAN_LIMITS, assertCanAddWatch } from "@/lib/plans";
 import { TEAM_SCOPES, mintRefusal, type TeamScope } from "@/lib/scopes";
+import { recordTeamEvent } from "@/lib/team-events";
 import type { UserPlan, WatchFrequency } from "@/lib/enums";
 import { alreadyScoped, teamOwned } from "@/lib/tenant-db";
 
@@ -28,6 +29,13 @@ export async function setTrackerTeam(appId: string, teamId: string, teamName: st
   await db.trackerIntegration.update({
     where: { appId },
     data: { teamId, externalOrg: teamName },
+  });
+  await recordTeamEvent(db, {
+    teamId: team.id,
+    actorUserId: user.id,
+    action: "integration.connected",
+    subject: app.appSlug,
+    summary: `pointed ${app.appSlug}'s tickets at ${teamName}`,
   });
 }
 
@@ -83,6 +91,7 @@ export async function createApiKey(
   if (refusal) throw new Error(refusal);
 
   const rawKey = generateApiKey();
+  // recorded after the row exists, below
   const key = await db.apiKey.create({ ...alreadyScoped("created with its team"),
     data: {
       ownerId: user.id,
@@ -92,6 +101,13 @@ export async function createApiKey(
       keyHash: await hashApiKey(rawKey),
     },
   });
+  await recordTeamEvent(db, {
+    teamId: team.id,
+    actorUserId: user.id,
+    action: "apikey.created",
+    subject: key.name,
+    summary: `created a ${wanted} API key called "${key.name}"`,
+  });
   return { id: key.id, name: key.name, rawKey };
 }
 
@@ -100,6 +116,13 @@ export async function createApiKey(
 export async function revokeApiKey(id: string): Promise<void> {
   const { user, db, team } = await requireActionScope("apikey.manage");
   await db.apiKey.deleteMany({ where: { ...teamOwned(team.id), id, ownerId: user.id } });
+  await recordTeamEvent(db, {
+    teamId: team.id,
+    actorUserId: user.id,
+    action: "apikey.revoked",
+    subject: id,
+    summary: "revoked an API key",
+  });
 }
 
 // Edit an app's settings after onboarding (CHE-64). Mirrors createApp's field →
@@ -183,6 +206,26 @@ export async function updateAppSettings(appId: string, formData: FormData) {
     });
   }
 
+  // CHE-264: one line for the settings, and a separate one for a credential —
+  // the credential change is the one an admin will most want to trace later,
+  // and it should not hide inside "settings changed".
+  await recordTeamEvent(db, {
+    teamId: team.id,
+    actorUserId: user.id,
+    action: "app.settings_changed",
+    subject: app.appSlug,
+    summary: `changed settings for ${app.appSlug}`,
+  });
+  if (testPassword) {
+    await recordTeamEvent(db, {
+      teamId: team.id,
+      actorUserId: user.id,
+      action: "app.credentials_written",
+      subject: app.appSlug,
+      summary: `replaced the test password for ${app.appSlug}`,
+    });
+  }
+
   revalidatePath("/dashboard");
   revalidatePath(`/dashboard/${app.id}`);
 }
@@ -224,6 +267,13 @@ export async function deleteApp(
   await db.trackerIntegration.deleteMany({ where: { appId: app.id } });
   await db.repoIntegration.deleteMany({ where: { appId: app.id } });
   await db.app.delete({ ...alreadyScoped("already read in this request"), where: { id: app.id } });
+  await recordTeamEvent(db, {
+    teamId: team.id,
+    actorUserId: user.id,
+    action: "app.deleted",
+    subject: app.appSlug,
+    summary: `deleted ${app.appSlug} — its verdicts were kept`,
+  });
 
   revalidatePath("/dashboard");
   redirect(`/dashboard?removed=${encodeURIComponent(app.appSlug)}`);
@@ -244,7 +294,7 @@ export async function runSavedApp(appId: string, _previous: { error: string } | 
 // remove THEMSELVES — a reader who joined to read what breaks should not have
 // to ask an admin to be allowed to hear about it.
 export async function setAppNotifiers(appId: string, formData: FormData): Promise<void> {
-  const { db, team } = await requireActionScope("app.settings.write");
+  const { user, db, team } = await requireActionScope("app.settings.write");
   const app = await db.app.findFirst({ where: { ...teamOwned(team.id), id: appId }, select: { id: true } });
   if (!app) throw new Error("App not found.");
 
@@ -258,6 +308,15 @@ export async function setAppNotifiers(appId: string, formData: FormData): Promis
   for (const userId of valid) {
     await db.appNotifier.create({ data: { appId, userId } });
   }
+  await recordTeamEvent(db, {
+    teamId: team.id,
+    actorUserId: user.id,
+    action: "app.notifiers_changed",
+    subject: appId,
+    summary: valid.length
+      ? `set who hears about this app: ${valid.length} ${valid.length === 1 ? "person" : "people"}`
+      : "cleared who hears about this app — verdicts go to the team's admins again",
+  });
   revalidatePath(`/dashboard/${appId}`);
 }
 

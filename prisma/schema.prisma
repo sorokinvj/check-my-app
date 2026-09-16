@@ -606,6 +606,7 @@ model Team {
 
   memberships Membership[]
   invites     TeamInvite[]
+  events      TeamEvent[]
   apps        App[]
   runs        Run[]
   watches     Watch[]
@@ -647,6 +648,28 @@ model Membership {
 // Only a hash of the token is stored. The raw token exists in the emailed link
 // and nowhere else, the same shape ApiKey.keyHash already uses: a database dump
 // does not let anyone join a team.
+// CHE-264 (Teams T11): who changed what. Written by the functions that perform
+// the change, never by a caller who remembers — a log kept by habit is complete
+// until the first person forgets. Read by everyone on the team: an account log,
+// never anything a customer reads about their own product (rule 1).
+model TeamEvent {
+  id     String @id @default(cuid())
+  team   Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  teamId String
+  // Null when our own system did it — a Stripe webhook, the scheduler. "System"
+  // is an answer; a blank that means "we did not record it" is not.
+  actorUserId String?
+  action      String  // TeamEventAction — see src/lib/team-events.ts
+  // What it happened to, in the team's own words: an email, an app slug, a key
+  // name. Never an id.
+  subject     String?
+  summary     String
+
+  createdAt DateTime @default(now())
+
+  @@index([teamId, createdAt])
+}
+
 model AppNotifier {
   id     String @id @default(cuid())
   app    App    @relation(fields: [appId], references: [id], onDelete: Cascade)

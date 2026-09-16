@@ -24,6 +24,7 @@ import {
   inviteState,
 } from "@/lib/invites";
 import { sendTeamInvite } from "@/lib/email";
+import { recordTeamEvent } from "@/lib/team-events";
 import { seatGate } from "@/lib/seats";
 import { syncTeamSeats } from "@/lib/billing-sync";
 import { getStripeEnv } from "@/lib/stripe";
@@ -83,14 +84,21 @@ export async function inviteMemberAction(formData: FormData): Promise<void> {
     apiKey: bindings.EMAIL_API_KEY,
     from: bindings.EMAIL_FROM,
   });
+  await recordTeamEvent(db, {
+    teamId: team.id,
+    actorUserId: user.id,
+    action: "member.invited",
+    subject: parsed.email,
+    summary: `invited ${parsed.email} as ${parsed.scope}`,
+  });
   revalidatePath("/team");
 }
 
 export async function revokeInviteAction(inviteId: string): Promise<void> {
-  const { db, team } = await requireActionScope("member.invite");
+  const { user, db, team } = await requireActionScope("member.invite");
   const invite = await db.teamInvite.findFirst({
     where: { id: inviteId, teamId: team.id },
-    select: { id: true, expiresAt: true, acceptedAt: true, revokedAt: true, revokedReason: true, teamId: true, scope: true },
+    select: { id: true, email: true, expiresAt: true, acceptedAt: true, revokedAt: true, revokedReason: true, teamId: true, scope: true },
   });
   if (!invite) throw new Error("Invitation not found.");
   if (inviteState(invite) === "pending") {
@@ -98,13 +106,20 @@ export async function revokeInviteAction(inviteId: string): Promise<void> {
       where: { id: invite.id },
       data: { revokedAt: new Date(), revokedReason: "revoked" },
     });
+    await recordTeamEvent(db, {
+      teamId: team.id,
+      actorUserId: user.id,
+      action: "member.invite_revoked",
+      subject: invite.email,
+      summary: `cancelled the invitation to ${invite.email}`,
+    });
   }
   revalidatePath("/team");
 }
 
 export async function changeScopeAction(userId: string, formData: FormData): Promise<void> {
   const scope = String(formData.get("scope") ?? "");
-  const { db, team } = await requireActionScope("member.scope.change");
+  const { user, db, team } = await requireActionScope("member.scope.change");
   const members = await membersOf(db, team.id);
   const decision = decideScopeChange(members, userId, scope as TeamScope);
   if (!decision.ok) throw new Error(decision.reason);
@@ -116,6 +131,13 @@ export async function changeScopeAction(userId: string, formData: FormData): Pro
   // from the memberships rather than incremented, so a missed sync is put right
   // by the next change instead of compounding.
   await syncTeamSeats(db, getStripeEnv(getCloudflareContext().env as Record<string, unknown>), team.id);
+  await recordTeamEvent(db, {
+    teamId: team.id,
+    actorUserId: user.id,
+    action: "member.scope_changed",
+    subject: userId,
+    summary: `changed someone's access to ${scope}`,
+  });
   revalidatePath("/team");
 }
 
@@ -128,6 +150,13 @@ export async function removeMemberAction(userId: string): Promise<void> {
   // team, and ownerId on those rows is attribution — the record of who did it.
   await db.membership.deleteMany({ where: { teamId: team.id, userId } });
   await syncTeamSeats(db, getStripeEnv(getCloudflareContext().env as Record<string, unknown>), team.id);
+  await recordTeamEvent(db, {
+    teamId: team.id,
+    actorUserId: user.id,
+    action: "member.removed",
+    subject: userId,
+    summary: "removed someone from the team — their apps, checks and tickets stayed",
+  });
   revalidatePath("/team");
 }
 
@@ -140,5 +169,12 @@ export async function leaveTeamAction(): Promise<void> {
   if (!decision.ok) throw new Error(decision.reason);
   await db.membership.deleteMany({ where: { teamId: team.id, userId: user.id } });
   await syncTeamSeats(db, getStripeEnv(getCloudflareContext().env as Record<string, unknown>), team.id);
+  await recordTeamEvent(db, {
+    teamId: team.id,
+    actorUserId: user.id,
+    action: "member.left",
+    subject: user.email,
+    summary: `${user.email} left the team`,
+  });
   revalidatePath("/team");
 }

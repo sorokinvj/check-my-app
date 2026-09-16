@@ -2,6 +2,7 @@ import { requireUser } from "@/lib/auth";
 import { can } from "@/lib/scopes";
 import { REMOVAL_KEEPS_EVERYTHING, decideLeave } from "@/lib/membership";
 import { inviteState } from "@/lib/invites";
+import { describeEvent } from "@/lib/team-events";
 import { seatSummary } from "@/lib/seats";
 import type { UserPlan } from "@/lib/enums";
 import {
@@ -42,6 +43,15 @@ export default async function TeamPage() {
   const pending = invites.filter((i) => inviteState(i) === "pending");
 
   const inviterEmail = new Map(memberships.map((m) => [m.userId, m.user.email]));
+  const actorEmail = inviterEmail;
+  // CHE-264: readable by everyone on the team. It is an account log — never
+  // anything a customer reads about their own product (rule 1).
+  const events = await db.teamEvent.findMany({
+    where: { teamId: team.id },
+    orderBy: { createdAt: "desc" },
+    take: 25,
+    select: { id: true, action: true, subject: true, summary: true, actorUserId: true, createdAt: true },
+  });
   const mayManage = can(scope, "member.scope.change");
   const mayInvite = can(scope, "member.invite");
   const canLeave = decideLeave(
@@ -141,6 +151,22 @@ export default async function TeamPage() {
           )}
         </section>
       )}
+
+      <section className="card mt-6 p-6">
+        <h2 className="text-lg font-medium">What has happened here</h2>
+        {events.length === 0 ? (
+          <p className="mt-2 text-sm text-fg-muted">Nothing yet. Invitations, access changes and billing will show up here.</p>
+        ) : (
+          <ul className="mt-3 space-y-2">
+            {events.map((e) => (
+              <li key={e.id} className="text-sm">
+                <span className="text-fg-muted">{e.createdAt.toISOString().slice(0, 16).replace("T", " ")} UTC — </span>
+                {describeEvent({ ...e, actorEmail: e.actorUserId ? actorEmail.get(e.actorUserId) ?? null : null })}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
 
       <section className="card mt-6 p-6">
         <h2 className="text-lg font-medium">Leave this team</h2>
