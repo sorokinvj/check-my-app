@@ -10,7 +10,9 @@
 // Connect is a link, not a form: it leaves for PostHog's consent screen.
 // Disconnect is a form, because it changes something of ours.
 
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
+import { POSTHOG_SCOPES } from "@/lib/posthog/oauth";
 import { disconnectPostHog } from "@/app/dashboard/actions";
 
 export interface AnalyticsConnectionProps {
@@ -60,6 +62,15 @@ export function AnalyticsConnection({ connection }: AnalyticsConnectionProps) {
               <p className="text-xs text-fg-faint">
                 Connect it and a check can say what a journey costs you in real users, not just
                 whether it works.
+              </p>
+              {/* CHE-243: the terms, next to the button that agrees to them. A
+                  consent decision made without the scopes in front of you is
+                  not consent, it is a habit. */}
+              <p className="text-xs text-fg-faint">
+                Read-only: <span className="font-mono">{POSTHOG_SCOPES.join(" · ")}</span>.{" "}
+                <Link href="/analytics-access" className="text-accent hover:underline">
+                  What we read
+                </Link>
               </p>
             </>
           )}
