@@ -14,6 +14,8 @@
 
 import type { AgentEnv } from "./env";
 import { isAlertable, movementOf, movementSentence, type MetricPoint } from "@/lib/metric-movement";
+import { flowChanges, pairedSentence } from "@/lib/flow-changes";
+import { parseJson } from "@/lib/json";
 
 /** How much history to read. Enough for a baseline, not enough to be slow. */
 const POINTS_TO_READ = 12;
@@ -39,9 +41,19 @@ export async function metricAlertsForRun(env: AgentEnv, runId: string): Promise<
     const journeys = await env.db.journey.findMany({
       where: { runId, appJourneyId: { not: null } },
       select: {
+        // CHE-242: this run's own view of the flow, for the half PostHog
+        // cannot have. Read beside the numbers rather than in a second query,
+        // because the two belong in one message.
+        order: true,
+        status: true,
+        steps: { orderBy: { order: "asc" }, select: { label: true } },
         appJourney: {
           select: {
             title: true,
+            price: true,
+            prevPrice: true,
+            plan: true,
+            status: true,
             metricPoints: {
               orderBy: { measuredAt: "desc" },
               take: POINTS_TO_READ,
@@ -51,6 +63,22 @@ export async function metricAlertsForRun(env: AgentEnv, runId: string): Promise<
         },
       },
     });
+
+    // A finding belongs to the run and points at its journey through `anchor`
+    // — our own internal record of what it was allowed to rest on (CHE-215).
+    // Only the finding's TITLE crosses into the message; the anchor never does.
+    const findings = await env.db.finding.findMany({
+      where: { runId, mark: { not: "false_positive" } },
+      select: { title: true, anchor: true },
+    });
+    const titlesByJourneyIndex = new Map<number, string[]>();
+    for (const f of findings) {
+      const ref = parseJson<{ stepRef?: { journeyIndex?: number } }>(f.anchor)?.stepRef;
+      if (typeof ref?.journeyIndex !== "number" || !f.title) continue;
+      const list = titlesByJourneyIndex.get(ref.journeyIndex) ?? [];
+      list.push(f.title);
+      titlesByJourneyIndex.set(ref.journeyIndex, list);
+    }
 
     const alerts: MetricAlert[] = [];
     const seen = new Set<string>();
@@ -62,7 +90,26 @@ export async function metricAlertsForRun(env: AgentEnv, runId: string): Promise<
       const movement = movementOf(aj.metricPoints as MetricPoint[]);
       if (!isAlertable(movement)) continue;
       const sentence = movementSentence(aj.title, movement);
-      if (sentence) alerts.push({ journeyTitle: aj.title, sentence });
+      if (!sentence) continue;
+
+      // CHE-242: the pairing. The number moved AND this is what changed in the
+      // flow — or, said outright, that nothing did. The stored plan is what the
+      // journey looked like before this walk; this run's step labels are what
+      // it looks like now.
+      const changes = flowChanges({
+        price: aj.price,
+        prevPrice: aj.prevPrice,
+        plan: j.steps.map((s) => s.label).filter(Boolean),
+        prevPlan: parseJson<string[]>(aj.plan) ?? [],
+        status: j.status,
+        prevStatus: aj.status,
+        newFindings: (titlesByJourneyIndex.get(j.order) ?? []).slice(0, 2),
+        // The survey's snapshot diff (CHE-132) is per-run and not joined here;
+        // claiming "the page changed" without having compared the snapshots
+        // would be asserting something we have not checked.
+        pageChanged: false,
+      });
+      alerts.push({ journeyTitle: aj.title, sentence: pairedSentence(sentence, changes) });
     }
     return alerts;
   } catch (err) {
