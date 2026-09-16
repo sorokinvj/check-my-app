@@ -24,6 +24,20 @@ export type RunStatus =
   // the product could not describe.
   | "canceled";
 
+// Whether a run is still moving. Written as a Record so the compiler demands an
+// answer for every status: a new one cannot be added without being classified,
+// and everything that asks "is anything running" reads it from here rather than
+// keeping its own list. Three separate lists is how a guard goes blind — the
+// scheduler, the deploy gate and every in-flight query used to spell their own.
+export const RUN_STATUS_KIND: Record<RunStatus, "live" | "terminal"> = {
+  queued: "live", connecting: "live", surface_scan: "live", discovery: "live",
+  walking: "live", anatomy: "live", writing: "live",
+  completed: "terminal", partial: "terminal", failed: "terminal", canceled: "terminal",
+};
+export const RUN_STATUSES = Object.keys(RUN_STATUS_KIND) as RunStatus[];
+export const LIVE_RUN_STATUSES = RUN_STATUSES.filter(status => RUN_STATUS_KIND[status] === "live");
+export const TERMINAL_RUN_STATUSES = RUN_STATUSES.filter(status => RUN_STATUS_KIND[status] === "terminal");
+
 // "unverified" is off the good→bad axis: the run finished but walked nothing,
 // so we have no opinion to give. Only the workflow's coverage guard sets it —
 // synthesis never picks it (CHE-42).
