@@ -112,6 +112,19 @@ running in production right now:
   exit due to a new version rollout: 143" ended run #195 mid-discovery. Worse
   when it holds a paid session: that session is left with nobody to stop it.
 
+**Waiting for the rollout to say `completed` is not enough, and this is
+measured, not suspected (CHE-272).** Run #202 was evicted at 01:21:39 by a
+rollout that had been marked `completed` at 01:11:05 — ten minutes earlier,
+with no later rollout in the API. `completed` marks the end of the *rollout*,
+not the end of *instance replacement*: a container started long after every
+visible signal said "quiet" can still land on an instance that is then drained.
+Run #195 died the same way five minutes after its own rollout completed. Both
+times the person had waited deliberately for the signal this file recommended.
+So the window is invisible to whoever is merging, and the real fix is the
+executor surviving an eviction we caused rather than a longer wait — until then,
+leave more distance than looks necessary after a deploy before starting a paid
+extension run.
+
 So before `gh pr merge`, check what is in flight:
 
 ```
