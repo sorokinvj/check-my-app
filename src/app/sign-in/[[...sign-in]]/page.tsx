@@ -4,7 +4,7 @@ import { SignIn } from "@clerk/nextjs";
 // SSO callbacks) resolves under /sign-in. email-code is the agent-walkable path
 // used by the dogfood self-check (CHE-35).
 //
-// CHE-274: `oidcPrompt="select_account"` makes Google ask WHICH account. Without
+// CHE-276: `oidcPrompt="select_account"` makes Google ask WHICH account. Without
 // it Google silently reuses whichever account the browser is signed into — for a
 // Chrome profile synced to a work account, "Continue with Google" is not a
 // choice, it is an announcement. It also made a second account unreachable,

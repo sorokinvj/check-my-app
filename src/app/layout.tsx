@@ -95,7 +95,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                   >
                     About
                   </Link>
-                  {/* CHE-274: a link, not a modal. `SignInButton` cannot carry
+                  {/* CHE-276: a link, not a modal. `SignInButton` cannot carry
                       oidcPrompt — its props pick only redirects, initialValues,
                       withSignUp and oauthFlow out of SignInProps — so a modal
                       sign-in would silently keep reusing the browser's Google

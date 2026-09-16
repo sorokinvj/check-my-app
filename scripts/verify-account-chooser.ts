@@ -1,4 +1,4 @@
-// CHE-274 verification: "Continue with Google" asks WHICH Google account.
+// CHE-276 verification: "Continue with Google" asks WHICH Google account.
 //
 // Reported by the owner against production: the button signed him in with
 // whichever account Chrome was synced to, with no chooser. That is Google's
