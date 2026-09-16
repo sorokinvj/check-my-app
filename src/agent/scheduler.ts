@@ -32,7 +32,13 @@ const INTERVAL_HOURS: Record<WatchFrequency, number> = { daily: 24, every_6h: 6,
 const TRIAL_RECHECK_HOURS = 1;
 
 // A run in any other status is still moving; its Watch must not fire again yet.
-const TERMINAL_STATUSES = ["completed", "partial", "failed"];
+// CHE-265: `canceled` belongs here. It is a run that has stopped — and a
+// canceled run left out of this list is a watch that never runs again, because
+// the scheduler sees it as permanently in flight. The state is not
+// hypothetical: T12 canceled run #203 the moment a reader-scope key started it.
+// Two definitions of "terminal" disagreeing is how a watch goes quiet without
+// anything failing (rule 2 — the silence would be ours, not the app's).
+const TERMINAL_STATUSES = ["completed", "partial", "failed", "canceled"];
 
 export interface TickResult {
   started: string[];

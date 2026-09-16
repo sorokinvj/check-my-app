@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { getDbFromContext } from "@/lib/db";
 import { getOwnerFromRequest } from "@/lib/auth";
 import { optionalTeamContext } from "@/lib/auth";
+import { callerScope } from "@/lib/team-auth";
+import { funnelAllows, refusal } from "@/lib/scopes";
 import { hashClientKey } from "@/lib/crypto";
 import { assertCanStartRun } from "@/lib/plans";
 import { effectiveEphemeralTtlDays, effectiveSiteCap } from "@/lib/site-cap";
@@ -93,6 +95,14 @@ export async function POST(req: Request) {
   // CHE-253: the quota is the team's, not the person's — inviting a colleague
   // must not mint a second allowance.
   const context = await optionalTeamContext(prisma, owner);
+  // CHE-265: a stranger is welcome here; somebody signed in is judged by their
+  // own scope. A reader-scope key started a check in production before this
+  // existed — authentication had made the caller LESS restricted, because
+  // "public" had only one meaning.
+  const scope = await callerScope(prisma, req);
+  if (!funnelAllows(scope, "run.start")) {
+    return NextResponse.json({ error: refusal(scope!, "run.start") }, { status: 403 });
+  }
   const gate = await assertCanStartRun(
     prisma,
     context ? { id: context.team.id, plan: context.team.plan as UserPlan } : null,
