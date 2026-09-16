@@ -93,6 +93,11 @@ export const ACTION_RULES: Record<string, RouteRule> = {
   "src/app/dashboard/actions.ts#updateAppSettings": { kind: "team", action: "app.settings.write" },
   "src/app/dashboard/actions.ts#deleteApp": { kind: "team", action: "app.delete" },
   "src/app/dashboard/actions.ts#runSavedApp": { kind: "team", action: "run.start" },
+  "src/app/dashboard/actions.ts#setAppNotifiers": { kind: "team", action: "app.settings.write" },
+  // Subscribing yourself is not an admin act: a reader joined to read what
+  // breaks, and needing permission to be told about it would be a product that
+  // makes you ask twice.
+  "src/app/dashboard/actions.ts#toggleOwnNotifications": { kind: "team", action: "read" },
   "src/app/onboarding/actions.ts#createApp": { kind: "team", action: "app.settings.write" },
   "src/app/verdict/actions.ts#recheckRunAction": { kind: "row", decidedIn: "src/lib/recheck.ts" },
   "src/app/verdict/actions.ts#fullRecheckRunAction": { kind: "row", decidedIn: "src/lib/recheck.ts" },

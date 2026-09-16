@@ -227,3 +227,39 @@ export async function runSavedApp(appId: string, _previous: { error: string } | 
   if ("error" in result) return result;
   redirect(`/run/${result.publicId}`);
 }
+
+// CHE-262: who on the team is told about this app's verdicts.
+//
+// Two doors on purpose. An admin or member sets the list for everybody
+// (`app.settings.write`); anybody on the team, including a reader, can add or
+// remove THEMSELVES — a reader who joined to read what breaks should not have
+// to ask an admin to be allowed to hear about it.
+export async function setAppNotifiers(appId: string, formData: FormData): Promise<void> {
+  const { db, team } = await requireActionScope("app.settings.write");
+  const app = await db.app.findFirst({ where: { ...teamOwned(team.id), id: appId }, select: { id: true } });
+  if (!app) throw new Error("App not found.");
+
+  const wanted = new Set(formData.getAll("notifier").map(String));
+  const members = await db.membership.findMany({ where: { teamId: team.id }, select: { userId: true } });
+  const valid = members.map((m) => m.userId).filter((id) => wanted.has(id));
+
+  // Replace rather than diff: the form carries the whole answer, and a diff
+  // would need the previous state to be what we think it is.
+  await db.appNotifier.deleteMany({ where: { appId } });
+  for (const userId of valid) {
+    await db.appNotifier.create({ data: { appId, userId } });
+  }
+  revalidatePath(`/dashboard/${appId}`);
+}
+
+// The self-service half: any scope, your own subscription only.
+export async function toggleOwnNotifications(appId: string): Promise<void> {
+  const { user, db, team } = await requireActionScope("read");
+  const app = await db.app.findFirst({ where: { ...teamOwned(team.id), id: appId }, select: { id: true } });
+  if (!app) throw new Error("App not found.");
+
+  const existing = await db.appNotifier.findFirst({ where: { appId, userId: user.id }, select: { id: true } });
+  if (existing) await db.appNotifier.deleteMany({ where: { appId, userId: user.id } });
+  else await db.appNotifier.create({ data: { appId, userId: user.id } });
+  revalidatePath(`/dashboard/${appId}`);
+}

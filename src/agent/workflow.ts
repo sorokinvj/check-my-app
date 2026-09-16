@@ -136,6 +136,8 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
           appId: true,
           // CHE-136: tracker settlements are kept per owner (CHE-101).
           ownerId: true,
+          // CHE-253/CHE-262: whose run this is, and therefore who hears about it.
+          teamId: true,
         },
       });
       if (!r) throw new Error(`run ${runId} not found`);

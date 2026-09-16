@@ -563,6 +563,7 @@ model User {
   // be two columns meaning the same thing, which is how a rule ends up keyed
   // on the wrong subject (CHE-156).
 
+  notifies    AppNotifier[]
   memberships Membership[]
   // What this person did, kept apart from who owns it: a row's `ownerId` is
   // attribution and is never rewritten when somebody leaves a team.
@@ -646,6 +647,20 @@ model Membership {
 // Only a hash of the token is stored. The raw token exists in the emailed link
 // and nowhere else, the same shape ApiKey.keyHash already uses: a database dump
 // does not let anyone join a team.
+model AppNotifier {
+  id     String @id @default(cuid())
+  app    App    @relation(fields: [appId], references: [id], onDelete: Cascade)
+  appId  String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+
+  createdAt DateTime @default(now())
+
+  @@unique([appId, userId])
+  @@index([appId])
+  @@index([userId])
+}
+
 model TeamInvite {
   id     String @id @default(cuid())
   team   Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
@@ -737,6 +752,7 @@ model App {
   webhookSecretEnc String? // encrypted blob (src/lib/crypto), never logged
   slackWebhookUrl  String?
 
+  notifiers AppNotifier[]
   watch   Watch?
   tracker TrackerIntegration?
   repo    RepoIntegration?
