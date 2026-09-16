@@ -41,6 +41,7 @@
 import { sendVerdictReady } from "@/lib/email";
 import { describeRecipients, recipientsForApp } from "@/lib/recipients";
 import type { Verdict } from "@/lib/enums";
+import { metricAlertsForRun } from "./metric-alerts";
 import { isSelfUrl } from "./self-hosts";
 import type { AgentBindings, AgentEnv } from "./env";
 
@@ -196,11 +197,17 @@ export async function notifyVerdictReady(
   const written = await env.db.run.findUnique({
     where: { publicId: run.publicId },
     select: {
+      id: true,
       bottomLine: true,
       findings: { select: { category: true }, where: { mark: { not: "false_positive" } } },
     },
   });
   const findings = written?.findings ?? [];
+  // CHE-241: what moved, for the mail the Watch already sends. Read once for
+  // the whole recipient loop; a failure here costs the sentence, never the mail.
+  const metricAlerts = written
+    ? (await metricAlertsForRun(env, written.id)).map((a) => a.sentence)
+    : [];
   try {
     // One message per recipient rather than one message with several addresses:
     // a verdict is somebody's own mail, and a shared To: line is how a team
@@ -215,6 +222,7 @@ export async function notifyVerdictReady(
       verdict,
       recurring: Boolean(run.watchId),
       bottomLine: written?.bottomLine ?? null,
+      metricAlerts,
       findingCounts: {
         total: findings.length,
         broken: findings.filter((f) => f.category === "broken" || f.category === "exposed").length,

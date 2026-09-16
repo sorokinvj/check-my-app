@@ -30,6 +30,10 @@ interface VerdictReadyArgs {
   // "your verdict is ready", which makes the reader do the work of finding out.
   bottomLine?: string | null;
   findingCounts?: { broken: number; total: number };
+  // CHE-241: journeys whose measured conversion fell materially against their
+  // own baseline. Rides this mail rather than becoming a second product.
+  // Already rule-1 clean; composed in src/lib/metric-movement.ts.
+  metricAlerts?: string[];
   apiKey?: string;
   from?: string;
   baseUrl?: string;
@@ -49,6 +53,7 @@ export async function sendVerdictReady({
   recurring,
   bottomLine,
   findingCounts,
+  metricAlerts,
   apiKey,
   from,
   baseUrl,
@@ -82,10 +87,18 @@ export async function sendVerdictReady({
           ? `<p style="margin:0 0 16px;color:#666">${findingCounts.total} finding${findingCounts.total === 1 ? "" : "s"}` +
             `${findingCounts.broken > 0 ? `, ${findingCounts.broken} of them blocking` : ""}.</p>`
           : "") +
+        // CHE-241. Deliberately placed AFTER the verdict and before the link:
+        // "the app works" and "fewer people finish it" are both true at once,
+        // and the second must not be smoothed into the first or hidden under
+        // it. A green verdict with a fallen conversion is not a contradiction.
+        (metricAlerts?.length
+          ? `<p style="margin:0 0 16px">${metricAlerts.map((s) => escapeHtml(s)).join("<br>")}</p>`
+          : "") +
         `<p><a href="${url}">See the evidence →</a></p><p style="color:#666">— CheckMyApp</p>`,
       text:
         `${appSlug}${label ? ` — ${label}` : ""}\n\n` +
         (bottomLine ? `${bottomLine}\n\n` : "") +
+        (metricAlerts?.length ? `${metricAlerts.join("\n")}\n\n` : "") +
         `See the evidence: ${url}\n\n— CheckMyApp`,
     }),
   });
