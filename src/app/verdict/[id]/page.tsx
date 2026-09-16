@@ -6,6 +6,7 @@ import { normalizeAnatomy } from "@/lib/anatomy";
 import { VERDICT_META } from "@/lib/status";
 import { AppLensSection } from "@/components/app-lens";
 import { JourneyStrips } from "@/components/journey-strip";
+import { numbersForJourneys } from "@/lib/journey-numbers-load";
 import { AppAnatomySection } from "@/components/app-anatomy";
 import { FindingsList } from "@/components/findings-list";
 import { EnableWatchButton, FullRecheckButton, RecheckButton } from "@/components/verdict-actions";
@@ -190,6 +191,14 @@ export default async function VerdictPage({
   const carriedRunIds = [
     ...new Set(run.journeys.map((j) => j.carriedFromRunId).filter((id): id is string => Boolean(id))),
   ];
+  // CHE-240: the two numbers for each journey — what we judged by walking it,
+  // and what the customer's own analytics counted. Read here, labelled here,
+  // and never blended: a reader who cannot tell an estimate from a measurement
+  // will act on the wrong one.
+  const journeyNumbers = await numbersForJourneys(
+    prisma,
+    run.journeys.map((j) => ({ id: j.id, appJourneyId: j.appJourneyId })),
+  );
   const carriedRunNumbers = Object.fromEntries(
     carriedRunIds.length
       ? (
@@ -367,6 +376,7 @@ export default async function VerdictPage({
         />
         <JourneyStrips
           journeys={run.journeys}
+          numbers={journeyNumbers}
           carriedRunNumbers={carriedRunNumbers}
           emptyNote={
             smokePass
