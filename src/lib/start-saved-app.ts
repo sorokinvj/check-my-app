@@ -23,7 +23,7 @@ export async function startSavedApp(
     select: { publicId: true },
   });
   if (active) return active;
-  const gate = await assertCanStartRun(db, owner, null, { siteCap: deps.siteCap() });
+  const gate = await assertCanStartRun(db, { id: owner.teamId, plan: owner.plan }, null, { siteCap: deps.siteCap() });
   if (!gate.ok) return { error: gate.reason };
   const run = await db.run.create({ ...alreadyScoped("created with its team"),
     data: {

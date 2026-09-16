@@ -94,7 +94,7 @@ export async function enableWatchForRun(
     select: { id: true },
   });
   const gate = await assertCanAddWatch(db, {
-    ownerId: user.id,
+    teamId: user.teamId,
     plan: user.plan as UserPlan,
     frequency: opts.frequency,
     existingWatchId: existingWatch?.id ?? null,

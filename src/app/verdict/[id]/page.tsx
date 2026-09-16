@@ -161,7 +161,10 @@ export default async function VerdictPage({
   // reads the owner's current plan).
   const fullRecheckAllowance =
     caps.fullRecheck && viewer
-      ? await fullRechecksRemaining(prisma, { id: viewer.id, plan: (viewerTeam?.team.plan ?? "free") as UserPlan })
+      ? await fullRechecksRemaining(prisma, {
+          id: viewerTeam!.team.id,
+          plan: (viewerTeam?.team.plan ?? "free") as UserPlan,
+        })
       : null;
   // The refusal of a full re-check comes back as ?recheck=<reason>, worded by
   // fullRecheckGate in src/lib/plans.ts; both of its refusals start with

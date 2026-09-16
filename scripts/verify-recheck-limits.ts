@@ -114,7 +114,7 @@ async function main() {
     check("December refusal names January 1", !decGate.ok && /until January 1\b/.test(decGate.reason), decGate.ok ? "" : decGate.reason);
   }
 
-  type CountWhere = { ownerId?: string | null; forceFull?: boolean; createdAt?: { gte: Date } };
+  type CountWhere = { teamId?: string | null; forceFull?: boolean; createdAt?: { gte: Date } };
 
   {
     const calls: CountWhere[] = [];
@@ -126,21 +126,21 @@ async function main() {
         },
       },
     } as unknown as PrismaClient;
-    const used = await fullRechecksUsed(db, "owner-1", NOW);
+    const used = await fullRechecksUsed(db, "team_owner-1", NOW);
     check("fullRechecksUsed returns the count", used === 3, String(used));
     const w = calls[0];
     check("fullRechecksUsed: this owner's forceFull rows since the month began",
-      w.ownerId === "owner-1" && w.forceFull === true && w.createdAt?.gte.toISOString() === "2026-09-01T00:00:00.000Z",
+      w.teamId === "team_owner-1" && w.forceFull === true && w.createdAt?.gte.toISOString() === "2026-09-01T00:00:00.000Z",
       JSON.stringify(w));
 
-    const dash = await fullRechecksRemaining(db, { id: "owner-1", plan: "starter" }, NOW);
+    const dash = await fullRechecksRemaining(db, { id: "team_owner-1", plan: "starter" }, NOW);
     check("fullRechecksRemaining (starter, 3 used): 2 of 5 left, resets October 1",
       dash.used === 3 && dash.limit === 5 && dash.remaining === 2 && dash.resetsOn === "October 1", JSON.stringify(dash));
-    const ent = await fullRechecksRemaining(db, { id: "owner-1", plan: "enterprise" }, NOW);
+    const ent = await fullRechecksRemaining(db, { id: "team_owner-1", plan: "enterprise" }, NOW);
     check("fullRechecksRemaining (enterprise): limit and remaining null",
       ent.limit === null && ent.remaining === null, JSON.stringify(ent));
     const overDb = { run: { count: async () => 9 } } as unknown as PrismaClient;
-    const over = await fullRechecksRemaining(overDb, { id: "owner-1", plan: "starter" }, NOW);
+    const over = await fullRechecksRemaining(overDb, { id: "team_owner-1", plan: "starter" }, NOW);
     check("fullRechecksRemaining never goes negative", over.remaining === 0, JSON.stringify(over));
   }
 
@@ -265,8 +265,8 @@ async function main() {
     check("starter, 4 used, full → run created with forceFull true",
       creates.length === 1 && creates[0].forceFull === true, JSON.stringify(creates[0]));
     const w = counts.find((c) => c.forceFull === true);
-    check("starter, full → the count is this owner's forceFull rows since Sept 1",
-      !!w && w.ownerId === "owner-1" && w.createdAt?.gte.toISOString() === "2026-09-01T00:00:00.000Z", JSON.stringify(w));
+    check("starter, full → the count is this TEAM's forceFull rows since Sept 1",
+      !!w && w.teamId === "team_owner-1" && w.createdAt?.gte.toISOString() === "2026-09-01T00:00:00.000Z", JSON.stringify(w));
   }
 
   // Growth, 0 used → 19 remain after this one. Enterprise → null.
