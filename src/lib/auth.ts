@@ -9,7 +9,8 @@ import { auth, currentUser } from "@clerk/nextjs/server";
 import { redirect } from "next/navigation";
 import { getDbFromContext } from "./db";
 import { upsertUserFromClerk } from "./users";
-import { resolveApiKeyOwner } from "./apiKeys";
+import { resolveApiKeyGrant, resolveApiKeyOwner } from "./apiKeys";
+import { can } from "./scopes";
 import { ACTIVE_TEAM_COOKIE, activeTeamContext, type TeamRow } from "./teams";
 import { cookies } from "next/headers";
 import type { TeamScope } from "./scopes";
@@ -131,4 +132,39 @@ export async function canMutateOwned(
   if (!ownerId) return true;
   const user = await getOptionalUser(db);
   return !!user && user.id === ownerId;
+}
+
+// CHE-263 / CHE-246: may THIS request act on an owned row?
+//
+// canMutateOwned above only knows a Clerk session, so an API key — a stronger
+// proof than a browser cookie — was refused by every route that used it. This
+// answers for both identities, and for the team rather than the person: a run
+// belongs to a team, so a colleague's key may re-check it, which is the whole
+// point of the row belonging to the team and not to whoever clicked first.
+export async function canMutateOwnedFromRequest(
+  db: PrismaClient,
+  req: Request,
+  row: { ownerId: string | null; teamId?: string | null },
+): Promise<boolean> {
+  // An anonymous row is mutable by whoever holds its unguessable id (CHE-33).
+  if (!row.ownerId && !row.teamId) return true;
+
+  const grant = await resolveApiKeyGrant(db, req);
+  if (grant?.team) {
+    // A reader key reads. Acting on a row is not reading, and the scope table
+    // is the one place that decides which is which.
+    if (!can(grant.scope as TeamScope, "run.recheck")) return false;
+    if (row.teamId && grant.team.id === row.teamId) return true;
+    return grant.user.id === row.ownerId;
+  }
+
+  const user = await getOptionalUser(db);
+  if (!user) return false;
+  if (user.id === row.ownerId) return true;
+  if (!row.teamId) return false;
+  const membership = await db.membership.findFirst({
+    where: { teamId: row.teamId, userId: user.id },
+    select: { scope: true },
+  });
+  return membership ? can(membership.scope as TeamScope, "run.recheck") : false;
 }

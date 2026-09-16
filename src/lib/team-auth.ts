@@ -19,6 +19,7 @@
 
 import { NextResponse } from "next/server";
 import { getOwnerFromRequest, requireUser } from "./auth";
+import { resolveApiKeyGrant } from "./apiKeys";
 import { activeTeamContext, type TeamRow } from "./teams";
 import { preferredTeamId } from "./auth";
 import { can, refusal, type TeamAction, type TeamScope } from "./scopes";
@@ -44,6 +45,23 @@ export async function requireScope(
   // sentence that belongs to it.
   unauthenticated = "Sign in to do that",
 ): Promise<ScopeDecision> {
+  // CHE-263: a key carries its own scope and its own team, so it is answered
+  // from the key rather than from whatever the person who minted it can do
+  // today. A reader key stays a reader key after its author becomes an admin.
+  const grant = await resolveApiKeyGrant(db, req);
+  if (grant?.team) {
+    if (!can(grant.scope as TeamScope, action)) {
+      return {
+        ok: false,
+        response: NextResponse.json({ error: refusal(grant.scope as TeamScope, action) }, { status: 403 }),
+      };
+    }
+    return {
+      ok: true,
+      grant: { user: grant.user, team: grant.team as TeamRow, scope: grant.scope as TeamScope, via: "api_key" },
+    };
+  }
+
   const caller = await getOwnerFromRequest(db, req);
   if (!caller) {
     return {

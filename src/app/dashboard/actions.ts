@@ -11,6 +11,7 @@ import { requireUser } from "@/lib/auth";
 import { credentialFingerprint, encryptSecret } from "@/lib/crypto";
 import { generateApiKey, hashApiKey } from "@/lib/apiKeys";
 import { PLAN_LIMITS, assertCanAddWatch } from "@/lib/plans";
+import { TEAM_SCOPES, mintRefusal, type TeamScope } from "@/lib/scopes";
 import type { UserPlan, WatchFrequency } from "@/lib/enums";
 import { alreadyScoped, teamOwned } from "@/lib/tenant-db";
 
@@ -66,19 +67,27 @@ export async function setIntegrationEndpoints(appId: string, formData: FormData)
 // DB keeps its SHA-256 hash, so this is the one time the owner can copy it.
 export async function createApiKey(
   name: string,
+  keyScope: string = "member",
 ): Promise<{ id: string; name: string; rawKey: string }> {
   // CHE-253: the plan is the team's, and so is the key — a CI hook does not
   // stop working because the person who minted it left. Who minted it stays on
   // ownerId as attribution.
-  const { user, db, team } = await requireActionScope("apikey.manage");
+  const { user, db, team, scope } = await requireActionScope("apikey.manage");
   if (!PLAN_LIMITS[team.plan as UserPlan].apiAccess) {
     throw new Error("API access is available on the Business plan.");
   }
+  // CHE-263: a key carries a scope, and never one above its minter's — a member
+  // who could mint an admin key would make the scope table a suggestion.
+  const wanted = (TEAM_SCOPES as string[]).includes(keyScope) ? (keyScope as TeamScope) : "member";
+  const refusal = mintRefusal(scope, wanted);
+  if (refusal) throw new Error(refusal);
+
   const rawKey = generateApiKey();
   const key = await db.apiKey.create({ ...alreadyScoped("created with its team"),
     data: {
       ownerId: user.id,
       teamId: team.id,
+      scope: wanted,
       name: name.trim().slice(0, 100) || "API key",
       keyHash: await hashApiKey(rawKey),
     },

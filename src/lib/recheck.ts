@@ -27,7 +27,7 @@ export type RecheckResult =
 // real ones; the verify script passes stubs, so the gate can be exercised
 // without a request context.
 export interface RecheckDeps {
-  canMutate: (db: PrismaClient, ownerId: string | null) => Promise<boolean>;
+  canMutate: (db: PrismaClient, row: { ownerId: string | null; teamId?: string | null }) => Promise<boolean>;
   trigger: (runId: string) => Promise<void>;
   siteCap: () => number;
   now: () => Date;
@@ -47,12 +47,16 @@ export async function createRecheckRun(
   prisma: PrismaClient,
   publicId: string,
   opts: { full?: boolean; anonKeyHash?: string | null } = {},
+  // CHE-263: a caller may override just the authorization half — the recheck
+  // route does, so an API key is answered the same way a session is.
+  overrides: Partial<RecheckDeps> = {},
   deps: RecheckDeps = {
-    canMutate: canMutateOwned,
+    canMutate: (db, row) => canMutateOwned(db, row.ownerId),
     trigger: triggerRun,
     siteCap: effectiveSiteCap,
     now: () => new Date(),
     ephemeralTtlDays: effectiveEphemeralTtlDays,
+    ...overrides,
   },
 ): Promise<RecheckResult> {
   const prev = await prisma.run.findUnique({ ...publicRow(),
@@ -85,7 +89,8 @@ export async function createRecheckRun(
 
   // A recheck spends money + may touch the owner's app — owned runs require the
   // owner; anonymous runs are authorized by the unguessable publicId (CHE-33).
-  if (!(await deps.canMutate(prisma, prev.ownerId))) return { kind: "unauthorized" };
+  if (!(await deps.canMutate(prisma, { ownerId: prev.ownerId, teamId: prev.teamId })))
+    return { kind: "unauthorized" };
 
   // CHE-94. Everything below is about the ANONYMOUS path: the caller proved
   // nothing except that they have the link.

@@ -702,6 +702,11 @@ model ApiKey {
   ownerId    String
   team       Team?     @relation(fields: [teamId], references: [id])
   teamId     String?
+  // CHE-263: what this key may do, from the same three scopes a person has
+  // (src/lib/scopes.ts). A key cannot be minted above the scope of the person
+  // minting it, and a reader key is the one customers will actually ask for: a
+  // token that can read every verdict and spend nothing.
+  scope      String    @default("member") // TeamScope
   name       String // owner-facing label, e.g. "CI post-deploy hook"
   keyHash    String    @unique // SHA-256 hex of the raw `cma_<32 hex>` key
   lastUsedAt DateTime?
