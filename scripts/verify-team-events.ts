@@ -44,6 +44,10 @@ const MUST_LOG: [string, string][] = [
   ["src/app/dashboard/actions.ts", "updateAppSettings"],
   ["src/app/dashboard/actions.ts", "deleteApp"],
   ["src/app/dashboard/actions.ts", "setAppNotifiers"],
+  // CHE-237: which project an app's numbers come from decides what every later
+  // verdict claims a journey is worth. Changing it silently would make two
+  // verdicts disagree with no record of why.
+  ["src/app/dashboard/actions.ts", "setAppPosthogProject"],
   ["src/app/dashboard/actions.ts", "setTrackerTeam"],
   // CHE-236: ending the team's analytics access. "Why did the funnel numbers
   // stop" must have a name and a date behind it, not a reconstruction.

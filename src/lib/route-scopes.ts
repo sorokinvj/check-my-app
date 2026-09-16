@@ -113,6 +113,10 @@ export const ACTION_RULES: Record<string, RouteRule> = {
   "src/app/dashboard/actions.ts#deleteApp": { kind: "team", action: "app.delete" },
   "src/app/dashboard/actions.ts#runSavedApp": { kind: "team", action: "run.start" },
   "src/app/dashboard/actions.ts#setAppNotifiers": { kind: "team", action: "app.settings.write" },
+  // CHE-237: pointing an app at a PostHog project is an app setting, not an
+  // integration one — the connection is already made; this says which of its
+  // projects this app reports to.
+  "src/app/dashboard/actions.ts#setAppPosthogProject": { kind: "team", action: "app.settings.write" },
   // Subscribing yourself is not an admin act: a reader joined to read what
   // breaks, and needing permission to be told about it would be a product that
   // makes you ask twice.

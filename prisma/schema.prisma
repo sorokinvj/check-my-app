@@ -823,6 +823,15 @@ model App {
   webhookSecretEnc String? // encrypted blob (src/lib/crypto), never logged
   slackWebhookUrl  String?
 
+  // CHE-237: which PostHog project holds this app's data. The connection is the
+  // team's; the project is the app's, because only the owner can say which of
+  // their projects is this product. The name is a cached label so the settings
+  // page reads correctly even when the connection is expired or gone; the id is
+  // the only part ever sent to PostHog. Null is not broken — an app with no
+  // project keeps our own estimate and says so once.
+  posthogProjectId   String?
+  posthogProjectName String?
+
   notifiers AppNotifier[]
   watch   Watch?
   tracker TrackerIntegration?

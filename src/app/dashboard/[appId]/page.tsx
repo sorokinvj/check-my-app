@@ -14,6 +14,9 @@ import type { UserPlan } from "@/lib/enums";
 import { memberOfRows, teamOwned } from "@/lib/tenant-db";
 import { setAppNotifiers } from "@/app/dashboard/actions";
 import { switchTeamAction } from "@/app/team/switch-actions";
+import { getCloudflareContext } from "@opennextjs/cloudflare";
+import { AnalyticsProject } from "@/components/analytics-project";
+import { projectChoicesFor } from "@/lib/posthog/choices";
 
 // Per-app settings (CHE-64, redesigned CHE-81). Three meaning-first sections —
 // the page will keep growing, so hierarchy comes from sections, not from a pile
@@ -109,6 +112,15 @@ export default async function AppSettingsPage({
       : tracker.tokenExpiresAt && tracker.tokenExpiresAt <= new Date()
         ? { tone: "bad" as const, text: "token expired — reconnect to restore ticket filing" }
         : { tone: "warn" as const, text: "reconnect to enable token auto-renew" };
+
+  // CHE-237: the projects this team's PostHog connection can see, ranked for
+  // this app. Costs nothing when no connection exists, which is the common case
+  // — and an app without one is not broken, it just keeps our own estimate.
+  const projectChoices = await projectChoicesFor(db, {
+    teamId: team.id,
+    appUrl: app.targetUrl,
+    clientId: `${((getCloudflareContext().env as Record<string, string | undefined>).APP_URL ?? "https://checkmyapp.dev").replace(/\/+$/, "")}/.well-known/posthog-client.json`,
+  });
 
   return (
     <main className="mx-auto w-full max-w-3xl px-4 py-12">
@@ -277,6 +289,13 @@ export default async function AppSettingsPage({
           <button type="submit" className="btn-secondary text-sm">Save who hears about it</button>
         </form>
       </section>
+
+      {/* ── Which PostHog project holds this app's data (CHE-237) ──────── */}
+      <AnalyticsProject
+        appId={appId}
+        chosen={app.posthogProjectId ? { id: app.posthogProjectId, name: app.posthogProjectName } : null}
+        choices={projectChoices}
+      />
 
       {/* ── 3 · Where results go ──────────────────────────────────────── */}
       <section className="mt-12 space-y-4">

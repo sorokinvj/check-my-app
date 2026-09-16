@@ -340,6 +340,62 @@ export async function runSavedApp(appId: string, _previous: { error: string } | 
 // (`app.settings.write`); anybody on the team, including a reader, can add or
 // remove THEMSELVES — a reader who joined to read what breaks should not have
 // to ask an admin to be allowed to hear about it.
+// Which PostHog project holds this app's data (CHE-237). Asked once, stored,
+// never asked again.
+//
+// The name is stored beside the id deliberately: the id is the only thing ever
+// sent to PostHog, and the name is a label cached at the moment of choosing, so
+// the settings page still reads correctly when the connection has expired. The
+// name is taken from the form rather than looked up again because the form is
+// what the owner was looking at when they chose — a fresh lookup could disagree
+// with what they saw and silently relabel their choice.
+//
+// Clearing it is a first-class option, not an omission: an app with no project
+// keeps our own estimate, which is a legitimate state to return to.
+export async function setAppPosthogProject(appId: string, formData: FormData): Promise<void> {
+  const { user, db, team } = await requireActionScope("app.settings.write");
+  const app = await db.app.findFirst({
+    where: { ...teamOwned(team.id), id: appId },
+    select: { id: true, appSlug: true, posthogProjectName: true },
+  });
+  if (!app) throw new Error("App not found.");
+
+  // "<id>:<name>", or "" for none. One field rather than two because a hidden
+  // name field cannot follow a <select> without client JS, and would quietly
+  // store a label belonging to a different project than the one chosen.
+  const raw = String(formData.get("posthogProject") ?? "").trim();
+  const at = raw.indexOf(":");
+  const projectId = at === -1 ? raw : raw.slice(0, at);
+  const projectName = at === -1 ? "" : raw.slice(at + 1).trim();
+
+  // A project id is PostHog's own numeric id. Refusing anything else keeps a
+  // hand-edited form from writing a value that would fail far away, inside a
+  // query, where the error would read as "no data" rather than "bad input".
+  if (projectId && !/^\d{1,20}$/.test(projectId)) {
+    throw new Error("That does not look like a PostHog project id.");
+  }
+
+  await db.app.update({
+    ...alreadyScoped("already read in this request"),
+    where: { id: appId },
+    data: {
+      posthogProjectId: projectId || null,
+      posthogProjectName: projectId ? projectName.slice(0, 200) || `Project ${projectId}` : null,
+    },
+  });
+
+  await recordTeamEvent(db, {
+    teamId: team.id,
+    actorUserId: user.id,
+    action: "app.settings_changed",
+    subject: app.appSlug,
+    summary: projectId
+      ? `pointed ${app.appSlug} at the PostHog project "${projectName || projectId}"`
+      : `stopped reading a PostHog project for ${app.appSlug}`,
+  });
+  revalidatePath(`/dashboard/${appId}`);
+}
+
 export async function setAppNotifiers(appId: string, formData: FormData): Promise<void> {
   const { user, db, team } = await requireActionScope("app.settings.write");
   const app = await db.app.findFirst({ where: { ...teamOwned(team.id), id: appId }, select: { id: true } });
