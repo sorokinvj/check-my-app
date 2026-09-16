@@ -611,6 +611,49 @@ model Team {
   runs        Run[]
   watches     Watch[]
   apiKeys     ApiKey[]
+  // CHE-236: the team's analytics connection, at most one.
+  posthog     PostHogIntegration?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+/// CHE-236 — the analytics connection, made once for the team.
+///
+/// Keyed by team rather than by owner (the ticket predates CHE-253): the plan
+/// and the subscription belong to the team, and a connection owned by one
+/// member would strand everyone else the day that person leaves — the same
+/// defect shape as team knowledge stored per person. `connectedByUserId` is
+/// attribution only, mirroring how Run keeps ownerId alongside teamId.
+///
+/// One row per team, enforced by the database. Two tokens for one team is a
+/// question nobody can answer ("which do we read from?"). The alternative —
+/// unique on (teamId, organizationId), allowing a team two PostHog
+/// organisations — was considered and deferred: PostHog does not document
+/// whether a token is scoped to one organisation, and a unique index over a
+/// column that may be NULL for every row enforces nothing in SQLite. It is a
+/// cheap migration the day a real team needs two.
+model PostHogIntegration {
+  id     String @id @default(cuid())
+  team   Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  teamId String @unique
+  /// Who pressed Connect. Access follows the team, not this.
+  connectedByUserId String?
+
+  /// Encrypted at rest (src/lib/crypto), like every other stored credential.
+  accessTokenEnc  String
+  refreshTokenEnc String?
+  /// Absolute, never a duration: a lifetime stored at write time is wrong by
+  /// however long the row has been sitting there (CHE-68).
+  expiresAt       DateTime?
+  /// What PostHog actually granted, as it reported back — so a later read can
+  /// say "this connection cannot answer that" instead of surfacing a raw 403.
+  scope           String?
+
+  organizationName String?
+  organizationId   String?
+  /// us | eu, as discovered during the flow.
+  region           String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
