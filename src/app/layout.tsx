@@ -127,6 +127,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                   >
                     Check a link
                   </Link>
+                  <Link
+                    href="/settings/team"
+                    className="font-mono text-[13px] text-fg-muted transition-colors hover:text-fg"
+                  >
+                    Settings
+                  </Link>
                   <UserButton />
                 </Show>
               </div>
