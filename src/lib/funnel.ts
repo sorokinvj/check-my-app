@@ -204,14 +204,41 @@ export function refusalReason(refusal: FunnelRefusal): string {
   }
 }
 
+/** Is `inner` contained in `outer` in order, extra stages allowed between? */
+function isSubsequence(inner: readonly string[], outer: readonly string[]): boolean {
+  let i = 0;
+  for (const stage of outer) {
+    if (i < inner.length && inner[i] === stage) i++;
+  }
+  return i === inner.length;
+}
+
 /**
- * Has the funnel's shape changed?
+ * Has the funnel's shape really changed?
  *
  * A funnel that changes silently between runs makes every comparison
  * meaningless — yesterday's 12% and today's 40% would be measuring different
  * questions while looking like a trend. So the stored funnel wins and drift is
  * reported rather than applied. Changing it is a decision, not a side effect.
+ *
+ * But "different" is not the same as "changed shape", and two consecutive runs
+ * in production showed exactly why. The same journey walked:
+ *
+ *     run #204   /checks/today → /verdict/:id
+ *     run #205   /check → /checks/today → /verdict/:id
+ *
+ * The walk entered from the landing page the second time. Nothing about the
+ * conversion path changed; one extra earlier stage was seen. Reporting that as
+ * drift would make this flag fire on ordinary entry-point variance — and a
+ * flag that fires on everything stops meaning anything, which is how the real
+ * shape change, when it comes, goes unnoticed.
+ *
+ * So drift means **incompatible**: neither funnel is a subsequence of the
+ * other. A longer walk that still passes through the stored stages in order is
+ * the same funnel seen from further back; a shorter one skipped a stage. A
+ * REORDERED path is a genuinely different funnel, and is reported.
  */
 export function funnelDrifted(stored: readonly string[], derived: readonly string[]): boolean {
-  return stored.length !== derived.length || stored.some((s, i) => s !== derived[i]);
+  if (stored.length === derived.length && stored.every((s, i) => s === derived[i])) return false;
+  return !isSubsequence(stored, derived) && !isSubsequence(derived, stored);
 }
