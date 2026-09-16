@@ -52,6 +52,7 @@ import { claimedHands, drivenControls, gateFindings } from "./findings-gate";
 import { synthesizeVerdict, type SynthesizedFinding } from "./synthesis";
 import { autoFileFindings } from "./autofile";
 import { fileCapabilityGaps, fileDeliveryGap } from "./capability-gaps";
+import { measureRunJourneys, measurementNote } from "./journey-measurement";
 import { GAP_CLASSES } from "./gap-classes";
 import { auditCreatedResources } from "./cleanup";
 import { reconcileIssueLinks, reverifyInstructions, verifyFixedLinks } from "./reconcile";
@@ -967,6 +968,24 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
         } catch (err) {
           const text = err instanceof Error ? err.message : String(err);
           console.warn(`[capability] gap filing failed: ${text}`);
+        }
+      });
+
+      // CHE-239: what the customer's own analytics say happened on the journeys
+      // we just walked. One point per journey per run, so the series can later
+      // answer "conversion fell from 31% to 12%" rather than only "it is 12%".
+      //
+      // After the walk and after gap filing, and wrapped in its own step: this
+      // is a read of someone else's system, and a failure in it must cost the
+      // measurement and nothing else. measureRunJourneys never throws; the
+      // try/catch is the second belt.
+      await step.do("measure-journeys", async () => {
+        try {
+          const summary = await measureRunJourneys(env, runId, { appUrl: env.bindings.APP_URL });
+          const note = measurementNote(summary);
+          if (note) await appendEvent(env, runId, "writing", { icon: "info", text: note });
+        } catch (err) {
+          console.warn(`[measure] skipped: ${err instanceof Error ? err.message : String(err)}`);
         }
       });
 
