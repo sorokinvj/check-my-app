@@ -95,9 +95,26 @@ async function main() {
   // is that a rejected publication deletes nothing, and that stays true however
   // many valid publications ran before it.
   const deletedBeforeRejection = deleted;
+
+  // A scenario that did not run is a coverage gap, not a reason to throw away
+  // the ones that did. Run #207 confirmed practice and the combined scenario —
+  // two paid sessions — and published nothing because interview never signed in.
   phases["walk-0"] = { ...saved, productResultConfirmed: false };
-  await assert.rejects(prepareExtensionPublication(env, "new-run", JSON.stringify(evidence)), /three session outcomes/);
-  assert.equal(deleted, deletedBeforeRejection, "Invalid evidence is rejected before any published row changes");
+  const partialCoverage = (await prepareExtensionPublication(env, "new-run", JSON.stringify(evidence)))!;
+  assert.equal(partialCoverage.verdict, "mostly_ok", "What was established is still worth publishing");
+  assert.match(partialCoverage.bottomLine, /not exercised this time/);
+  assert.doesNotMatch(partialCoverage.bottomLine, /Interview assistance, AI practice and their combined use produced/,
+    "A run that skipped a scenario may not claim all three worked");
+  assert.ok(writes.some(w => w.label === "Session" && w.status === "skipped" && w.gapClass === "extension_runtime" && w.unverifiedReason === "our_capability"),
+    "The scenario that did not run is filed as ours, on our board");
+  assert.equal(hasEnvironmentLeak(partialCoverage.bottomLine), false);
+  assert.equal(hasHomework(partialCoverage.bottomLine), false);
+
+  // Nothing established is still nothing to say.
+  const noneRan = { phases: Object.fromEntries(Object.entries(phases).map(([key, phase]) => [key, { ...phase, productResultConfirmed: false }])), identity: { extensionId: identity.extensionId } };
+  await assert.rejects(prepareExtensionPublication(env, "new-run", JSON.stringify(noneRan)), /no session outcome/);
+  assert.equal(deleted, deletedBeforeRejection + 1, "Only the publication that went through deleted anything");
+
   phases["walk-0"] = { ...saved, cleanupComplete: false };
   await assert.rejects(prepareExtensionPublication(env, "new-run", JSON.stringify(evidence)), /verified observation/);
   phases["walk-0"] = saved;

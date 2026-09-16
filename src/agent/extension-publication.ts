@@ -135,11 +135,26 @@ export async function prepareExtensionPublication(env: AgentEnv, runId: string, 
     return { journey, phase, report };
   });
   if (!reports.length) throw new Error("internal: extension publication has no journeys");
+  // A scenario is established when a session of it ran and either answered or
+  // visibly failed. Until now all three had to be established in one run or
+  // nothing was published at all — and a walk that skips one sign-in threw away
+  // the other two, which had cost real paid minutes to establish. Run #207 is
+  // the case: practice and the combined scenario both confirmed, interview
+  // never signed in, nothing published. Rule 2 says what we could not check is
+  // a coverage gap and a ticket on our board, not a refusal to report what we
+  // did check.
+  const established = new Set(Object.keys(scenarioNames).filter(scenario =>
+    reports.some(({ phase, report }) => phase.scenario === scenario && report.scenario === scenario && report.session &&
+      (phase.productFailureObserved || phase.productResultConfirmed && phase.sustainedSessionsObserved && phase.ownedSessions === (scenario === "practice-extension" ? 2 : 1)))));
+  // Nothing established is still nothing to say: a verdict about an extension
+  // none of whose sessions ran would rest on the walk's own account of itself.
+  if (!established.size) throw new Error("internal: extension publication established no session outcome");
   for (const scenario of Object.keys(scenarioNames)) {
-    if (!reports.some(({ phase, report }) => phase.scenario === scenario && report.scenario === scenario && report.session &&
-      (phase.productFailureObserved || phase.productResultConfirmed && phase.sustainedSessionsObserved && phase.ownedSessions === (scenario === "practice-extension" ? 2 : 1)))) {
-      throw new Error("internal: extension publication cannot establish all three session outcomes");
-    }
+    if (established.has(scenario)) continue;
+    const carrier = reports.find(({ phase }) => phase.scenario === scenario) ?? reports[0];
+    carrier.report.steps.push({ label: "Session", status: "skipped", unverifiedReason: "our_capability", gapClass: "extension_runtime",
+      attempted: `Start ${scenarioNames[scenario].toLowerCase()} and end it.`,
+      observed: `${scenarioNames[scenario]} was not exercised this time, so its session behaviour is unconfirmed.` });
   }
   const findings: SynthesizedFinding[] = [];
   await env.db.step.deleteMany({ where: { journey: { runId } } });
@@ -181,9 +196,15 @@ export async function prepareExtensionPublication(env: AgentEnv, runId: string, 
   const broken = findings.filter(finding => finding.category === "broken");
   const unclear = findings.filter(finding => finding.category === "confusing");
   const verdict: Verdict = broken.length ? "broken" : findings.length || incomplete.length ? "mostly_ok" : "all_good";
+  // The opening sentence names the scenarios that actually ran, never all three
+  // by habit: a run that did not exercise one of them may not say it worked.
+  const worked = [...established].map(scenario => scenarioNames[scenario]);
+  const unexercised = Object.keys(scenarioNames).filter(scenario => !established.has(scenario)).map(scenario => scenarioNames[scenario].toLowerCase());
+  const sentence = (names: string[]) => names.length === 1 ? names[0]
+    : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
   const bottomLine = [broken.length ? "A session displayed an error. All started sessions were stopped."
-    : unclear.length ? "Interview assistance, AI practice and their combined use produced new responses and stopped as expected — but a stopped session leaves its final charge unannounced."
-    : "Interview assistance, AI practice and their combined use produced new responses and stopped as expected.",
+    : `${sentence(worked)} produced new responses and stopped as expected${unclear.length ? " — but a stopped session leaves its final charge unannounced" : ""}.`,
+    unexercised.length ? `${sentence(unexercised).replace(/^./, c => c.toUpperCase())} ${unexercised.length === 1 ? "was" : "were"} not exercised this time.` : "",
     minuteGaps.length ? `Minute-by-minute charges and final rounding were not confirmed for ${minuteGaps.map(r => scenarioNames[r.report.scenario].toLowerCase()).join(" and ")}.` : "Session minute usage was confirmed, and charging stopped when each session did.",
     otherGaps.length ? "Some additional extension and account controls remain unverified." : "",
   ].filter(Boolean).join(" ");
