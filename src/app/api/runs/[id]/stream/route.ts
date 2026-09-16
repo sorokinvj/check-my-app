@@ -3,6 +3,7 @@ import { parseJson } from "@/lib/json";
 import { isTerminal } from "@/lib/status";
 import type { RunEvent } from "@/lib/types";
 import { publicRunError } from "@/lib/extension-target";
+import { publicRow } from "@/lib/tenant-db";
 
 export const dynamic = "force-dynamic";
 
@@ -19,7 +20,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
       let lastSerialized = "";
 
       const tick = async () => {
-        const run = await prisma.run.findUnique({
+        const run = await prisma.run.findUnique({ ...publicRow(),
           where: { publicId: (await params).id },
           select: {
             status: true,

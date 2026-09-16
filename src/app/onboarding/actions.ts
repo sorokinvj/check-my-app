@@ -1,6 +1,7 @@
 "use server";
 
 import { redirect } from "next/navigation";
+import { requireActionScope } from "@/lib/team-auth";
 import { requireUser } from "@/lib/auth";
 import { encryptSecret } from "@/lib/crypto";
 import { appSlugFromUrl } from "@/lib/utils";
@@ -8,6 +9,7 @@ import { assertCanAddWatch } from "@/lib/plans";
 import type { UserPlan, WatchFrequency } from "@/lib/enums";
 import { extensionColumns, parseExtensionLink } from "@/lib/extension-target";
 import { createCheckSchema, extensionOptionsFromForm } from "@/lib/validation";
+import { alreadyScoped } from "@/lib/tenant-db";
 
 // Persist an onboarded App + its Watch + TicketPolicy in one nested write.
 // D1 has no transactions, but the spike (CHE-21) proved nested create works and
@@ -27,7 +29,7 @@ export async function createApp(
   _prevState: CreateAppResult,
   formData: FormData,
 ): Promise<CreateAppResult> {
-  const { user, db } = await requireUser();
+  const { user, db, team } = await requireActionScope("app.settings.write");
 
   const target = createCheckSchema.shape.url.safeParse(String(formData.get("targetUrl") ?? ""));
   if (!target.success) return { error: "Enter your app URL or a Chrome Web Store extension link." };
@@ -52,8 +54,8 @@ export async function createApp(
 
   // Tier gate (CHE-34): Daily Watch availability + cadence + count per plan.
   const gate = isExtension ? { ok: true as const } : await assertCanAddWatch(db, {
-    ownerId: user.id,
-    plan: user.plan as UserPlan,
+    teamId: team.id,
+    plan: team.plan as UserPlan,
     frequency,
   });
   if (!gate.ok) return { error: gate.reason };
@@ -72,7 +74,7 @@ export async function createApp(
   // One App per (owner, slug). Pre-check for a clear message, and catch the
   // unique-constraint race (D1 has no transactions, so a double-submit can slip
   // past the check) rather than surfacing a raw 500.
-  const dupe = await db.app.findUnique({
+  const dupe = await db.app.findUnique({ ...alreadyScoped("the unique key names the owner"),
     where: { ownerId_appSlug: { ownerId: user.id, appSlug } },
     select: { id: true },
   });
@@ -81,10 +83,10 @@ export async function createApp(
   }
 
   try {
-    await db.app.create({
+    await db.app.create({ ...alreadyScoped("created with its team"),
       data: {
         ownerId: user.id,
-        orgId: user.clerkOrgId ?? null,
+        teamId: team.id,
         targetUrl,
         ...extensionColumns(targetUrl, extension.success ? extension.data : undefined),
         appSlug,

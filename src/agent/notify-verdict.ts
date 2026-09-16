@@ -39,7 +39,9 @@
 // question it actually knows the answer to.
 
 import { sendVerdictReady } from "@/lib/email";
+import { describeRecipients, recipientsForApp } from "@/lib/recipients";
 import type { Verdict } from "@/lib/enums";
+import { metricAlertsForRun } from "./metric-alerts";
 import { isSelfUrl } from "./self-hosts";
 import type { AgentBindings, AgentEnv } from "./env";
 
@@ -49,6 +51,8 @@ export interface NotifiableRun {
   targetUrl: string;
   notifyEmail: string | null;
   ownerId: string | null;
+  teamId?: string | null;
+  appId?: string | null;
   watchId: string | null;
   baselineRunId: string | null;
 }
@@ -78,10 +82,22 @@ export function silenceReason(input: {
   return null;
 }
 
-// A run belongs to us when someone signed in started it or a watch scheduled
-// it. An ownerless run came off the public /check form.
-export function isOwnRun(run: { ownerId: string | null; watchId: string | null }): boolean {
-  return run.ownerId !== null || run.watchId !== null;
+// A run belongs to us when someone signed in started it, a team owns it, or a
+// watch scheduled it. An ownerless, teamless run came off the public /check
+// form.
+//
+// CHE-253 added teamId, and it is read here on purpose rather than left to
+// ownerId alone. Every owned run still carries its actor in ownerId, so this
+// clause changes no answer today — it means that a future run written with only
+// a team cannot silently stop being ours. When this predicate is wrong we do
+// not get a 500: we mail a customer a verdict about a page our own checker
+// broke, which is what CHE-156 cost (30 runs, 66 findings, 29 mailed out).
+export function isOwnRun(run: {
+  ownerId: string | null;
+  teamId?: string | null;
+  watchId: string | null;
+}): boolean {
+  return run.ownerId !== null || (run.teamId ?? null) !== null || run.watchId !== null;
 }
 
 // ─── What happened to the mail, as a value (CHE-224) ─────────────────────────
@@ -149,7 +165,11 @@ export async function notifyVerdictReady(
   run: NotifiableRun,
   verdict: Verdict | null,
 ): Promise<NotifyOutcome> {
-  if (!run.notifyEmail) return { kind: "skipped", reason: SKIP_NO_ADDRESS };
+  // CHE-262: who hears about this. The submitted address if there is one, the
+  // people the team chose for this app, or the team's admins — resolved before
+  // the silence rule so the log line can say who WOULD have been told.
+  const recipients = await recipientsForApp(env.db, run.appId, run.notifyEmail);
+  if (recipients.to.length === 0) return { kind: "skipped", reason: SKIP_NO_ADDRESS };
   // CHE-105/CHE-156: our own check of our own product is silent. It exists so
   // CheckMyApp can check itself; the person running the business must be able
   // to forget it exists. Its results live on the verdict page, where they can be
@@ -177,19 +197,32 @@ export async function notifyVerdictReady(
   const written = await env.db.run.findUnique({
     where: { publicId: run.publicId },
     select: {
+      id: true,
       bottomLine: true,
       findings: { select: { category: true }, where: { mark: { not: "false_positive" } } },
     },
   });
   const findings = written?.findings ?? [];
+  // CHE-241: what moved, for the mail the Watch already sends. Read once for
+  // the whole recipient loop; a failure here costs the sentence, never the mail.
+  const metricAlerts = written
+    ? (await metricAlertsForRun(env, written.id)).map((a) => a.sentence)
+    : [];
   try {
+    // One message per recipient rather than one message with several addresses:
+    // a verdict is somebody's own mail, and a shared To: line is how a team
+    // learns to ignore it. The provider ids are kept together so notifyOutcome
+    // can be taken to the provider and checked (CHE-224).
+    const ids: string[] = [];
+    for (const to of recipients.to) {
     const providerMessageId = await sendVerdictReady({
-      to: run.notifyEmail,
+      to,
       appSlug: run.appSlug,
       publicId: run.publicId,
       verdict,
       recurring: Boolean(run.watchId),
       bottomLine: written?.bottomLine ?? null,
+      metricAlerts,
       findingCounts: {
         total: findings.length,
         broken: findings.filter((f) => f.category === "broken" || f.category === "exposed").length,
@@ -198,7 +231,10 @@ export async function notifyVerdictReady(
       from: bindings.EMAIL_FROM,
       baseUrl: bindings.APP_URL,
     });
-    return { kind: "sent", providerMessageId };
+      if (providerMessageId) ids.push(providerMessageId);
+    }
+    console.log(`[notify] run ${run.publicId} — ${describeRecipients(recipients)}`);
+    return { kind: "sent", providerMessageId: ids.join(",") || null };
   } catch (err) {
     // Still non-fatal — but no longer invisible. The message carries the
     // provider's own words (`Resend send failed: 403 …`), which is the sentence

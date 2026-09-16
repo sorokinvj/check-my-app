@@ -71,6 +71,79 @@ exist. A ticket number goes in a comment only after that ticket exists.
 
 **Times are UTC.** Do not introduce a named timezone; the owner reads UTC.
 
+**A tenant query says whose rows it may see.** Every query for an App, Run,
+Watch, ApiKey or SettledSignature in `src/app` and `src/lib` carries one of the
+five declarations in `src/lib/tenant-db.ts` — `teamOwned`, `alreadyScoped`,
+`publicRow`, `ownerScoped`, `systemWide` — and `scripts/verify-tenant-db.ts`
+fails the build for one that carries none (CHE-256). Write the declaration when
+you write the query; it is checked over the registry of call sites, so the first
+one without it is caught, not the hundredth.
+
+**A GET that changes state is a GET a scanner will press.** An email security
+scanner follows every link in a message it inspects, so a link whose *load*
+performs the action is consumed by a machine before the person sees it — and
+they are then told it was already used. Invitations (CHE-257) accept on a
+button for this reason, and the same holds for any one-click link we put in an
+email later: unsubscribe, "that's fine" on a finding, a re-check link in a
+verdict mail. The load must be safe; the button is the act.
+
+**Do not wrap Prisma arguments in a generic helper.** Prisma computes its types
+from the exact argument object, so a helper of the shape `f<T>(args: T): T`
+re-infers them and `orderBy: { createdAt: "desc" }` widens to `string`. The
+danger is not the widening — it is that **the compiler goes quiet**: nothing
+fails, the query keeps working, and type checking is silently off everywhere the
+helper is used. A helper that makes the type checker less able to help is worse
+than no helper. Spread a small object into `where` instead, which keeps every
+type intact (this is why the declarations above are spreads, and the wrapper
+version of them was written first and reverted).
+
+**Several sessions work in this repo at once, and they share one deployed
+worker.** Files answer "will this rebase cleanly"; the worker answers "will
+this kill something that is running". Only the second one has cost a run.
+
+If you were given the right to merge (most sessions are not — see Boundaries),
+a push to `main` deploys both workers immediately, and that lands on whatever is
+running in production right now:
+
+- a **website** check re-executes the Workflow step it was in, so the run's cost
+  roughly doubles;
+- an **extension** check *dies*. Every deploy rebuilds and rolls the container
+  image, and the run inside it is killed — "Runtime signalled the container to
+  exit due to a new version rollout: 143" ended run #195 mid-discovery. Worse
+  when it holds a paid session: that session is left with nobody to stop it.
+
+**Waiting for the rollout to say `completed` is not enough, and this is
+measured, not suspected (CHE-272).** Run #202 was evicted at 01:21:39 by a
+rollout that had been marked `completed` at 01:11:05 — ten minutes earlier,
+with no later rollout in the API. `completed` marks the end of the *rollout*,
+not the end of *instance replacement*: a container started long after every
+visible signal said "quiet" can still land on an instance that is then drained.
+Run #195 died the same way five minutes after its own rollout completed. Both
+times the person had waited deliberately for the signal this file recommended.
+So the window is invisible to whoever is merging, and the real fix is the
+executor surviving an eviction we caused rather than a longer wait — until then,
+leave more distance than looks necessary after a deploy before starting a paid
+extension run.
+
+So before `gh pr merge`, check what is in flight:
+
+```
+npx wrangler d1 execute checkmyapp --remote --json --config wrangler.jsonc \
+  --command "select count(*) as n from Run where status not in ('completed','partial','failed','canceled')"
+```
+
+Merge at `n = 0`. Note `partial` is terminal (`TERMINAL_STATUSES` in
+`src/agent/scheduler.ts`) — a row sitting at `partial` is a finished run, not a
+stuck one.
+
+`n = 0` is necessary and not sufficient: a scheduled watch tick can start a
+minute later. Daily ticks are checkmyapp.dev 17:00, joblander 18:15,
+meetbashar 21:30 UTC, each 25-40 minutes. Another session's on-demand run does
+not appear on any schedule, so **say what you are about to merge** to the other
+sessions (`ListAgents`, then `SendMessage`) and wait for an answer when someone
+is mid-run. This has been done by hand between two sessions all of 2026-09-15
+and it is the only thing that has kept two deploys off one worker.
+
 ## Shape of the codebase
 
 - `src/app` — Next.js App Router, deployed to Cloudflare via OpenNext.

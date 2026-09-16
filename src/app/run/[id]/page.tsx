@@ -3,13 +3,14 @@ import { getDbFromContext } from "@/lib/db";
 import { RunLive } from "@/components/run-live";
 import { isTerminal } from "@/lib/status";
 import { extensionDisplayName } from "@/lib/extension-target";
+import { publicRow } from "@/lib/tenant-db";
 
 export const dynamic = "force-dynamic";
 
 // Screen 2 — In-progress · /run/{id}
 export default async function RunPage({ params }: { params: Promise<{ id: string }> }) {
   const prisma = await getDbFromContext();
-  const run = await prisma.run.findUnique({
+  const run = await prisma.run.findUnique({ ...publicRow(),
     where: { publicId: (await params).id },
     select: {
       publicId: true,

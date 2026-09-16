@@ -15,7 +15,14 @@ export type RunStatus =
   | "writing"
   | "completed"
   | "partial"
-  | "failed";
+  | "failed"
+  // CHE-265: a run stopped deliberately rather than by an error. The
+  // operational conventions already assumed this state existed — every
+  // in-flight query, in AGENTS.md and in the scheduler, excludes it — while the
+  // union did not have it. So the first one ever written (T12 stopping a check
+  // that a reader-scope key should never have been able to start) was a value
+  // the product could not describe.
+  | "canceled";
 
 // "unverified" is off the good→bad axis: the run finished but walked nothing,
 // so we have no opinion to give. Only the workflow's coverage guard sets it —

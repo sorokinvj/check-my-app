@@ -26,6 +26,7 @@ import {
 } from "@/lib/journey-key";
 import type { AgentEnv } from "./env";
 import { decideMetric, type JourneyMetric, type RawMetric } from "./journey-metrics";
+import { funnelDrifted, type DerivedFunnel } from "@/lib/funnel";
 
 /** The statuses that mean the journey is in good shape (partial.ts agrees). */
 const HEALTHY = new Set(["ok", "partial"]);
@@ -45,10 +46,82 @@ export interface ResolvedJourney {
 }
 
 /**
- * The catalog row for a proposed journey title, created if this is a journey we
- * have not seen. Runs without an App (anonymous one-off checks, PR previews)
- * get the key and no row: there is no history for them to accumulate.
+ * How many consecutive full checks may map an app without finding a journey
+ * before that journey is retired.
+ *
+ * Three, not one: a journey can be missed for a run because a page was slow, an
+ * A/B test hid an entry point, or the model spent its exploration budget
+ * elsewhere. Three in a row is the product having changed, not a bad night.
  */
+export const MISSED_DISCOVERIES_BEFORE_RETIRING = 3;
+
+/**
+ * CHE-232 — what a full check's proposals say about the journeys it did NOT
+ * propose. Called once per run, after discovery, and only for a run that
+ * actually mapped the app: a smoke pass and a partial run propose nothing, and
+ * counting their silence as absence would retire the whole catalog in three
+ * quiet days.
+ *
+ * Returns the journeys retired by this call, so the caller can say so.
+ */
+export async function noteDiscoveryCoverage(
+  env: AgentEnv,
+  appId: string,
+  proposed: Array<{ title: string; surface?: string | null; extensionScenario?: string | null }>,
+  at: Date = new Date(),
+): Promise<string[]> {
+  const rows = await env.db.appJourney.findMany({
+    where: { appId, retiredAt: null },
+    select: { id: true, key: true, title: true, aliases: true, surface: true, scenario: true, missedDiscoveries: true },
+  });
+  if (rows.length === 0) return [];
+
+  const candidates: Array<JourneyCandidate & { id: string; missedDiscoveries: number }> = rows.map((r) => ({
+    id: r.id,
+    key: r.key,
+    title: r.title,
+    aliases: parseJson<string[]>(r.aliases) ?? [r.title],
+    surface: r.surface,
+    scenario: r.scenario,
+    missedDiscoveries: r.missedDiscoveries,
+  }));
+
+  // Which catalog rows this run's proposals landed on — by the same identity
+  // rules the walk uses, so a rewording counts as having been seen.
+  const seen = new Set<string>();
+  for (const p of proposed) {
+    const hit = matchJourney(p.title, candidates, p.surface, p.extensionScenario) as
+      | (JourneyCandidate & { id: string })
+      | null;
+    if (hit) seen.add(hit.id);
+  }
+
+  const retired: string[] = [];
+  for (const row of candidates) {
+    if (seen.has(row.id)) {
+      if (row.missedDiscoveries > 0) {
+        await env.db.appJourney.update({ where: { id: row.id }, data: { missedDiscoveries: 0 } });
+      }
+      continue;
+    }
+    const missed = row.missedDiscoveries + 1;
+    if (missed < MISSED_DISCOVERIES_BEFORE_RETIRING) {
+      await env.db.appJourney.update({ where: { id: row.id }, data: { missedDiscoveries: missed } });
+      continue;
+    }
+    await env.db.appJourney.update({
+      where: { id: row.id },
+      data: {
+        missedDiscoveries: missed,
+        retiredAt: at,
+        retiredReason: `Not found by the last ${missed} checks that mapped this app`,
+      },
+    });
+    retired.push(row.title);
+  }
+  return retired;
+}
+
 /**
  * The stored form of a scenario: lower-cased and trimmed, or null when nobody
  * told us. Kept here rather than in journey-key.ts because it is storage
@@ -59,6 +132,11 @@ export function normalizeScenario(scenario: string | null | undefined): string |
   return text || null;
 }
 
+/**
+ * The catalog row for a proposed journey title, created if this is a journey we
+ * have not seen. Runs without an App (anonymous one-off checks, PR previews)
+ * get the key and no row: there is no history for them to accumulate.
+ */
 export async function resolveJourney(
   env: AgentEnv,
   run: { appId?: string | null },
@@ -122,6 +200,47 @@ export async function resolveJourney(
 }
 
 /**
+ * What this walk says about the journey's funnel (CHE-238).
+ *
+ * The rule is first-derivation-wins. A stored funnel is never overwritten by a
+ * later walk that went a different way, because then yesterday's 12% and
+ * today's 40% would look like a trend while measuring two different questions.
+ * Disagreement is recorded in `funnelDriftAt` so it is visible rather than
+ * silent, and changing the funnel stays a decision somebody makes.
+ *
+ * A walk that did not happen says nothing either way — an all-skipped journey
+ * must not erase a funnel we already knew.
+ */
+function funnelUpdate(
+  row: { funnelStages: string | null },
+  args: { funnel?: DerivedFunnel | null },
+  at: Date,
+  walked: boolean,
+): Record<string, unknown> {
+  if (!walked || !args.funnel) return {};
+  const stored = parseJson<string[]>(row.funnelStages);
+
+  if (!args.funnel.ok) {
+    // We could not derive one this time. Keep whatever we already knew — a
+    // single wandering walk does not unmake a funnel — but record the refusal,
+    // because that is what the gap ticket is filed from (rule 2).
+    return { funnelRefusal: args.funnel.refusal };
+  }
+
+  if (!stored?.length) {
+    return {
+      funnelStages: JSON.stringify(args.funnel.stages),
+      funnelRefusal: null,
+      funnelDerivedAt: at,
+    };
+  }
+
+  return funnelDrifted(stored, args.funnel.stages)
+    ? { funnelRefusal: null, funnelDriftAt: at }
+    : { funnelRefusal: null };
+}
+
+/**
  * What the walk learned about this journey. Called after the per-run Journey row
  * is finished, with the status that landed on it.
  *
@@ -146,6 +265,8 @@ export async function recordWalk(
     scenario?: string | null;
     /** CHE-235: the price this run may record — already judged by journeyMetric. */
     metric?: JourneyMetric | null;
+    /** CHE-238: the funnel this walk implies, or why there is none. */
+    funnel?: DerivedFunnel | null;
     at?: Date;
   },
 ): Promise<void> {
@@ -160,6 +281,7 @@ export async function recordWalk(
       scenario: true,
       price: true,
       conversion: true,
+      funnelStages: true,
     },
   });
   if (!row) return;
@@ -169,6 +291,7 @@ export async function recordWalk(
   const healthy = HEALTHY.has(args.status);
   const consecutiveBad = !walked ? row.consecutiveBad : healthy ? 0 : row.consecutiveBad + 1;
   const metric = metricUpdate(row, args, at);
+  const funnel = funnelUpdate(row, args, at, walked);
 
   await env.db.appJourney.update({
     where: { id: args.appJourneyId },
@@ -195,8 +318,11 @@ export async function recordWalk(
         : {}),
       consecutiveBad,
       failingSince: consecutiveBad === 0 ? null : (row.failingSince ?? at),
-      // A journey that walked again is a journey the product still has.
-      ...(walked ? { retiredAt: null, retiredReason: null } : {}),
+      // A journey that walked again is a journey the product still has — its
+      // retirement is undone and its miss counter cleared, so a page that comes
+      // back brings its history with it instead of starting a row beside it.
+      ...(walked ? { retiredAt: null, retiredReason: null, missedDiscoveries: 0 } : {}),
+      ...funnel,
       ...metric,
     },
   });
@@ -311,7 +437,13 @@ export async function recordJourneyCost(
  */
 export interface CatalogJourneyState {
   appJourneyId: string;
+  /** Stable slug — the identity a proposal is matched against. */
+  key: string;
   title: string;
+  /** Every title ever resolved to this journey, so a match survives a rewording. */
+  aliases: string[];
+  /** Where it lives ("app", "/settings"), or null when nobody has told us. */
+  surface: string | null;
   /** Ordered step labels from the last walk that produced any; may be empty. */
   plan: string[];
   /** The roll-up of the last walk, or null for a journey nothing has walked. */
@@ -356,7 +488,10 @@ export async function journeysForPlanning(env: AgentEnv, appId: string): Promise
     where: { appId, retiredAt: null },
     select: {
       id: true,
+      key: true,
       title: true,
+      aliases: true,
+      surface: true,
       plan: true,
       status: true,
       lastWalkedAt: true,
@@ -366,7 +501,10 @@ export async function journeysForPlanning(env: AgentEnv, appId: string): Promise
   });
   return rows.map((r) => ({
     appJourneyId: r.id,
+    key: r.key,
     title: r.title,
+    aliases: (parseJson<string[]>(r.aliases) ?? []).filter((a) => typeof a === "string" && a.trim()),
+    surface: r.surface,
     plan: (parseJson<string[]>(r.plan) ?? []).filter((s) => typeof s === "string" && s.trim()),
     status: r.status,
     lastWalkedAt: r.lastWalkedAt ? new Date(r.lastWalkedAt) : null,

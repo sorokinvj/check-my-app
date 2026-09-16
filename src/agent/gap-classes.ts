@@ -40,6 +40,7 @@ export type GapClass =
   | "extension_session_cleanup"
   | "extension_minute_accounting"
   | "unpriced_journey"
+  | "unfunnelled_journey"
   | "journey_rotation"
   | "unclassified";
 
@@ -47,6 +48,10 @@ export const GAP_CLASSES: Record<GapClass, { label: string; why: string }> = {
   journey_rotation: {
     label: "Checker cannot keep every journey of a large app checked",
     why: "An app with more journeys than a run can walk gets a rotation, and a journey at the back of a long queue can age past the point where its last check still means anything. The owner is paying for their app to be checked, and part of it was not — a bigger app must not quietly buy less coverage.",
+  },
+  unfunnelled_journey: {
+    label: "Checker cannot turn a journey it walked into a measurable funnel",
+    why: "How many people finish a journey is measured along the path they take through it, and that path is supposed to come from the walk itself so the owner is never asked to define one. A journey we walked but could not reduce to an ordered path is one we can describe and cannot measure — and measuring it wrongly would be worse, because a funnel built from our wandering reports the owner's product converting badly when what converted badly was our browsing.",
   },
   unpriced_journey: {
     label: "Checker cannot say what a journey costs its user",

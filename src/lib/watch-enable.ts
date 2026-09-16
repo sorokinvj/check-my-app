@@ -6,6 +6,7 @@
 import type { PrismaClient } from "@/generated/prisma/client";
 import type { UserPlan, WatchFrequency } from "@/lib/enums";
 import { assertCanAddWatch, watchTrialEnd } from "@/lib/plans";
+import { alreadyScoped, publicRow } from "@/lib/tenant-db";
 
 export type EnableWatchResult =
   | { kind: "unauthenticated" }
@@ -26,14 +27,18 @@ function nextRunFrom(frequency: WatchFrequency): Date | null {
   return new Date(Date.now() + hours * 60 * 60 * 1000);
 }
 
+// CHE-253: the caller passes the person AND the team they are acting for. The
+// plan being gated against is the team's — a person does not have a plan — and
+// the App, Watch and adopted Run are stamped with the team that will pay for
+// them.
 export async function enableWatchForRun(
   db: PrismaClient,
-  user: { id: string; plan: string; clerkOrgId: string | null } | null,
+  user: { id: string; teamId: string; plan: string } | null,
   opts: { runPublicId: string; frequency: WatchFrequency; notifyOnChangeOnly: boolean },
 ): Promise<EnableWatchResult> {
   if (!user) return { kind: "unauthenticated" };
 
-  const run = await db.run.findUnique({
+  const run = await db.run.findUnique({ ...publicRow(),
     where: { publicId: opts.runPublicId },
     select: {
       id: true,
@@ -65,12 +70,12 @@ export async function enableWatchForRun(
 
   // Find-or-create the owner's App for this target. upsert is race-safe under
   // D1 (no transactions) vs a check-then-create double-submit window.
-  const app = await db.app.upsert({
+  const app = await db.app.upsert({ ...alreadyScoped("the unique key names the owner"),
     where: { ownerId_appSlug: { ownerId: user.id, appSlug: run.appSlug } },
     update: {},
     create: {
       ownerId: user.id,
-      orgId: user.clerkOrgId ?? null,
+      teamId: user.teamId,
       targetUrl: run.targetUrl,
       targetKind: run.targetKind,
       extensionId: run.extensionId,
@@ -84,23 +89,24 @@ export async function enableWatchForRun(
   });
 
   // Tier gate (CHE-34): updating an existing watch is fine; a new one counts.
-  const existingWatch = await db.watch.findUnique({
+  const existingWatch = await db.watch.findUnique({ ...alreadyScoped("the App was just scoped to this team"),
     where: { appId: app.id },
     select: { id: true },
   });
   const gate = await assertCanAddWatch(db, {
-    ownerId: user.id,
+    teamId: user.teamId,
     plan: user.plan as UserPlan,
     frequency: opts.frequency,
     existingWatchId: existingWatch?.id ?? null,
   });
   if (!gate.ok) return { kind: "gated", reason: gate.reason };
 
-  const watch = await db.watch.upsert({
+  const watch = await db.watch.upsert({ ...alreadyScoped("the App was just scoped to this team"),
     where: { appId: app.id },
     create: {
       appId: app.id,
       ownerId: user.id,
+      teamId: user.teamId,
       appSlug: run.appSlug,
       targetUrl: run.targetUrl,
       frequency: opts.frequency,
@@ -123,9 +129,9 @@ export async function enableWatchForRun(
   });
 
   // Adopt the source run into the owner's app + watch (becomes the baseline).
-  await db.run.update({
+  await db.run.update({ ...alreadyScoped("already read in this request"),
     where: { id: run.id },
-    data: { watchId: watch.id, ownerId: user.id, appId: app.id },
+    data: { watchId: watch.id, ownerId: user.id, teamId: user.teamId, appId: app.id },
   });
 
   return { kind: "ok", slug: watch.appSlug };

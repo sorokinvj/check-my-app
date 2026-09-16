@@ -1,30 +1,43 @@
 "use server";
 
 import { startSavedApp } from "@/lib/start-saved-app";
+import { requireActionScope } from "@/lib/team-auth";
 import { extensionOptionsFromForm } from "@/lib/validation";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { headers } from "next/headers";
 import { isSelfCheckRequest, selfCheckRedirectPath } from "@/lib/self-check";
 import { requireUser } from "@/lib/auth";
-import { credentialFingerprint, encryptSecret } from "@/lib/crypto";
+import { getCloudflareContext } from "@opennextjs/cloudflare";
+import { discoverPostHog, revokeToken } from "@/lib/posthog/oauth";
+import { credentialFingerprint, decryptSecret, encryptSecret } from "@/lib/crypto";
 import { generateApiKey, hashApiKey } from "@/lib/apiKeys";
 import { PLAN_LIMITS, assertCanAddWatch } from "@/lib/plans";
+import { TEAM_SCOPES, mintRefusal, type TeamScope } from "@/lib/scopes";
+import { recordTeamEvent } from "@/lib/team-events";
 import type { UserPlan, WatchFrequency } from "@/lib/enums";
+import { alreadyScoped, teamOwned } from "@/lib/tenant-db";
 
 // Re-point an app's tracker to a different team (CHE-31 team picker). The default
 // at connect time is the first team; JobLander must target the JobLander team,
 // not whatever happens to be first.
 export async function setTrackerTeam(appId: string, teamId: string, teamName: string) {
-  const { user, db } = await requireUser();
+  const { user, db, team } = await requireActionScope("integration.connect");
   const app = await db.app.findFirst({
-    where: { id: appId, ownerId: user.id },
+    where: { ...teamOwned(team.id), id: appId, ownerId: user.id },
     include: { tracker: true },
   });
   if (!app?.tracker) throw new Error("tracker not connected");
   await db.trackerIntegration.update({
     where: { appId },
     data: { teamId, externalOrg: teamName },
+  });
+  await recordTeamEvent(db, {
+    teamId: team.id,
+    actorUserId: user.id,
+    action: "integration.connected",
+    subject: app.appSlug,
+    summary: `pointed ${app.appSlug}'s tickets at ${teamName}`,
   });
 }
 
@@ -33,9 +46,9 @@ export async function setTrackerTeam(appId: string, teamId: string, teamName: st
 // secret is write-only: blank keeps the current one, and it's dropped with the
 // webhook URL so a disabled endpoint leaves no secret behind.
 export async function setIntegrationEndpoints(appId: string, formData: FormData) {
-  const { user, db } = await requireUser();
+  const { user, db, team } = await requireActionScope("integration.connect");
   const app = await db.app.findFirst({
-    where: { id: appId, ownerId: user.id },
+    where: { ...teamOwned(team.id), id: appId, ownerId: user.id },
     select: { id: true },
   });
   if (!app) throw new Error("app not found");
@@ -56,7 +69,52 @@ export async function setIntegrationEndpoints(appId: string, formData: FormData)
   if (!webhookUrl) data.webhookSecretEnc = null;
   else if (webhookSecret) data.webhookSecretEnc = encryptSecret(webhookSecret);
 
-  await db.app.update({ where: { id: appId }, data });
+  await db.app.update({ ...alreadyScoped("already read in this request"), where: { id: appId }, data });
+  revalidatePath("/dashboard");
+}
+
+// Disconnect analytics (CHE-236). Two things happen, in this order, and the
+// second is the one a flag-flipping implementation skips:
+//
+//   1. the grant is revoked at PostHog, so the customer's own "apps with
+//      access" list stops naming us — otherwise we have told them we stopped
+//      reading while their screen says we can;
+//   2. the row is DELETED. Not `active: false`, not `revokedAt`: a stored
+//      token that nothing reads is still a stored token, and "disconnect"
+//      means the credential is gone, not shelved.
+//
+// Revocation is attempted first but cannot block deletion. If PostHog is down,
+// the person still asked us to stop reading their analytics, and we stop.
+export async function disconnectPostHog(): Promise<void> {
+  const { user, db, team } = await requireActionScope("integration.connect");
+  const row = await db.postHogIntegration.findFirst({ where: { ...teamOwned(team.id) } });
+  if (!row) return;
+
+  const { env } = getCloudflareContext();
+  const appUrl = ((env as Record<string, string | undefined>).APP_URL ?? "https://checkmyapp.dev").replace(/\/+$/, "");
+  try {
+    const endpoints = await discoverPostHog();
+    const clientId = `${appUrl}/.well-known/posthog-client.json`;
+    // The refresh token is the grant; revoking it is what ends the access
+    // rather than just retiring one short-lived token.
+    if (row.refreshTokenEnc) {
+      await revokeToken({ endpoints, clientId, token: decryptSecret(row.refreshTokenEnc), hint: "refresh_token" });
+    }
+    await revokeToken({ endpoints, clientId, token: decryptSecret(row.accessTokenEnc), hint: "access_token" });
+  } catch (err) {
+    console.warn(`[posthog-oauth] revoke on disconnect failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  await db.postHogIntegration.deleteMany({ where: { ...teamOwned(team.id), id: row.id } });
+  // CHE-264: "why did the funnel numbers stop" has an answer, and it is a name
+  // and a date rather than a reconstruction.
+  await recordTeamEvent(db, {
+    teamId: team.id,
+    actorUserId: user.id,
+    action: "integration.disconnected",
+    subject: row.organizationName ?? "PostHog",
+    summary: `disconnected PostHog${row.organizationName ? ` (${row.organizationName})` : ""}`,
+  });
   revalidatePath("/dashboard");
 }
 
@@ -64,18 +122,38 @@ export async function setIntegrationEndpoints(appId: string, formData: FormData)
 // DB keeps its SHA-256 hash, so this is the one time the owner can copy it.
 export async function createApiKey(
   name: string,
+  keyScope: string = "member",
 ): Promise<{ id: string; name: string; rawKey: string }> {
-  const { user, db } = await requireUser();
-  if (!PLAN_LIMITS[user.plan as UserPlan].apiAccess) {
+  // CHE-253: the plan is the team's, and so is the key — a CI hook does not
+  // stop working because the person who minted it left. Who minted it stays on
+  // ownerId as attribution.
+  const { user, db, team, scope } = await requireActionScope("apikey.manage");
+  if (!PLAN_LIMITS[team.plan as UserPlan].apiAccess) {
     throw new Error("API access is available on the Business plan.");
   }
+  // CHE-263: a key carries a scope, and never one above its minter's — a member
+  // who could mint an admin key would make the scope table a suggestion.
+  const wanted = (TEAM_SCOPES as string[]).includes(keyScope) ? (keyScope as TeamScope) : "member";
+  const refusal = mintRefusal(scope, wanted);
+  if (refusal) throw new Error(refusal);
+
   const rawKey = generateApiKey();
-  const key = await db.apiKey.create({
+  // recorded after the row exists, below
+  const key = await db.apiKey.create({ ...alreadyScoped("created with its team"),
     data: {
       ownerId: user.id,
+      teamId: team.id,
+      scope: wanted,
       name: name.trim().slice(0, 100) || "API key",
       keyHash: await hashApiKey(rawKey),
     },
+  });
+  await recordTeamEvent(db, {
+    teamId: team.id,
+    actorUserId: user.id,
+    action: "apikey.created",
+    subject: key.name,
+    summary: `created a ${wanted} API key called "${key.name}"`,
   });
   return { id: key.id, name: key.name, rawKey };
 }
@@ -83,8 +161,15 @@ export async function createApiKey(
 // Revoke = delete the row; the key stops resolving on the next request.
 // deleteMany scoped to the owner so one tenant can't revoke another's key.
 export async function revokeApiKey(id: string): Promise<void> {
-  const { user, db } = await requireUser();
-  await db.apiKey.deleteMany({ where: { id, ownerId: user.id } });
+  const { user, db, team } = await requireActionScope("apikey.manage");
+  await db.apiKey.deleteMany({ where: { ...teamOwned(team.id), id, ownerId: user.id } });
+  await recordTeamEvent(db, {
+    teamId: team.id,
+    actorUserId: user.id,
+    action: "apikey.revoked",
+    subject: id,
+    summary: "revoked an API key",
+  });
 }
 
 // Edit an app's settings after onboarding (CHE-64). Mirrors createApp's field →
@@ -94,9 +179,9 @@ export async function revokeApiKey(id: string): Promise<void> {
 // TicketPolicy. The password is write-only: a blank submission leaves
 // testPasswordEnc untouched on both records.
 export async function updateAppSettings(appId: string, formData: FormData) {
-  const { user, db } = await requireUser();
+  const { user, db, team } = await requireActionScope("app.settings.write");
   const app = await db.app.findFirst({
-    where: { id: appId, ownerId: user.id },
+    where: { ...teamOwned(team.id), id: appId, ownerId: user.id },
     include: { watch: true, policy: true },
   });
   if (!app) throw new Error("app not found");
@@ -123,8 +208,8 @@ export async function updateAppSettings(appId: string, formData: FormData) {
   // Cadence gate (CHE-34): editing an existing watch doesn't count against the
   // per-plan cap, but the tier still can't select a faster cadence than allowed.
   const gate = app.targetKind === "extension" ? { ok: true as const } : await assertCanAddWatch(db, {
-    ownerId: user.id,
-    plan: user.plan as UserPlan,
+    teamId: team.id,
+    plan: team.plan as UserPlan,
     frequency,
     existingWatchId: app.watch?.id ?? null,
   });
@@ -142,7 +227,7 @@ export async function updateAppSettings(appId: string, formData: FormData) {
     ? { extensionConfig: JSON.stringify(extension.data) } : {};
 
   // App — creds/scope/notes (source of record for test creds).
-  await db.app.update({
+  await db.app.update({ ...alreadyScoped("already read in this request"),
     where: { id: app.id },
     data: { testEmail, scopeHints, userNotes, focusAreas, writeMode, ...passwordUpdate, ...extensionUpdate },
   });
@@ -150,7 +235,7 @@ export async function updateAppSettings(appId: string, formData: FormData) {
   // Watch — cadence + notify email; test creds mirrored here exactly as
   // onboarding's nested create does (recurring runs read them off the Watch).
   if (app.watch) {
-    await db.watch.update({
+    await db.watch.update({ ...alreadyScoped("already read in this request"),
       where: { id: app.watch.id },
       data: { frequency, notifyEmail, testEmail, ...passwordUpdate },
     });
@@ -165,6 +250,26 @@ export async function updateAppSettings(appId: string, formData: FormData) {
         repoLabel,
         priorityRule: JSON.stringify({ urgent: urgentJourneys }),
       },
+    });
+  }
+
+  // CHE-264: one line for the settings, and a separate one for a credential —
+  // the credential change is the one an admin will most want to trace later,
+  // and it should not hide inside "settings changed".
+  await recordTeamEvent(db, {
+    teamId: team.id,
+    actorUserId: user.id,
+    action: "app.settings_changed",
+    subject: app.appSlug,
+    summary: `changed settings for ${app.appSlug}`,
+  });
+  if (testPassword) {
+    await recordTeamEvent(db, {
+      teamId: team.id,
+      actorUserId: user.id,
+      action: "app.credentials_written",
+      subject: app.appSlug,
+      summary: `replaced the test password for ${app.appSlug}`,
     });
   }
 
@@ -187,9 +292,9 @@ export async function deleteApp(
   _prev: DeleteAppResult,
   formData: FormData,
 ): Promise<DeleteAppResult> {
-  const { user, db } = await requireUser();
+  const { user, db, team } = await requireActionScope("app.delete");
   const app = await db.app.findFirst({
-    where: { id: appId, ownerId: user.id },
+    where: { ...teamOwned(team.id), id: appId, ownerId: user.id },
     select: { id: true, appSlug: true },
   });
   if (!app) return { error: "App not found." };
@@ -201,14 +306,21 @@ export async function deleteApp(
     return { error: `Type ${app.appSlug} to confirm removal.` };
   }
 
-  await db.run.updateMany({ where: { appId: app.id }, data: { appId: null, watchId: null } });
+  await db.run.updateMany({ ...alreadyScoped("already read in this request"), where: { appId: app.id }, data: { appId: null, watchId: null } });
   await db.createdResource.updateMany({ where: { appId: app.id }, data: { appId: null } });
   await db.issueLink.deleteMany({ where: { appId: app.id } });
-  await db.watch.deleteMany({ where: { appId: app.id } });
+  await db.watch.deleteMany({ ...alreadyScoped("already read in this request"), where: { appId: app.id } });
   await db.ticketPolicy.deleteMany({ where: { appId: app.id } });
   await db.trackerIntegration.deleteMany({ where: { appId: app.id } });
   await db.repoIntegration.deleteMany({ where: { appId: app.id } });
-  await db.app.delete({ where: { id: app.id } });
+  await db.app.delete({ ...alreadyScoped("already read in this request"), where: { id: app.id } });
+  await recordTeamEvent(db, {
+    teamId: team.id,
+    actorUserId: user.id,
+    action: "app.deleted",
+    subject: app.appSlug,
+    summary: `deleted ${app.appSlug} — its verdicts were kept`,
+  });
 
   revalidatePath("/dashboard");
   redirect(`/dashboard?removed=${encodeURIComponent(app.appSlug)}`);
@@ -216,8 +328,109 @@ export async function deleteApp(
 
 export async function runSavedApp(appId: string, _previous: { error: string } | null) {
   if (isSelfCheckRequest(await headers())) redirect(selfCheckRedirectPath(`/dashboard/${appId}`));
-  const { user, db } = await requireUser();
-  const result = await startSavedApp(db, { id: user.id, plan: user.plan as UserPlan }, appId);
+  const { user, db, team } = await requireActionScope("run.start");
+  const result = await startSavedApp(db, { id: user.id, teamId: team.id, plan: team.plan as UserPlan }, appId);
   if ("error" in result) return result;
   redirect(`/run/${result.publicId}`);
+}
+
+// CHE-262: who on the team is told about this app's verdicts.
+//
+// Two doors on purpose. An admin or member sets the list for everybody
+// (`app.settings.write`); anybody on the team, including a reader, can add or
+// remove THEMSELVES — a reader who joined to read what breaks should not have
+// to ask an admin to be allowed to hear about it.
+// Which PostHog project holds this app's data (CHE-237). Asked once, stored,
+// never asked again.
+//
+// The name is stored beside the id deliberately: the id is the only thing ever
+// sent to PostHog, and the name is a label cached at the moment of choosing, so
+// the settings page still reads correctly when the connection has expired. The
+// name is taken from the form rather than looked up again because the form is
+// what the owner was looking at when they chose — a fresh lookup could disagree
+// with what they saw and silently relabel their choice.
+//
+// Clearing it is a first-class option, not an omission: an app with no project
+// keeps our own estimate, which is a legitimate state to return to.
+export async function setAppPosthogProject(appId: string, formData: FormData): Promise<void> {
+  const { user, db, team } = await requireActionScope("app.settings.write");
+  const app = await db.app.findFirst({
+    where: { ...teamOwned(team.id), id: appId },
+    select: { id: true, appSlug: true, posthogProjectName: true },
+  });
+  if (!app) throw new Error("App not found.");
+
+  // "<id>:<name>", or "" for none. One field rather than two because a hidden
+  // name field cannot follow a <select> without client JS, and would quietly
+  // store a label belonging to a different project than the one chosen.
+  const raw = String(formData.get("posthogProject") ?? "").trim();
+  const at = raw.indexOf(":");
+  const projectId = at === -1 ? raw : raw.slice(0, at);
+  const projectName = at === -1 ? "" : raw.slice(at + 1).trim();
+
+  // A project id is PostHog's own numeric id. Refusing anything else keeps a
+  // hand-edited form from writing a value that would fail far away, inside a
+  // query, where the error would read as "no data" rather than "bad input".
+  if (projectId && !/^\d{1,20}$/.test(projectId)) {
+    throw new Error("That does not look like a PostHog project id.");
+  }
+
+  await db.app.update({
+    ...alreadyScoped("already read in this request"),
+    where: { id: appId },
+    data: {
+      posthogProjectId: projectId || null,
+      posthogProjectName: projectId ? projectName.slice(0, 200) || `Project ${projectId}` : null,
+    },
+  });
+
+  await recordTeamEvent(db, {
+    teamId: team.id,
+    actorUserId: user.id,
+    action: "app.settings_changed",
+    subject: app.appSlug,
+    summary: projectId
+      ? `pointed ${app.appSlug} at the PostHog project "${projectName || projectId}"`
+      : `stopped reading a PostHog project for ${app.appSlug}`,
+  });
+  revalidatePath(`/dashboard/${appId}`);
+}
+
+export async function setAppNotifiers(appId: string, formData: FormData): Promise<void> {
+  const { user, db, team } = await requireActionScope("app.settings.write");
+  const app = await db.app.findFirst({ where: { ...teamOwned(team.id), id: appId }, select: { id: true } });
+  if (!app) throw new Error("App not found.");
+
+  const wanted = new Set(formData.getAll("notifier").map(String));
+  const members = await db.membership.findMany({ where: { teamId: team.id }, select: { userId: true } });
+  const valid = members.map((m) => m.userId).filter((id) => wanted.has(id));
+
+  // Replace rather than diff: the form carries the whole answer, and a diff
+  // would need the previous state to be what we think it is.
+  await db.appNotifier.deleteMany({ where: { appId } });
+  for (const userId of valid) {
+    await db.appNotifier.create({ data: { appId, userId } });
+  }
+  await recordTeamEvent(db, {
+    teamId: team.id,
+    actorUserId: user.id,
+    action: "app.notifiers_changed",
+    subject: appId,
+    summary: valid.length
+      ? `set who hears about this app: ${valid.length} ${valid.length === 1 ? "person" : "people"}`
+      : "cleared who hears about this app — verdicts go to the team's admins again",
+  });
+  revalidatePath(`/dashboard/${appId}`);
+}
+
+// The self-service half: any scope, your own subscription only.
+export async function toggleOwnNotifications(appId: string): Promise<void> {
+  const { user, db, team } = await requireActionScope("read");
+  const app = await db.app.findFirst({ where: { ...teamOwned(team.id), id: appId }, select: { id: true } });
+  if (!app) throw new Error("App not found.");
+
+  const existing = await db.appNotifier.findFirst({ where: { appId, userId: user.id }, select: { id: true } });
+  if (existing) await db.appNotifier.deleteMany({ where: { appId, userId: user.id } });
+  else await db.appNotifier.create({ data: { appId, userId: user.id } });
+  revalidatePath(`/dashboard/${appId}`);
 }

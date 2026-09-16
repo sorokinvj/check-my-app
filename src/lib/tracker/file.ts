@@ -16,6 +16,7 @@ import { dedupKey, requestSignature } from "@/lib/dedup";
 import { parseJson } from "@/lib/json";
 import type { FindingDetail } from "@/lib/types";
 import type { PrismaClient } from "@/generated/prisma/client";
+import { alreadyScoped } from "@/lib/tenant-db";
 
 // The Finding columns a ticket is built from — a structural subset so either
 // caller can pass its own query result.
@@ -142,6 +143,15 @@ export async function fileFindingTicket(opts: {
   const { db, tracker, appId, finding, run, policy, ownerId } = opts;
   const draft = draftForFinding(finding, run, policy, opts.verdictUrl);
   const key = dedupKeyForFinding(finding, run);
+  // CHE-256: which team's settlements these are. A settlement outlives the App
+  // row it came from (CHE-101), so it is stored with both — the team because
+  // that is whose knowledge it is, the owner because rows written before teams
+  // existed have only that.
+  const app = await db.app.findUnique({ ...alreadyScoped("the caller resolved this app"),
+    where: { id: appId },
+    select: { teamId: true },
+  });
+  const settledScope = app?.teamId ? { teamId: app.teamId } : { ownerId: ownerId ?? undefined };
 
   const existing = await db.issueLink.findUnique({
     where: { appId_dedupKey: { appId, dedupKey: key } },
@@ -152,8 +162,8 @@ export async function fileFindingTicket(opts: {
   // an app silently re-arms every claim they had already rejected — the fastest
   // possible way to be filtered out.
   if (!existing) {
-    const settled = await db.settledSignature.findFirst({
-      where: { ownerId: ownerId ?? undefined, appSlug: run.appSlug, dedupKey: key, outcome: "suppressed" },
+    const settled = await db.settledSignature.findFirst({ ...alreadyScoped("settled signatures outlive the app they describe"),
+      where: { ...settledScope, appSlug: run.appSlug, dedupKey: key, outcome: "suppressed" },
       orderBy: { settledAt: "desc" },
     });
     if (settled) return { kind: "suppressed", identifier: settled.externalIssueId };
@@ -207,9 +217,10 @@ export async function fileFindingTicket(opts: {
   // how JOB-905 and JOB-908 became invisible, one of them carrying a rejection
   // we never received. Keep the outgoing identity before overwriting it.
   if (existing) {
-    await db.settledSignature.create({
+    await db.settledSignature.create({ ...alreadyScoped("settled signatures outlive the app they describe"),
       data: {
         ownerId: ownerId ?? null,
+        teamId: app?.teamId ?? null,
         appSlug: run.appSlug,
         dedupKey: key,
         externalIssueId: existing.externalIssueId,

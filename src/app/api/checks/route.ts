@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { getDbFromContext } from "@/lib/db";
 import { getOwnerFromRequest } from "@/lib/auth";
+import { optionalTeamContext } from "@/lib/auth";
+import { callerScope } from "@/lib/team-auth";
+import { funnelAllows, refusal } from "@/lib/scopes";
 import { hashClientKey } from "@/lib/crypto";
 import { assertCanStartRun } from "@/lib/plans";
 import { effectiveEphemeralTtlDays, effectiveSiteCap } from "@/lib/site-cap";
@@ -12,6 +15,7 @@ import { createCheckSchema } from "@/lib/validation";
 import { verifyTurnstile } from "@/lib/turnstile";
 import { isSelfCheckRequest, selfCheckReadOnlyResponse } from "@/lib/self-check";
 import type { UserPlan } from "@/lib/enums";
+import { publicRow } from "@/lib/tenant-db";
 
 // POST /api/checks — create a run from a submission and trigger it.
 export async function POST(req: Request) {
@@ -71,7 +75,7 @@ export async function POST(req: Request) {
   // verdict gets that verdict instead of a new run. Owners always get a real
   // run — they may be testing a deploy that just went out.
   if (!owner) {
-    const fresh = await prisma.run.findFirst({
+    const fresh = await prisma.run.findFirst({ ...publicRow(),
       where: {
         appSlug: appSlugFromUrl(input.url),
         status: "completed",
@@ -88,9 +92,20 @@ export async function POST(req: Request) {
   // Run quota (CHE-40). Checked after Turnstile so bot floods never burn a real
   // client's allowance, and before the insert so a rejected run is never billed.
   const anonKeyHash = owner ? null : await hashClientKey(clientIp);
+  // CHE-253: the quota is the team's, not the person's — inviting a colleague
+  // must not mint a second allowance.
+  const context = await optionalTeamContext(prisma, owner);
+  // CHE-265: a stranger is welcome here; somebody signed in is judged by their
+  // own scope. A reader-scope key started a check in production before this
+  // existed — authentication had made the caller LESS restricted, because
+  // "public" had only one meaning.
+  const scope = await callerScope(prisma, req);
+  if (!funnelAllows(scope, "run.start")) {
+    return NextResponse.json({ error: refusal(scope!, "run.start") }, { status: 403 });
+  }
   const gate = await assertCanStartRun(
     prisma,
-    owner ? { id: owner.id, plan: owner.plan as UserPlan } : null,
+    context ? { id: context.team.id, plan: context.team.plan as UserPlan } : null,
     anonKeyHash,
     { siteCap: effectiveSiteCap() },
   );
@@ -103,6 +118,7 @@ export async function POST(req: Request) {
   const run = await startCheck(prisma, {
     input,
     ownerId: owner?.id ?? null,
+    teamId: context?.team.id ?? null,
     anonKeyHash,
     ephemeral: expiresAt ? { expiresAt } : undefined,
     distinctId: distinctIdFromCookies(req.headers.get("cookie")),

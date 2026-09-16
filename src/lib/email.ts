@@ -30,6 +30,10 @@ interface VerdictReadyArgs {
   // "your verdict is ready", which makes the reader do the work of finding out.
   bottomLine?: string | null;
   findingCounts?: { broken: number; total: number };
+  // CHE-241: journeys whose measured conversion fell materially against their
+  // own baseline. Rides this mail rather than becoming a second product.
+  // Already rule-1 clean; composed in src/lib/metric-movement.ts.
+  metricAlerts?: string[];
   apiKey?: string;
   from?: string;
   baseUrl?: string;
@@ -49,6 +53,7 @@ export async function sendVerdictReady({
   recurring,
   bottomLine,
   findingCounts,
+  metricAlerts,
   apiKey,
   from,
   baseUrl,
@@ -82,10 +87,18 @@ export async function sendVerdictReady({
           ? `<p style="margin:0 0 16px;color:#666">${findingCounts.total} finding${findingCounts.total === 1 ? "" : "s"}` +
             `${findingCounts.broken > 0 ? `, ${findingCounts.broken} of them blocking` : ""}.</p>`
           : "") +
+        // CHE-241. Deliberately placed AFTER the verdict and before the link:
+        // "the app works" and "fewer people finish it" are both true at once,
+        // and the second must not be smoothed into the first or hidden under
+        // it. A green verdict with a fallen conversion is not a contradiction.
+        (metricAlerts?.length
+          ? `<p style="margin:0 0 16px">${metricAlerts.map((s) => escapeHtml(s)).join("<br>")}</p>`
+          : "") +
         `<p><a href="${url}">See the evidence →</a></p><p style="color:#666">— CheckMyApp</p>`,
       text:
         `${appSlug}${label ? ` — ${label}` : ""}\n\n` +
         (bottomLine ? `${bottomLine}\n\n` : "") +
+        (metricAlerts?.length ? `${metricAlerts.join("\n")}\n\n` : "") +
         `See the evidence: ${url}\n\n— CheckMyApp`,
     }),
   });
@@ -148,5 +161,72 @@ export async function sendWatchTrialPaused({
   });
   if (!res.ok) {
     throw new Error(`Resend send failed: ${res.status} ${await res.text()}`);
+  }
+}
+
+interface TeamInviteArgs {
+  to: string;
+  teamName: string;
+  // Who is asking. A name if we have one, their email otherwise — an invitation
+  // from nobody in particular is the one that gets deleted unread.
+  invitedBy: string;
+  scope: string;
+  acceptUrl: string;
+  apiKey?: string;
+  from?: string;
+}
+
+// CHE-257: the invitation. It says who is asking, which team, what the reader
+// will be able to do, and how long the link lasts — a person deciding whether
+// to click should not have to open the app to find out what they are joining.
+export async function sendTeamInvite({
+  to,
+  teamName,
+  invitedBy,
+  scope,
+  acceptUrl,
+  apiKey,
+  from,
+}: TeamInviteArgs): Promise<string | null> {
+  const subject = `${invitedBy} added you to ${teamName} on CheckMyApp`;
+  const whatTheyCanDo =
+    scope === "admin"
+      ? "You will be able to run checks, change settings, manage the team and its billing."
+      : scope === "member"
+        ? "You will be able to run checks, change an app's settings and act on what we find."
+        : "You will be able to read everything the team's checks find. Running a check is left to the others.";
+
+  if (!apiKey || !from) {
+    console.log(`[email:dev] to=${to} subject="${subject}" url=${acceptUrl}`);
+    return null;
+  }
+
+  const res = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      from,
+      to: [to],
+      subject,
+      html:
+        `<p><strong>${escapeHtml(invitedBy)}</strong> added you to <strong>${escapeHtml(teamName)}</strong> on CheckMyApp.</p>` +
+        `<p>CheckMyApp uses your team's apps the way a visitor would, every day, and tells you what broke.</p>` +
+        `<p>${escapeHtml(whatTheyCanDo)}</p>` +
+        `<p><a href="${acceptUrl}">Join ${escapeHtml(teamName)} →</a></p>` +
+        `<p style="color:#666">The link works for 7 days.</p><p style="color:#666">— CheckMyApp</p>`,
+      text:
+        `${invitedBy} added you to ${teamName} on CheckMyApp.\n\n` +
+        `CheckMyApp uses your team's apps the way a visitor would, every day, and tells you what broke.\n\n` +
+        `${whatTheyCanDo}\n\nJoin ${teamName}: ${acceptUrl}\n\nThe link works for 7 days.\n\n— CheckMyApp`,
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(`Resend send failed: ${res.status} ${await res.text()}`);
+  }
+  try {
+    const body = (await res.json()) as { id?: unknown };
+    return typeof body.id === "string" ? body.id : null;
+  } catch {
+    return null;
   }
 }

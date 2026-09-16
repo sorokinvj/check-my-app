@@ -37,7 +37,7 @@ export function extensionArtifactEvidence(value: unknown) {
       // was unverified). Every reason is a constant written here, never a
       // balance, a history row or anything else from the account.
       billing: { assessment: {
-        ...pick(assessment, ["status", "cleanupConfirmed", "reason", "expectedMinutes", "observedMinutes", "twoMinuteSteps", "cessationMs"]),
+        ...pick(assessment, ["status", "cleanupConfirmed", "reason", "expectedMinutes", "observedMinutes", "twoMinuteSteps", "cessationMs", "postStopChange", "postStopSettledMs"]),
         sessions: (Array.isArray(assessment.sessions) ? assessment.sessions : []).map(row => pick(row, ["kind", "dateUtc", "durationSeconds"])),
       } },
     },

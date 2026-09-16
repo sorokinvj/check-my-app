@@ -10,6 +10,7 @@ import { assertCanStartRun, fullRecheckGate, fullRechecksUsed } from "@/lib/plan
 import { effectiveEphemeralTtlDays, effectiveSiteCap } from "@/lib/site-cap";
 import { ephemeralExpiry } from "@/lib/ephemeral";
 import { triggerRun } from "@/lib/trigger";
+import { alreadyScoped, publicRow } from "@/lib/tenant-db";
 
 export type RecheckResult =
   | { kind: "not_found" }
@@ -26,7 +27,7 @@ export type RecheckResult =
 // real ones; the verify script passes stubs, so the gate can be exercised
 // without a request context.
 export interface RecheckDeps {
-  canMutate: (db: PrismaClient, ownerId: string | null) => Promise<boolean>;
+  canMutate: (db: PrismaClient, row: { ownerId: string | null; teamId?: string | null }) => Promise<boolean>;
   trigger: (runId: string) => Promise<void>;
   siteCap: () => number;
   now: () => Date;
@@ -46,15 +47,19 @@ export async function createRecheckRun(
   prisma: PrismaClient,
   publicId: string,
   opts: { full?: boolean; anonKeyHash?: string | null } = {},
+  // CHE-263: a caller may override just the authorization half — the recheck
+  // route does, so an API key is answered the same way a session is.
+  overrides: Partial<RecheckDeps> = {},
   deps: RecheckDeps = {
-    canMutate: canMutateOwned,
+    canMutate: (db, row) => canMutateOwned(db, row.ownerId),
     trigger: triggerRun,
     siteCap: effectiveSiteCap,
     now: () => new Date(),
     ephemeralTtlDays: effectiveEphemeralTtlDays,
+    ...overrides,
   },
 ): Promise<RecheckResult> {
-  const prev = await prisma.run.findUnique({
+  const prev = await prisma.run.findUnique({ ...publicRow(),
     where: { publicId },
     select: {
       id: true,
@@ -73,16 +78,19 @@ export async function createRecheckRun(
       appId: true,
       ownerId: true,
       ephemeral: true,
-      // CHE-137: the owner's CURRENT plan decides the full re-check allowance,
+      teamId: true,
+      // CHE-253: the plan is the TEAM's — the person who clicks may not be the
+      // one who pays. CHE-137: the CURRENT plan decides the allowance,
       // so an upgrade takes effect on the next click with nothing to sync.
-      owner: { select: { plan: true } },
+      team: { select: { plan: true } },
     },
   });
   if (!prev) return { kind: "not_found" };
 
   // A recheck spends money + may touch the owner's app — owned runs require the
   // owner; anonymous runs are authorized by the unguessable publicId (CHE-33).
-  if (!(await deps.canMutate(prisma, prev.ownerId))) return { kind: "unauthorized" };
+  if (!(await deps.canMutate(prisma, { ownerId: prev.ownerId, teamId: prev.teamId })))
+    return { kind: "unauthorized" };
 
   // CHE-94. Everything below is about the ANONYMOUS path: the caller proved
   // nothing except that they have the link.
@@ -90,7 +98,13 @@ export async function createRecheckRun(
   if (prev.targetKind === "extension" && prev.ownerId && !opts.full) {
     // Extension checks always open a fresh installed product. They cannot use
     // the unmetered website survey path to bypass the on-demand allowance.
-    const gate = await assertCanStartRun(prisma, { id: prev.ownerId, plan: (prev.owner?.plan ?? "free") as UserPlan }, null, { siteCap: deps.siteCap() });
+    const gate = await assertCanStartRun(
+      prisma,
+      // CHE-260: the run's TEAM pays for it, whoever pressed the button.
+      prev.teamId ? { id: prev.teamId, plan: (prev.team?.plan ?? "free") as UserPlan } : null,
+      null,
+      { siteCap: deps.siteCap() },
+    );
     if (!gate.ok) return { kind: "quota", reason: gate.reason };
   }
   if (isAnonymous) {
@@ -102,7 +116,7 @@ export async function createRecheckRun(
         reason: "A full re-check is available to the owner of this app. Sign in to run one.",
       };
     }
-    const fresh = await prisma.run.findFirst({
+    const fresh = await prisma.run.findFirst({ ...publicRow(),
       where: {
         appSlug: prev.appSlug,
         status: "completed",
@@ -128,8 +142,8 @@ export async function createRecheckRun(
   // "re-check after a deploy", and it costs what the survey says changed.
   let remaining: number | null | undefined;
   if (opts.full && prev.ownerId) {
-    const plan = (prev.owner?.plan ?? "free") as UserPlan;
-    const used = await fullRechecksUsed(prisma, prev.ownerId, deps.now());
+    const plan = (prev.team?.plan ?? "free") as UserPlan;
+    const used = await fullRechecksUsed(prisma, prev.teamId ?? "", deps.now());
     const gate = fullRecheckGate(plan, used, deps.now());
     if (!gate.ok) return { kind: "quota", reason: gate.reason };
     remaining = gate.remaining;
@@ -138,9 +152,9 @@ export async function createRecheckRun(
   // On-demand runs discard their password after completion. Only the same
   // owner's saved extension may supply credentials for the next explicit run.
   const saved = prev.targetKind === "extension" && prev.appId && prev.ownerId
-    ? await prisma.app.findFirst({ where: { id: prev.appId, ownerId: prev.ownerId, targetKind: "extension", extensionId: prev.extensionId },
+    ? await prisma.app.findFirst({ ...alreadyScoped("the previous run names its own app"), where: { id: prev.appId, ownerId: prev.ownerId, targetKind: "extension", extensionId: prev.extensionId },
       select: { testEmail: true, testPasswordEnc: true, extensionConfig: true, userNotes: true } }) : null;
-  const run = await prisma.run.create({
+  const run = await prisma.run.create({ ...alreadyScoped("created with its team"),
     data: {
       runNumber: await nextRunNumber(prisma),
       targetUrl: prev.targetUrl,
@@ -157,6 +171,7 @@ export async function createRecheckRun(
       watchId: prev.watchId,
       appId: prev.appId,
       ownerId: prev.ownerId,
+      teamId: prev.teamId,
       baselineRunId: prev.id,
       // CHE-74: an explicit full re-check must not be eaten by smoke/partial.
       // The same flag is what the monthly allowance counts (CHE-137).

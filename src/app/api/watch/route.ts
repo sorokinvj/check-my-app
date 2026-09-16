@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { getDbFromContext } from "@/lib/db";
+import { requireScope } from "@/lib/team-auth";
 import { getOptionalUser } from "@/lib/auth";
+import { optionalTeamContext } from "@/lib/auth";
 import { EPHEMERAL_WATCH_REFUSAL, enableWatchForRun } from "@/lib/watch-enable";
 import { createWatchSchema } from "@/lib/validation";
 import { isSelfCheckRequest, selfCheckReadOnlyResponse } from "@/lib/self-check";
@@ -13,7 +15,9 @@ export async function POST(req: Request) {
   // CHE-193: our own checker never enables a watch. First, before anything else.
   if (isSelfCheckRequest(req.headers)) return selfCheckReadOnlyResponse();
   const db = await getDbFromContext();
-  const user = await getOptionalUser(db);
+  const decision = await requireScope(db, req, "watch.configure", "Sign in to enable Daily Watch");
+  if (!decision.ok) return decision.response;
+  const { user, team } = decision.grant;
 
   const json = await req.json().catch(() => null);
   const parsed = createWatchSchema.safeParse(json);
@@ -21,11 +25,15 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Invalid input" }, { status: 400 });
   }
 
-  const result = await enableWatchForRun(db, user, {
-    runPublicId: parsed.data.runId,
-    frequency: parsed.data.frequency,
-    notifyOnChangeOnly: parsed.data.notifyOnChangeOnly,
-  });
+  const result = await enableWatchForRun(
+    db,
+    { id: user.id, teamId: team.id, plan: team.plan },
+    {
+      runPublicId: parsed.data.runId,
+      frequency: parsed.data.frequency,
+      notifyOnChangeOnly: parsed.data.notifyOnChangeOnly,
+    },
+  );
   switch (result.kind) {
     case "unauthenticated":
       return NextResponse.json({ error: "Sign in to enable Daily Watch" }, { status: 401 });

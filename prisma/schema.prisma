@@ -122,6 +122,13 @@ model Run {
   appId    String?
   owner    User?   @relation(fields: [ownerId], references: [id])
   ownerId  String?
+  // CHE-253: whose run this is, now that "whose" can be more than one person.
+  // Null on anonymous and ephemeral runs, exactly like ownerId. `ownerId` stays
+  // filled on every owned run — isOwnRun (src/agent/notify-verdict.ts) reads it
+  // to decide the self-check silence, and a run that arrived with only a team
+  // would strand that rule (CHE-156).
+  team     Team?   @relation(fields: [teamId], references: [id])
+  teamId   String?
   // Anonymous counterpart of ownerId: a salted one-way hash of the submitter's
   // IP, set only on anonymous runs so the free-run quota (CHE-40) can be counted
   // per client without ever storing an IP. Null on owner and scheduler runs.
@@ -155,6 +162,7 @@ model Run {
   @@index([watchId])
   @@index([appId])
   @@index([ownerId])
+  @@index([teamId])
   @@index([anonKeyHash])
   @@index([ephemeral, expiresAt])
 }
@@ -269,8 +277,33 @@ model AppJourney {
   metricAt       DateTime?
   // A journey the product no longer has. Kept, never deleted (it is the record
   // of what the app used to do) and never walked again.
+  //
+  // CHE-232: `missedDiscoveries` is how many consecutive FULL checks mapped the
+  // app without finding this journey. Only a full check maps — a smoke pass and
+  // a partial run propose nothing, so neither moves this. At three, the journey
+  // retires; a journey walked again has it cleared and its retirement undone,
+  // so a page that comes back brings its history with it.
+  missedDiscoveries Int @default(0)
   retiredAt     DateTime?
   retiredReason String?
+
+  // CHE-238: the funnel this journey's walk implies — the ordered pages a
+  // person moves through — derived from what the walk recorded, never from
+  // anything the customer was asked to define. The first derivation wins and a
+  // later disagreement is noted in funnelDriftAt rather than applied, because a
+  // funnel that changes shape silently makes every comparison meaningless.
+  // funnelRefusal names OUR gap when there is no funnel (rule 2); it is what a
+  // "[Checker gap]" is filed from and never reaches a verdict.
+  funnelStages    String?
+  funnelRefusal   String?
+  funnelDerivedAt DateTime?
+  funnelDriftAt   DateTime?
+
+  // CHE-239: what the customer's analytics say happened, one point per run.
+  // Deliberately a relation and not a column: `conversion` above is OUR opinion
+  // formed by walking; these are THEIR counts. A number whose provenance is
+  // ambiguous is worse than either number alone.
+  metricPoints JourneyMetricPoint[]
 
   checks Journey[]
 
@@ -279,6 +312,38 @@ model AppJourney {
 
   @@unique([appId, key])
   @@index([appId, retiredAt])
+}
+
+// CHE-239: what the customer's own analytics say happened on a journey — one
+// point per run, so "conversion fell from 31% to 12% over three weeks" is a
+// question the data can answer. A single mutable column can only say what today
+// looks like, and by the time anyone asks why, the before is gone.
+//
+// Separate from AppJourney.conversion on purpose: that is OUR opinion formed by
+// walking, this is THEIR count. Nobody can act on a number without knowing
+// which of the two it is.
+model JourneyMetricPoint {
+  id           String     @id @default(cuid())
+  journey      AppJourney @relation(fields: [appJourneyId], references: [id], onDelete: Cascade)
+  appJourneyId String
+  /// The run that asked. A point outlives the run row it came from.
+  runId        String?
+  measuredAt   DateTime   @default(now())
+  /// How far back the question looked. Per point, because changing the window
+  /// changes the question and a series that mixes them is a trend about nothing.
+  windowDays   Int
+  /// 0-100, or null when we counted and the sample was below the floor. Null
+  /// here is a real answer; a run whose query FAILED writes no row at all.
+  conversion   Int?
+  /// People who reached the first stage — what makes `conversion` trustworthy
+  /// or absent. Always present.
+  sampleSize   Int
+  /// Per-stage counts in funnel order, as JSON. Counts only, never a person.
+  steps        String?
+  source       String     @default("posthog")
+  createdAt    DateTime   @default(now())
+
+  @@index([appJourneyId, measuredAt])
 }
 
 // ─── Journeys & steps ────────────────────────────────────────────────────────
@@ -461,6 +526,10 @@ model Watch {
   appId    String? @unique
   owner    User?   @relation(fields: [ownerId], references: [id])
   ownerId  String?
+  // CHE-253: the team whose plan pays for this watch and whose members may
+  // configure it. Null only on legacy ownerless watches.
+  team     Team?   @relation(fields: [teamId], references: [id])
+  teamId   String?
 
   runs        Run[]
   lastRunAt   DateTime?
@@ -477,6 +546,7 @@ model Watch {
   updatedAt   DateTime @updatedAt
 
   @@index([ownerId])
+  @@index([teamId])
   @@index([appSlug])
 }
 
@@ -533,17 +603,20 @@ model User {
 
   id          String  @id @default(cuid())
   clerkUserId String  @unique
-  clerkOrgId  String? // active org for team/multi-tenant accounts
   email       String
   name        String?
   role        String  @default("requester") // requester | provider_human | agent_operator | admin
-  plan        String  @default("free")       // free | starter | growth | business | enterprise
 
-  // Stripe billing (CHE-40 phase 3). Set by /api/billing/checkout + the Stripe
-  // webhook; null for free/manual accounts. Customer is 1:1 with a user.
-  stripeCustomerId     String? @unique
-  stripeSubscriptionId String?
+  // CHE-253 (Teams T0): plan, stripeCustomerId, stripeSubscriptionId and
+  // clerkOrgId used to live here. They are the TEAM's now — a person does not
+  // have a plan, the team they act for does. Keeping a copy on the user would
+  // be two columns meaning the same thing, which is how a rule ends up keyed
+  // on the wrong subject (CHE-156).
 
+  notifies    AppNotifier[]
+  memberships Membership[]
+  // What this person did, kept apart from who owns it: a row's `ownerId` is
+  // attribution and is never rewritten when somebody leaves a team.
   apps    App[]
   runs    Run[]
   watches Watch[]
@@ -551,8 +624,186 @@ model User {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
 
-  @@index([clerkOrgId])
+// ─── Teams (CHE-253) ─────────────────────────────────────────────────────────
+// A team owns the apps, pays the bill and grants the access. A personal account
+// IS a team of one (isPersonal), created for every user the moment they exist,
+// so there is exactly one billing subject and one access subject in the code
+// and nothing branches on "team or not".
+//
+// Clerk is identity only. Membership and scope live here because Clerk's own
+// organizations give two roles (org:admin, org:member) and a third needs custom
+// roles — free in development, requiring the B2B Authentication add-on in
+// production, with a 20-member ceiling without it. Verified 2026-09-15.
+
+model Team {
+  id   String @id @default(cuid())
+  name String
+  // True for the team created automatically for one person. Not special-cased
+  // anywhere in the product: it is a team, with one admin, that happens to have
+  // been created for them rather than by them.
+  isPersonal Boolean @default(true)
+
+  // What the team pays for. Moved here from User by the same migration that
+  // created this table, value for value — nobody's plan changed on deploy day.
+  plan String @default("free") // free | starter | growth | business | enterprise
+
+  // Stripe billing. The customer is 1:1 with a TEAM; when the person who
+  // subscribed leaves, the subscription stays with the team that paid.
+  stripeCustomerId     String? @unique
+  stripeSubscriptionId String?
+
+  memberships Membership[]
+  invites     TeamInvite[]
+  events      TeamEvent[]
+  apps        App[]
+  runs        Run[]
+  watches     Watch[]
+  apiKeys     ApiKey[]
+  // CHE-236: the team's analytics connection, at most one.
+  posthog     PostHogIntegration?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+/// CHE-236 — the analytics connection, made once for the team.
+///
+/// Keyed by team rather than by owner (the ticket predates CHE-253): the plan
+/// and the subscription belong to the team, and a connection owned by one
+/// member would strand everyone else the day that person leaves — the same
+/// defect shape as team knowledge stored per person. `connectedByUserId` is
+/// attribution only, mirroring how Run keeps ownerId alongside teamId.
+///
+/// One row per team, enforced by the database. Two tokens for one team is a
+/// question nobody can answer ("which do we read from?"). The alternative —
+/// unique on (teamId, organizationId), allowing a team two PostHog
+/// organisations — was considered and deferred: PostHog does not document
+/// whether a token is scoped to one organisation, and a unique index over a
+/// column that may be NULL for every row enforces nothing in SQLite. It is a
+/// cheap migration the day a real team needs two.
+model PostHogIntegration {
+  id     String @id @default(cuid())
+  team   Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  teamId String @unique
+  /// Who pressed Connect. Access follows the team, not this.
+  connectedByUserId String?
+
+  /// Encrypted at rest (src/lib/crypto), like every other stored credential.
+  accessTokenEnc  String
+  refreshTokenEnc String?
+  /// Absolute, never a duration: a lifetime stored at write time is wrong by
+  /// however long the row has been sitting there (CHE-68).
+  expiresAt       DateTime?
+  /// What PostHog actually granted, as it reported back — so a later read can
+  /// say "this connection cannot answer that" instead of surfacing a raw 403.
+  scope           String?
+
+  organizationName String?
+  organizationId   String?
+  /// us | eu, as discovered during the flow.
+  region           String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// Who is on a team and what they may do. scope is admin | member | reader —
+// the table of what each may do is src/lib/scopes.ts (CHE-254), never a prompt
+// and never a per-route comparison.
+model Membership {
+  id     String @id @default(cuid())
+  team   Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  teamId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+  scope  String @default("member") // TeamScope — see src/lib/scopes.ts
+
+  // Who brought them in. Null on the admin of a personal team, which nobody
+  // invited, and on rows the backfill created.
+  invitedByUserId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([teamId, userId])
+  @@index([userId])
+  @@index([teamId])
+}
+
+// An invitation to a team (CHE-257). Ours, not Clerk's: the scope is decided at
+// invite time and is one of our three (src/lib/scopes.ts), which Clerk's
+// organizations cannot express without a paid add-on — and routing invites
+// through them while keeping the real scope here would be two sources of truth
+// for one fact.
+//
+// Only a hash of the token is stored. The raw token exists in the emailed link
+// and nowhere else, the same shape ApiKey.keyHash already uses: a database dump
+// does not let anyone join a team.
+// CHE-264 (Teams T11): who changed what. Written by the functions that perform
+// the change, never by a caller who remembers — a log kept by habit is complete
+// until the first person forgets. Read by everyone on the team: an account log,
+// never anything a customer reads about their own product (rule 1).
+model TeamEvent {
+  id     String @id @default(cuid())
+  team   Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  teamId String
+  // Null when our own system did it — a Stripe webhook, the scheduler. "System"
+  // is an answer; a blank that means "we did not record it" is not.
+  actorUserId String?
+  action      String  // TeamEventAction — see src/lib/team-events.ts
+  // What it happened to, in the team's own words: an email, an app slug, a key
+  // name. Never an id.
+  subject     String?
+  summary     String
+
+  createdAt DateTime @default(now())
+
+  @@index([teamId, createdAt])
+}
+
+model AppNotifier {
+  id     String @id @default(cuid())
+  app    App    @relation(fields: [appId], references: [id], onDelete: Cascade)
+  appId  String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+
+  createdAt DateTime @default(now())
+
+  @@unique([appId, userId])
+  @@index([appId])
+  @@index([userId])
+}
+
+model TeamInvite {
+  id     String @id @default(cuid())
+  team   Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  teamId String
+  // Where the invitation was sent. NOT what is matched on acceptance — a person
+  // signs in with the account they actually use, which is often not the address
+  // a colleague typed. The token is the capability; the email is the delivery.
+  email  String
+  scope  String @default("member") // TeamScope
+
+  tokenHash       String  @unique // SHA-256 hex of the raw token
+  invitedByUserId String
+
+  expiresAt      DateTime
+  // Set when it is used, revoked, or replaced by a resend. An invite is never
+  // deleted: "who invited whom, and what happened to it" is the audit trail
+  // T11 reads, and a row that vanishes takes its own history with it.
+  acceptedAt     DateTime?
+  acceptedByUserId String?
+  revokedAt      DateTime?
+  revokedReason  String? // "revoked" | "resent"
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([teamId])
+  @@index([email])
 }
 
 // Owner API keys (CHE-52): let a coding agent act as the owner over the public
@@ -561,14 +812,24 @@ model User {
 // with a key are attributed to the owner and follow the owner's plan quota.
 model ApiKey {
   id         String    @id @default(cuid())
+  // Attribution: who minted it. The key is the TEAM's (CHE-253) — a CI hook
+  // does not stop working because the person who created it left.
   owner      User      @relation(fields: [ownerId], references: [id], onDelete: Cascade)
   ownerId    String
+  team       Team?     @relation(fields: [teamId], references: [id])
+  teamId     String?
+  // CHE-263: what this key may do, from the same three scopes a person has
+  // (src/lib/scopes.ts). A key cannot be minted above the scope of the person
+  // minting it, and a reader key is the one customers will actually ask for: a
+  // token that can read every verdict and spend nothing.
+  scope      String    @default("member") // TeamScope
   name       String // owner-facing label, e.g. "CI post-deploy hook"
   keyHash    String    @unique // SHA-256 hex of the raw `cma_<32 hex>` key
   lastUsedAt DateTime?
   createdAt  DateTime  @default(now())
 
   @@index([ownerId])
+  @@index([teamId])
 }
 
 // One owner ↔ one target app. Holds the canonical appSlug for that owner; a URL
@@ -576,9 +837,16 @@ model ApiKey {
 // here (encrypted); anonymous one-off runs never create an App.
 model App {
   id        String  @id @default(cuid())
+  // Attribution: the person who added it. Ownership is the team's (CHE-253) —
+  // removing a person removes nothing they touched.
   owner     User    @relation(fields: [ownerId], references: [id])
   ownerId   String
-  orgId     String?
+  // The team this app belongs to. Nullable only because SQLite cannot add a
+  // NOT NULL column to a populated table without a default; every App has one,
+  // and scripts/verify-team-backfill.ts is what makes that true rather than
+  // hoped for.
+  team      Team?   @relation(fields: [teamId], references: [id])
+  teamId    String?
   targetUrl String
   targetKind String @default("website")
   extensionId String?
@@ -605,6 +873,16 @@ model App {
   webhookSecretEnc String? // encrypted blob (src/lib/crypto), never logged
   slackWebhookUrl  String?
 
+  // CHE-237: which PostHog project holds this app's data. The connection is the
+  // team's; the project is the app's, because only the owner can say which of
+  // their projects is this product. The name is a cached label so the settings
+  // page reads correctly even when the connection is expired or gone; the id is
+  // the only part ever sent to PostHog. Null is not broken — an app with no
+  // project keeps our own estimate and says so once.
+  posthogProjectId   String?
+  posthogProjectName String?
+
+  notifiers AppNotifier[]
   watch   Watch?
   tracker TrackerIntegration?
   repo    RepoIntegration?
@@ -617,8 +895,14 @@ model App {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // One owner ↔ one target app, unchanged by T0 on purpose. With a personal
+  // team per person, "one team ↔ one target" says the same thing today, and
+  // moving the constraint would rewrite every `ownerId_appSlug` lookup in the
+  // product for no behaviour gained. It moves in T5, when a second member can
+  // add an app and the two stop being the same sentence.
   @@unique([ownerId, appSlug])
   @@index([ownerId])
+  @@index([teamId])
 }
 
 // The owner's connected issue tracker. type='linear' for now, behind a Tracker
@@ -718,6 +1002,11 @@ model IssueLink {
 model SettledSignature {
   id              String   @id @default(cuid())
   ownerId         String?
+  // CHE-253: "we were told this is not a bug" is the team's knowledge, not one
+  // member's — a colleague must not re-file what the team already settled.
+  // Plain id, not a relation, for the same reason ownerId is: this row is meant
+  // to outlive what it describes.
+  teamId          String?
   appSlug         String
   dedupKey        String
   externalIssueId String
@@ -729,6 +1018,7 @@ model SettledSignature {
   settledAt       DateTime @default(now())
 
   @@index([ownerId, appSlug])
+  @@index([teamId, appSlug])
   @@index([externalIssueId])
 }
 

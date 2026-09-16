@@ -3,6 +3,7 @@
 
 import type { UserPlan, WatchFrequency } from "./enums";
 import type { PrismaClient } from "@/generated/prisma/client";
+import { ownerScoped, teamOwned } from "@/lib/tenant-db";
 
 export interface PlanLimits {
   // 0 = no Daily Watch (one-off runs only).
@@ -30,6 +31,13 @@ export interface PlanLimits {
   // "30 runs a month" Starter promise was dropped with this (owner,
   // 2026-09-06).
   fullRechecksPerMonth: number | null;
+  // CHE-259: how many BILLABLE seats the plan carries before the subscription's
+  // quantity has to grow. A billable seat is an admin or a member — the two
+  // scopes that can spend the team's plan. Readers are free, deliberately: a
+  // team should be able to give its designer, its support person and its
+  // investor a way to read what broke without anyone counting heads.
+  // null = no ceiling (enterprise talks to a human).
+  includedSeats: number | null;
 }
 
 export const PLAN_LIMITS: Record<UserPlan, PlanLimits> = {
@@ -45,6 +53,7 @@ export const PLAN_LIMITS: Record<UserPlan, PlanLimits> = {
     // A trial should be able to show its best work once a day.
     dailyBudgetUsd: 1.2,
     fullRechecksPerMonth: 0,
+    includedSeats: 1,
   },
   starter: {
     maxWatches: 1,
@@ -53,6 +62,7 @@ export const PLAN_LIMITS: Record<UserPlan, PlanLimits> = {
     apiAccess: false,
     dailyBudgetUsd: 1.2,
     fullRechecksPerMonth: 5,
+    includedSeats: 3,
   },
   growth: {
     maxWatches: 5,
@@ -63,6 +73,7 @@ export const PLAN_LIMITS: Record<UserPlan, PlanLimits> = {
     // plus smoke on the other ticks fits inside it.
     dailyBudgetUsd: 0.8,
     fullRechecksPerMonth: 20,
+    includedSeats: 10,
   },
   business: {
     maxWatches: 50,
@@ -71,6 +82,7 @@ export const PLAN_LIMITS: Record<UserPlan, PlanLimits> = {
     apiAccess: true,
     dailyBudgetUsd: 4,
     fullRechecksPerMonth: 100,
+    includedSeats: 50,
   },
   enterprise: {
     maxWatches: Number.MAX_SAFE_INTEGER,
@@ -79,6 +91,7 @@ export const PLAN_LIMITS: Record<UserPlan, PlanLimits> = {
     apiAccess: true,
     dailyBudgetUsd: 10,
     fullRechecksPerMonth: null,
+    includedSeats: null,
   },
 };
 
@@ -133,7 +146,7 @@ export async function anonRunsToday(
   cap: number = ANON_RUNS_PER_DAY_SITE,
 ): Promise<{ used: number; cap: number; dayStartIso: string }> {
   const dayStart = utcDayStart(now);
-  const used = await db.run.count({
+  const used = await db.run.count({ ...ownerScoped(),
     where: { ownerId: null, paidCheckoutSessionId: null, createdAt: { gte: dayStart } },
   });
   return { used, cap, dayStartIso: dayStart.toISOString() };
@@ -207,7 +220,7 @@ export function watchCapReason(plan: UserPlan, activeWatches: number): string | 
   if (activeWatches < limits.maxWatches) return null;
   return plan === "free"
     ? `Free covers one app, on a ${WATCH_TRIAL_DAYS}-day trial. Upgrade to Starter to watch this one too.`
-    : `Plan limit reached: ${limits.maxWatches} watched app(s).`;
+    : `Your team's plan covers ${limits.maxWatches} watched app(s), and they are all in use.`;
 }
 
 // Gate for enabling/configuring a Daily Watch. existingWatchId set → it's an
@@ -215,7 +228,9 @@ export function watchCapReason(plan: UserPlan, activeWatches: number): string | 
 export async function assertCanAddWatch(
   db: PrismaClient,
   opts: {
-    ownerId: string;
+    // CHE-260: the TEAM whose plan is being spent — not the person who clicked.
+    // Inviting a colleague must not mint a second allowance.
+    teamId: string;
     plan: UserPlan;
     frequency: WatchFrequency;
     existingWatchId?: string | null;
@@ -228,7 +243,7 @@ export async function assertCanAddWatch(
     return { ok: false, reason: `Your plan doesn't allow ${opts.frequency} checks.` };
   }
   if (!opts.existingWatchId) {
-    const count = await db.watch.count({ where: { ownerId: opts.ownerId, active: true } });
+    const count = await db.watch.count({ where: { ...teamOwned(opts.teamId), active: true } });
     const reason = watchCapReason(opts.plan, count);
     if (reason) return { ok: false, reason };
   }
@@ -252,18 +267,20 @@ export type RunGate =
 // the web app pass what the runtime env says, and the constant is the default.
 export async function assertCanStartRun(
   db: PrismaClient,
-  owner: { id: string; plan: UserPlan } | null,
+  // CHE-260: the team acting. `id` is the TEAM id, and the lifetime free-run
+  // allowance is the team's — five people on one Free team share three runs.
+  team: { id: string; plan: UserPlan } | null,
   anonKeyHash: string | null,
   opts: { siteCap?: number } = {},
 ): Promise<RunGate> {
-  if (owner) {
-    if (owner.plan !== "free") return { ok: true };
-    const used = await db.run.count({ where: { ownerId: owner.id } });
+  if (team) {
+    if (team.plan !== "free") return { ok: true };
+    const used = await db.run.count({ where: { ...teamOwned(team.id) } });
     if (used >= FREE_RUNS_LIFETIME) {
       return {
         ok: false,
         code: "quota_free",
-        reason: `You've used all ${FREE_RUNS_LIFETIME} runs on the Free plan. Enable Daily Watch on an app you've already checked, or upgrade for unlimited runs.`,
+        reason: `Your team has used all ${FREE_RUNS_LIFETIME} runs on the Free plan. Enable Daily Watch on an app you've already checked, or upgrade for unlimited runs.`,
       };
     }
     return { ok: true };
@@ -286,7 +303,7 @@ export async function assertCanStartRun(
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
   // Same exclusion as the site count: a $1 run this visitor paid for is not
   // the free one they get a day.
-  const used = await db.run.count({
+  const used = await db.run.count({ ...ownerScoped(),
     where: { anonKeyHash, paidCheckoutSessionId: null, createdAt: { gte: since } },
   });
   if (used >= ANON_RUNS_PER_DAY) {
@@ -329,11 +346,11 @@ export function nextUtcMonthLabel(now: Date = new Date()): string {
 // How many full re-checks this owner has started this UTC month.
 export async function fullRechecksUsed(
   db: PrismaClient,
-  ownerId: string,
+  teamId: string,
   now: Date = new Date(),
 ): Promise<number> {
   return db.run.count({
-    where: { ownerId, forceFull: true, createdAt: { gte: utcMonthStart(now) } },
+    where: { ...teamOwned(teamId), forceFull: true, createdAt: { gte: utcMonthStart(now) } },
   });
 }
 
@@ -366,7 +383,7 @@ export function fullRecheckGate(plan: UserPlan, used: number, now: Date = new Da
     return {
       ok: false,
       reason:
-        `Full re-checks on your plan: ${limit} a month, all used until ${nextUtcMonthLabel(now)}. ` +
+        `Full re-checks on your team's plan: ${limit} a month, all used until ${nextUtcMonthLabel(now)}. ` +
         REGULAR_RECHECK_STILL_AVAILABLE,
     };
   }
@@ -386,11 +403,11 @@ function planLabel(plan: UserPlan): string {
 // unlimited.
 export async function fullRechecksRemaining(
   db: PrismaClient,
-  owner: { id: string; plan: UserPlan },
+  team: { id: string; plan: UserPlan },
   now: Date = new Date(),
 ): Promise<{ used: number; limit: number | null; remaining: number | null; resetsOn: string }> {
-  const limit = PLAN_LIMITS[owner.plan].fullRechecksPerMonth;
-  const used = await fullRechecksUsed(db, owner.id, now);
+  const limit = PLAN_LIMITS[team.plan].fullRechecksPerMonth;
+  const used = await fullRechecksUsed(db, team.id, now);
   return {
     used,
     limit,

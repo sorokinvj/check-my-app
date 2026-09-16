@@ -3,6 +3,7 @@ import Link from "next/link";
 import { requireUser } from "@/lib/auth";
 import { VERDICT_META } from "@/lib/status";
 import { WatchSettings } from "@/components/watch-settings";
+import { alreadyScoped } from "@/lib/tenant-db";
 
 export const dynamic = "force-dynamic";
 
@@ -18,7 +19,7 @@ const DATE_FMT: Intl.DateTimeFormatOptions = {
 export default async function WatchPage({ params }: { params: Promise<{ slug: string }> }) {
   // Owner-scoped (CHE-33): a watch is managed only by its owner.
   const { user, db } = await requireUser();
-  const app = await db.app.findUnique({
+  const app = await db.app.findUnique({ ...alreadyScoped("the unique key names the owner"),
     where: { ownerId_appSlug: { ownerId: user.id, appSlug: (await params).slug } },
     include: {
       watch: { include: { runs: { orderBy: { startedAt: "desc" }, take: 10 } } },

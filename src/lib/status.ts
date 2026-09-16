@@ -119,5 +119,7 @@ export const RUN_STATUS_PHASE: Partial<Record<string, number>> = {
 };
 
 export function isTerminal(status: string): boolean {
-  return status === "completed" || status === "partial" || status === "failed";
+  return (
+    status === "completed" || status === "partial" || status === "failed" || status === "canceled"
+  );
 }

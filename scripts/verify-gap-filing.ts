@@ -122,7 +122,12 @@ interface Filed {
 
 function stubWorld(
   steps: StoredStep[],
-  opts: { existing?: Record<string, string>; extensionAudit?: boolean; unpricedJourneys?: string[] } = {},
+  opts: {
+    existing?: Record<string, string>;
+    extensionAudit?: boolean;
+    unpricedJourneys?: string[];
+    unfunnelledJourneys?: string[];
+  } = {},
 ) {
   const filed: Filed[] = [];
   const comments: { issueId: string; body: string }[] = [];
@@ -160,17 +165,30 @@ function stubWorld(
   const db = {
     run: { findUnique: async () => run },
     step: { findMany: async () => steps },
-    // CHE-235: journeys this run walked whose catalog row has no price. The
-    // where-shape is asserted here, not just the result — a filter that stopped
-    // excluding carried journeys would file gaps for walks that never happened.
+    // CHE-235 (price) and CHE-238 (funnel): journeys this run walked whose
+    // catalog row is missing one of them. The where-shape is asserted here, not
+    // just the result — a filter that stopped excluding carried journeys would
+    // file gaps for walks that never happened.
+    //
+    // Both queries come through this one stub, so it dispatches on the catalog
+    // clause rather than assuming a single caller: a second reader arriving and
+    // silently receiving the first one's rows is how a stub starts lying.
     journey: {
       findMany: async ({ where }: { where: Record<string, unknown> }) => {
-        const shapeOk =
+        const common =
           where.carriedFromRunId === null &&
-          JSON.stringify(where.appJourneyId) === JSON.stringify({ not: null }) &&
-          JSON.stringify(where.appJourney) === JSON.stringify({ price: null });
-        if (!shapeOk) throw new Error(`unpriced-journey query lost its filter: ${JSON.stringify(where)}`);
-        return (opts.unpricedJourneys ?? []).map((title) => ({ title }));
+          JSON.stringify(where.appJourneyId) === JSON.stringify({ not: null });
+        const appJourney = JSON.stringify(where.appJourney);
+        if (common && appJourney === JSON.stringify({ price: null })) {
+          return (opts.unpricedJourneys ?? []).map((title) => ({ title }));
+        }
+        if (common && appJourney === JSON.stringify({ funnelStages: null, funnelRefusal: { not: null } })) {
+          return (opts.unfunnelledJourneys ?? []).map((title) => ({
+            title,
+            appJourney: { funnelRefusal: "revisits" },
+          }));
+        }
+        throw new Error(`journey query lost its filter: ${JSON.stringify(where)}`);
       },
     },
     createdResource: { findMany: async () => [], count: async () => 0 },
@@ -194,6 +212,9 @@ function stubWorld(
       },
     },
     settledSignature: { findFirst: async () => null, create: async () => ({}) },
+    // CHE-256: filing resolves the app's team, because a settlement is the
+    // team's knowledge and must be stored with one.
+    app: { findUnique: async () => ({ teamId: "team_fixture" }) },
   };
 
   const self = {
@@ -426,6 +447,41 @@ async function main() {
     const w = stubWorld([]);
     await fileCapabilityGaps(w.env, "run-1", { board: w.board });
     check("every journey priced → no ticket", w.filed.length === 0, w.filed.map((f) => f.title).join(" | "));
+  }
+
+  // CHE-238: a journey we walked and could not turn into a funnel is OUR gap.
+  // The customer is never told "we could not measure this" — it is a ticket on
+  // our board, like every other thing we cannot yet do (rule 2).
+  {
+    const w = stubWorld([], { unfunnelledJourneys: ["Explore the app in different languages (i18n)"] });
+    await fileCapabilityGaps(w.env, "run-1", { board: w.board });
+    const created = w.filed.filter((f) => f.kind === "created");
+    check(
+      "a walked journey with no funnel files one ticket on our board",
+      created.length === 1 && created[0].title.includes(GAP_CLASSES.unfunnelled_journey.label),
+      created.map((f) => f.title).join(" | "),
+    );
+    check(
+      "…and it names the journey and why we refused",
+      (created[0]?.body ?? "").includes("different languages") && (created[0]?.body ?? "").includes("revisits"),
+      (created[0]?.body ?? "").slice(0, 200),
+    );
+    // Rule 1: our machinery must not be described to a customer. This ticket is
+    // ours, but the words in it get reused, so the gap sentence must talk about
+    // what we could not do rather than about the customer's product.
+    check(
+      "the gap's 'why' blames our derivation, not the customer's product",
+      /our wandering|our browsing|we walked|could not/i.test(GAP_CLASSES.unfunnelled_journey.why),
+      GAP_CLASSES.unfunnelled_journey.why.slice(0, 120),
+    );
+  }
+
+  // A journey that HAS a funnel and merely wandered today is not a gap: the
+  // funnel it is measured along still stands.
+  {
+    const w = stubWorld([], { unfunnelledJourneys: [] });
+    await fileCapabilityGaps(w.env, "run-1", { board: w.board });
+    check("every walked journey has a funnel → no ticket", w.filed.length === 0, w.filed.map((f) => f.title).join(" | "));
   }
 
   console.log(failures ? `\n${failures} check(s) FAILED` : "\nall checks passed");

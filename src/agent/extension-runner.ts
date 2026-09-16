@@ -30,23 +30,25 @@ export class ExtensionRunner extends Container<AgentBindings> {
     });
     await this.schedule(new Date(lease.expiresAt + 120_000), "expire");
     try {
-      // One call starts the instance and waits for its port. Splitting it in
-      // two to get an earlier look at the runtime's monitor cost a run: the
-      // extra start is a second lifecycle on the same attempt, and the shape
-      // that has actually been proven against the executor is this one.
-      await this.startAndWaitForPorts({
-        ports: 9090,
-        startOptions: { envVars: { RUNNER_CONTROL_TOKEN: token } },
-        cancellationOptions: { instanceGetTimeoutMS: 60_000, portReadyTimeoutMS: 90_000 },
-      });
-      const response = await this.fetch(new Request("http://runner/session", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...input, maxDurationSeconds: Math.max(1, Math.floor((lease.expiresAt - Date.now()) / 1000)) }),
-      }));
-      if (!response.ok) throw new Error(`Extension preflight failed: ${await response.text()}`);
-      const session = await response.json<ExtensionSession>();
-      await this.ctx.storage.put("identity", session);
-      return session;
+      try {
+        return await this.bringUpExecutor(input, lease, token);
+      } catch (error) {
+        // Our own deploy takes containers away for minutes after the rollout
+        // reports itself finished — five minutes on run #195, ten on #202,
+        // both after deliberately waiting for "completed" (CHE-272). Losing a
+        // paid run to our own release is not a fact about anyone's product.
+        //
+        // Safe here and only here: a paid session is started by a tool during
+        // the walk, never by this call, so at this point no meter exists to
+        // leave running. Once one does, an eviction must still fail the
+        // attempt — a second container cannot press Stop on the first one's
+        // session.
+        if (!(await this.evictedByOurOwnRollout())) throw error;
+        console.log("[extension-runner] executor evicted by our own rollout; taking a fresh container");
+        await this.ctx.storage.delete("lastEviction");
+        await this.destroy().catch(() => {});
+        return await this.bringUpExecutor(input, lease, token);
+      }
     } catch (error) {
       // Read after the attempt is torn down: the stop event lands during
       // cleanup, and a failure that reports nothing is the thing this whole
@@ -55,6 +57,35 @@ export class ExtensionRunner extends Container<AgentBindings> {
       const exit = await this.ctx.storage.get<ExecutorExit>("lastExit");
       throw new Error(describeExecutorExit(error, exit));
     }
+  }
+
+  // One call starts the instance and waits for its port, then opens the
+  // session on it. Splitting the start from the port wait to get an earlier
+  // look at the runtime's monitor cost a run (#189): the extra start is a
+  // second lifecycle on the same attempt.
+  private async bringUpExecutor(input: ExtensionRunnerInput, lease: Lease, token: string): Promise<ExtensionSession> {
+    await this.startAndWaitForPorts({
+      ports: 9090,
+      startOptions: { envVars: { RUNNER_CONTROL_TOKEN: token } },
+      cancellationOptions: { instanceGetTimeoutMS: 60_000, portReadyTimeoutMS: 90_000 },
+    });
+    const response = await this.fetch(new Request("http://runner/session", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...input, maxDurationSeconds: Math.max(1, Math.floor((lease.expiresAt - Date.now()) / 1000)) }),
+    }));
+    if (!response.ok) throw new Error(`Extension preflight failed: ${await response.text()}`);
+    const session = await response.json<ExtensionSession>();
+    await this.ctx.storage.put("identity", session);
+    return session;
+  }
+
+  // Two signals, because they race: the runtime names the rollout in the error
+  // it hands onError, and the stop event carries SIGTERM. A container that
+  // failed on its own merits exits 1 (a crash) or 137 (killed for memory) —
+  // neither is the platform asking politely, so neither is retried here.
+  private async evictedByOurOwnRollout(): Promise<boolean> {
+    if (await this.ctx.storage.get<number>("lastEviction")) return true;
+    return (await this.ctx.storage.get<ExecutorExit>("lastExit"))?.exitCode === 143;
   }
 
   // The executor's own death is the one fact a "the container is not running"
@@ -71,7 +102,15 @@ export class ExtensionRunner extends Container<AgentBindings> {
   }
 
   override onError(error: unknown): unknown {
-    console.error(`[extension-runner] executor error: ${error instanceof Error ? `${error.name}: ${error.message}` : String(error)}`);
+    const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+    console.error(`[extension-runner] executor error: ${message}`);
+    // The runtime says so in words when it is the one taking the container:
+    // "Runtime signalled the container to exit due to a new version rollout".
+    // Recorded rather than only logged, because the decision to take a fresh
+    // container is made a moment later and cannot re-read a log line.
+    if (/new version rollout/i.test(message)) {
+      this.ctx.waitUntil(this.ctx.storage.put("lastEviction", Date.now()).then(() => {}, () => {}));
+    }
     return error;
   }
 

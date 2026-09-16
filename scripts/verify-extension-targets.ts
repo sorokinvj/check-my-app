@@ -50,7 +50,7 @@ const db = {
 const deps = { trigger: async (runId: string) => {triggered.push(runId);} };
 await startCheck(db, {input: createCheckSchema.parse({url,extension:config}), ownerId:null,anonKeyHash:"fixture"},deps);
 await startPaidCheck(db, "pending", "fixture-payment", deps);
-await startSavedApp(db,{id:"owner",plan:"business"},"app",{...deps,siteCap:()=>20});
+await startSavedApp(db,{id:"owner",teamId:"team_owner",plan:"business"},"app",{...deps,siteCap:()=>20});
 for (const row of rows) {
   assert.equal(row.targetKind, "extension");
   assert.equal(row.extensionId, id);
@@ -60,16 +60,16 @@ for (const row of rows) {
 assert.equal(rows.length, 3);
 assert.equal(triggered.length, 3);
 assert.equal(rows[2].appId, "app");
-assert.deepEqual(await startSavedApp(db,{id:"other-owner",plan:"business"},"app",{...deps,siteCap:()=>20}),{error:"App not found."});
+assert.deepEqual(await startSavedApp(db,{id:"other-owner",teamId:"team_other-owner",plan:"business"},"app",{...deps,siteCap:()=>20}),{error:"App not found."});
 assert.equal(rows.length, 3, "A different owner must not start a run with saved credentials");
 db.run.findFirst = (async ({ where }: { where: { status: { notIn: string[] } } }) => where.status.notIn.includes('partial') ? null : { publicId: 'old-unverified' }) as typeof db.run.findFirst;
-assert.notDeepEqual(await startSavedApp(db, { id: 'owner', plan: 'business' }, 'app', { ...deps, siteCap: () => 20 }), { publicId: 'old-unverified' });
+assert.notDeepEqual(await startSavedApp(db, { id: 'owner', teamId: 'team_owner', plan: 'business' }, 'app', { ...deps, siteCap: () => 20 }), { publicId: 'old-unverified' });
 assert.equal(rows.length, 4, 'Adding access after a partial check can start a fresh saved-app run');
 const watchDb = {run:{findUnique: async()=>({...app,ownerId:"owner",ephemeral:false})}} as unknown as PrismaClient;
-assert.equal((await enableWatchForRun(watchDb,{id:"owner",plan:"business",clerkOrgId:null},{runPublicId:"p",frequency:"daily",notifyOnChangeOnly:true})).kind,"gated");
+assert.equal((await enableWatchForRun(watchDb,{id:"owner",teamId:"team_owner",plan:"business"},{runPublicId:"p",frequency:"daily",notifyOnChangeOnly:true})).kind,"gated");
 const rechecked: Record<string, unknown>[] = [];
 let savedReads = 0;
-const previous = { ...app, id: 'old-run', appId: 'app', ownerId: 'owner', testPasswordEnc: null, targetKind: 'extension', extensionId: id, extensionConfig: JSON.stringify(config), owner: { plan: 'business' }, ephemeral: false };
+const previous = { ...app, id: 'old-run', appId: 'app', ownerId: 'owner', testPasswordEnc: null, targetKind: 'extension', extensionId: id, extensionConfig: JSON.stringify(config), teamId: 'team_owner', team: { plan: 'business' }, ephemeral: false };
 const recheckDb = {
   run: { findUnique: async ({where}: {where: {publicId?: string}}) => where.publicId ? previous : null,
     create: async ({data}: {data: Record<string, unknown>}) => { rechecked.push(data); return { id: 'new-run', publicId: 'new-public' }; } },
@@ -85,7 +85,7 @@ assert.equal(rechecked[0].testEmail, 'saved@example.test');
 assert.equal(rechecked[0].userNotes, 'Saved permission');
 assert.equal((await createRecheckRun(recheckDb, 'old-public', {}, { ...recheckDeps, canMutate: async () => false })).kind, 'unauthorized');
 assert.equal(savedReads, 1, 'A stranger cannot even read saved extension credentials');
-previous.owner.plan = 'free';
+previous.team.plan = 'free';
 recheckDb.run.count = (async () => 1000) as typeof recheckDb.run.count;
 assert.equal((await createRecheckRun(recheckDb, 'old-public', {}, recheckDeps)).kind, 'quota', 'An installed-product recheck must respect the on-demand allowance');
 assert.equal(rechecked.length, 1);

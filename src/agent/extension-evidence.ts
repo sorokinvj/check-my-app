@@ -47,12 +47,12 @@ export function extensionAccountingStep(final: ExtensionFinalEvidence) {
   if (accounting?.status !== "confirmed" || !accounting.twoMinuteSteps || !Number.isSafeInteger(accounting.observedMinutes) || !accounting.sessions?.length) {
     return { label: "Session minutes", status: "skipped" as const, unverifiedReason: "our_capability" as const, gapClass: "extension_minute_accounting",
       attempted: "Check minute-by-minute charges and each session's final rounding.",
-      observed: "The sessions ended and the balance stayed unchanged for at least one minute after Stop. Minute-by-minute charges and final rounding were not confirmed." };
+      observed: "The sessions ended and the balance settled. Minute-by-minute charges and final rounding were not confirmed." };
   }
   const durations = accounting.sessions.map(row => `${row.durationSeconds} seconds`).join(" and ");
   return { label: "Session minutes", status: "ok" as const,
     attempted: "End the session and check its minute usage.",
-    observed: `${accounting.observedMinutes} minutes were used for the session${accounting.sessions.length === 1 ? "" : "s"} lasting ${durations}. The balance stayed unchanged for at least one minute after Stop.` };
+    observed: `${accounting.observedMinutes} minutes were used for the session${accounting.sessions.length === 1 ? "" : "s"} lasting ${durations}. Charging stopped when the session did.` };
 }
 
 export function extensionPhaseEvidence(phase: string, identity: ExtensionSession, final: ExtensionFinalEvidence) {
@@ -76,6 +76,12 @@ export function extensionPhaseEvidence(phase: string, identity: ExtensionSession
       final.session?.productResult?.failure?.text.trim().toLowerCase().replace(/\s+/g, " "),
     ])).digest("hex") : null,
     twoMinuteStepsObserved: final.session?.billing?.assessment?.twoMinuteSteps === true,
+    // What the person watching the screen would have seen move after the
+    // product told them the session had stopped, and how long it took to come
+    // to rest. The session stopping and the figure settling are two different
+    // moments, and only the first one is announced.
+    chargedAfterStop: Number.isSafeInteger(final.session?.billing?.assessment?.postStopChange) ? final.session!.billing!.assessment!.postStopChange! : null,
+    chargeSettledMs: Number.isSafeInteger(final.session?.billing?.assessment?.postStopSettledMs) ? final.session!.billing!.assessment!.postStopSettledMs! : null,
     sustainedSessionsObserved: Boolean(final.session?.sessions?.length && final.session.sessions.every(s => s.startedAt && s.cleanup?.stopClickedAt && s.cleanup.stopClickedAt - s.startedAt >= 120_000)),
     publicObservation: publicExtensionObservation(identity, final, extensionAccountingStep(final), Boolean(extensionProductFailureStep(final))),
   };

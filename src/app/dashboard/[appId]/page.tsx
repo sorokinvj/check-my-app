@@ -11,6 +11,12 @@ import { setIntegrationEndpoints, updateAppSettings } from "../actions";
 import { DeleteAppSection } from "@/components/delete-app";
 import { fullRechecksRemaining } from "@/lib/plans";
 import type { UserPlan } from "@/lib/enums";
+import { memberOfRows, teamOwned } from "@/lib/tenant-db";
+import { setAppNotifiers } from "@/app/dashboard/actions";
+import { switchTeamAction } from "@/app/team/switch-actions";
+import { getCloudflareContext } from "@opennextjs/cloudflare";
+import { AnalyticsProject } from "@/components/analytics-project";
+import { projectChoicesFor } from "@/lib/posthog/choices";
 
 // Per-app settings (CHE-64, redesigned CHE-81). Three meaning-first sections —
 // the page will keep growing, so hierarchy comes from sections, not from a pile
@@ -29,13 +35,50 @@ export default async function AppSettingsPage({
   params: Promise<{ appId: string }>;
 }) {
   const { appId } = await params;
-  const { user, db } = await requireUser();
+  const { user, db, team } = await requireUser();
 
   const app = await db.app.findFirst({
-    where: { id: appId, ownerId: user.id },
+    where: { ...teamOwned(team.id), id: appId },
     include: { watch: true, policy: true, tracker: true, repo: true, runs: { orderBy: { createdAt: "desc" }, take: 1, select: { extensionEvidence: true } } },
   });
-  if (!app) notFound();
+  // CHE-261: not in the team you are acting as — but possibly in another of
+  // your teams. Offer the switch; never switch silently (a page that changes
+  // which team you are acting as, because of a link you followed, is how a
+  // check gets started against the wrong budget), and never 404 a row this
+  // person is entitled to see.
+  if (!app) {
+    const elsewhere = await db.app.findFirst({
+      where: { ...memberOfRows(user.id), id: appId },
+      select: { id: true, appSlug: true, teamId: true, team: { select: { name: true } } },
+    });
+    if (!elsewhere?.teamId) notFound();
+    return (
+      <main className="mx-auto w-full max-w-2xl px-4 py-16">
+        <section className="card p-6">
+          <h1 className="text-xl font-semibold">{elsewhere.appSlug} belongs to {elsewhere.team?.name}</h1>
+          <p className="mt-2 text-sm text-fg-muted">
+            You are on that team, but you are currently acting as {team.name}. Switching changes which
+            team&apos;s plan pays for anything you start.
+          </p>
+          <form action={switchTeamAction.bind(null, elsewhere.teamId, `/dashboard/${appId}`)}>
+            <button type="submit" className="btn-primary mt-6">Switch to {elsewhere.team?.name}</button>
+          </form>
+        </section>
+      </main>
+    );
+  }
+
+  // CHE-262: who on the team is told about this app. No chosen recipients means
+  // the team's admins, which is what the copy below says rather than leaving the
+  // reader to infer it from an empty list.
+  const teamMembers = await db.membership.findMany({
+    where: { teamId: team.id },
+    select: { userId: true, scope: true, user: { select: { email: true, name: true } } },
+    orderBy: { createdAt: "asc" },
+  });
+  const chosen = new Set(
+    (await db.appNotifier.findMany({ where: { appId }, select: { userId: true } })).map((n) => n.userId),
+  );
 
   const pickupLabels = (JSON.parse(app.policy?.pickupLabels ?? "[]") as string[]).join(", ");
   const repoLabel = app.policy?.repoLabel ?? "";
@@ -53,7 +96,7 @@ export default async function AppSettingsPage({
   // CHE-137: full re-checks are an allowance per owner and UTC month (the
   // regular re-check after a deploy is not limited). Shown where the owner
   // decides when their app is checked.
-  const fullRechecks = await fullRechecksRemaining(db, { id: user.id, plan: user.plan as UserPlan });
+  const fullRechecks = await fullRechecksRemaining(db, { id: team.id, plan: team.plan as UserPlan });
   const fullRechecksLine =
     fullRechecks.limit === null
       ? "Full re-checks this month: unlimited"
@@ -69,6 +112,15 @@ export default async function AppSettingsPage({
       : tracker.tokenExpiresAt && tracker.tokenExpiresAt <= new Date()
         ? { tone: "bad" as const, text: "token expired — reconnect to restore ticket filing" }
         : { tone: "warn" as const, text: "reconnect to enable token auto-renew" };
+
+  // CHE-237: the projects this team's PostHog connection can see, ranked for
+  // this app. Costs nothing when no connection exists, which is the common case
+  // — and an app without one is not broken, it just keeps our own estimate.
+  const projectChoices = await projectChoicesFor(db, {
+    teamId: team.id,
+    appUrl: app.targetUrl,
+    clientId: `${((getCloudflareContext().env as Record<string, string | undefined>).APP_URL ?? "https://checkmyapp.dev").replace(/\/+$/, "")}/.well-known/posthog-client.json`,
+  });
 
   return (
     <main className="mx-auto w-full max-w-3xl px-4 py-12">
@@ -212,6 +264,38 @@ export default async function AppSettingsPage({
           </div>
         </section>}
       </form>
+
+      {/* ── Who hears about it (CHE-262) ──────────────────────────────── */}
+      <section className="mt-12 space-y-4">
+        <div>
+          <h2 className="text-lg font-medium">Who hears about it</h2>
+          <p className="mt-1 text-sm text-fg-muted">
+            {chosen.size === 0
+              ? "Nobody chosen yet, so verdicts go to the team's admins. Pick people and they go to them instead."
+              : "Verdicts for this app go to the people ticked here."}
+          </p>
+        </div>
+        <form action={setAppNotifiers.bind(null, appId)} className="card space-y-3 p-4">
+          {teamMembers.map((m) => (
+            <label key={m.userId} className="flex items-center gap-3 text-sm">
+              <input type="checkbox" name="notifier" value={m.userId} defaultChecked={chosen.has(m.userId)} />
+              <span>
+                {m.user.name?.trim() || m.user.email}
+                <span className="text-fg-muted"> · {m.scope}</span>
+                {m.userId === user.id && <span className="text-fg-muted"> · you</span>}
+              </span>
+            </label>
+          ))}
+          <button type="submit" className="btn-secondary text-sm">Save who hears about it</button>
+        </form>
+      </section>
+
+      {/* ── Which PostHog project holds this app's data (CHE-237) ──────── */}
+      <AnalyticsProject
+        appId={appId}
+        chosen={app.posthogProjectId ? { id: app.posthogProjectId, name: app.posthogProjectName } : null}
+        choices={projectChoices}
+      />
 
       {/* ── 3 · Where results go ──────────────────────────────────────── */}
       <section className="mt-12 space-y-4">

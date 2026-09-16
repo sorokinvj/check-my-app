@@ -1,0 +1,144 @@
+// CHE-264 (Teams T11) verification: a change that nobody can trace is a change
+// that did not get logged, and the log is kept by the code rather than by
+// habit.
+//
+// The check is over the mutating exports themselves: every server action that
+// changes membership, billing, credentials or an app must call
+// `recordTeamEvent`. A log written by whoever remembers to call it is complete
+// until the first person forgets — and the failure is invisible, because a
+// missing line looks exactly like "nothing happened".
+//
+// Rule 8 calls this class **bookkeeping**: losing track of what we had done or
+// been told. The precedent in this codebase is CHE-89/CHE-98 — a paused watch
+// came back to life because an agent pressed resume while exploring. With one
+// owner that was traceable by memory. With five people it is not.
+//
+// Usage: npx tsx --tsconfig tsconfig.json scripts/verify-team-events.ts
+
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { join } from "node:path";
+import { describeEvent } from "@/lib/team-events";
+
+let failures = 0;
+function check(name: string, ok: boolean, detail = "") {
+  if (!ok) failures++;
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? `  →  ${detail}` : ""}`);
+}
+
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
+const read = (rel: string) => readFileSync(join(ROOT, rel), "utf8");
+
+// The exports that change something a team would want traced, and the file
+// each lives in. Adding a mutation means adding it here — which is the point:
+// the list is the decision, and the check is that the code matches it.
+const MUST_LOG: [string, string][] = [
+  ["src/app/team/actions.ts", "inviteMemberAction"],
+  ["src/app/team/actions.ts", "revokeInviteAction"],
+  ["src/app/team/actions.ts", "changeScopeAction"],
+  ["src/app/team/actions.ts", "removeMemberAction"],
+  ["src/app/team/actions.ts", "leaveTeamAction"],
+  ["src/app/invite/[token]/actions.ts", "acceptInviteAction"],
+  ["src/app/dashboard/actions.ts", "createApiKey"],
+  ["src/app/dashboard/actions.ts", "revokeApiKey"],
+  ["src/app/dashboard/actions.ts", "updateAppSettings"],
+  ["src/app/dashboard/actions.ts", "deleteApp"],
+  ["src/app/dashboard/actions.ts", "setAppNotifiers"],
+  // CHE-237: which project an app's numbers come from decides what every later
+  // verdict claims a journey is worth. Changing it silently would make two
+  // verdicts disagree with no record of why.
+  ["src/app/dashboard/actions.ts", "setAppPosthogProject"],
+  ["src/app/dashboard/actions.ts", "setTrackerTeam"],
+  // CHE-236: ending the team's analytics access. "Why did the funnel numbers
+  // stop" must have a name and a date behind it, not a reconstruction.
+  ["src/app/dashboard/actions.ts", "disconnectPostHog"],
+];
+
+function bodyOf(text: string, fn: string): string {
+  const at = text.indexOf(`export async function ${fn}`);
+  if (at < 0) return "";
+  const next = text.indexOf("\nexport ", at + 1);
+  return text.slice(at, next < 0 ? text.length : next);
+}
+
+for (const [file, fn] of MUST_LOG) {
+  const body = bodyOf(read(file), fn);
+  check(`${fn} exists`, body.length > 0, file);
+  check(
+    `${fn} writes an audit line`,
+    /recordTeamEvent\(/.test(body),
+    body.length ? "" : "function not found",
+  );
+}
+
+// A mutating export that nobody listed is the case this check cannot see, so
+// the list is compared against reality in the other direction too: every
+// server action in these files is either on the list or explicitly not a
+// change worth tracing.
+const NOT_TRACED = new Set([
+  // Starting a check is traced by the run itself — it has an owner, a team and
+  // a verdict page. A second record would be a second answer.
+  "runSavedApp",
+  // Reading and toggling your own notifications is yours alone; an audit line
+  // for "I ticked a box for myself" is noise that buries the lines that matter.
+  "toggleOwnNotifications",
+  // Endpoints are covered by the settings line in updateAppSettings.
+  "setIntegrationEndpoints",
+]);
+for (const file of ["src/app/team/actions.ts", "src/app/dashboard/actions.ts"]) {
+  const text = read(file);
+  for (const m of text.matchAll(/export async function (\w+)/g)) {
+    const fn = m[1];
+    const listed = MUST_LOG.some(([f, name]) => f === file && name === fn);
+    check(
+      `${fn} is either logged or deliberately not`,
+      listed || NOT_TRACED.has(fn),
+      listed ? "logged" : NOT_TRACED.has(fn) ? "deliberately not" : "UNDECIDED — add it to one list or the other",
+    );
+  }
+}
+
+// ─── The log itself ──────────────────────────────────────────────────────────
+
+const lib = read("src/lib/team-events.ts");
+check(
+  "an audit line never fails the change it describes",
+  /try \{[\s\S]*teamEvent\.create[\s\S]*catch/.test(lib),
+);
+check(
+  "…and says so loudly instead of silently dropping it",
+  /console\.warn/.test(lib),
+);
+// The closed list is about what may be WRITTEN. describeEvent reads a row back
+// from the database, where the column is a string like every other — checking
+// that too would be asserting SQLite's type system rather than our rule.
+check(
+  "the action list is closed — a new kind of change is a decision, not a string",
+  /export type TeamEventAction =/.test(lib) &&
+    /export type TeamEventInput = \{[\s\S]*?action: TeamEventAction;/.test(lib),
+);
+check(
+  "a system change is attributed to the system rather than to nobody",
+  describeEvent({ action: "billing.plan_changed", subject: null, summary: "plan changed to starter", actorEmail: null, createdAt: new Date() }) ===
+    "CheckMyApp — plan changed to starter",
+  describeEvent({ action: "billing.plan_changed", subject: null, summary: "plan changed to starter", actorEmail: null, createdAt: new Date() }),
+);
+check(
+  "a person's change names the person",
+  describeEvent({ action: "member.invited", subject: "a@b.test", summary: "invited a@b.test as reader", actorEmail: "boss@team.test", createdAt: new Date() }) ===
+    "boss@team.test — invited a@b.test as reader",
+);
+
+// Rule 1: this is an account log. Nothing here may leak into what a customer
+// reads about their own product, so the summaries must not describe our
+// machinery.
+const OUR_MACHINERY = /headless|playwright|our (test )?browser|in our environment/i;
+for (const [file] of MUST_LOG) {
+  const text = read(file);
+  for (const m of text.matchAll(/summary: `([^`]*)`/g)) {
+    check(`summary says nothing about our machinery: "${m[1].slice(0, 48)}"`, !OUR_MACHINERY.test(m[1]));
+  }
+}
+
+console.log(failures === 0 ? "\nall pass" : `\n${failures} FAILED`);
+process.exit(failures === 0 ? 0 : 1);

@@ -12,12 +12,16 @@ import { appSlugFromUrl } from "@/lib/utils";
 import { captureServer, serverDistinctId } from "@/lib/analytics-server";
 import type { CreateCheckInput } from "@/lib/validation";
 import { extensionColumns } from "@/lib/extension-target";
+import { alreadyScoped } from "@/lib/tenant-db";
 
 export interface StartCheckOptions {
   // The validated submission (createCheckSchema output).
   input: CreateCheckInput;
   // Attribution: a signed-in owner, or the anonymous client's salted IP hash.
   ownerId: string | null;
+  // CHE-253: the team whose plan pays for this run. Null exactly when ownerId
+  // is — an anonymous check belongs to nobody and is billed to nobody.
+  teamId?: string | null;
   anonKeyHash: string | null;
   // A paid one-off check: the Stripe Checkout Session that paid for it. The
   // column is unique, so a second start on the same payment fails at the
@@ -67,13 +71,13 @@ export async function startCheck(
   const appId =
     opts.ownerId && !opts.ephemeral
       ? ((
-          await db.app.findUnique({
+          await db.app.findUnique({ ...alreadyScoped("the unique key names the owner"),
             where: { ownerId_appSlug: { ownerId: opts.ownerId, appSlug } },
             select: { id: true },
           })
         )?.id ?? null)
       : null;
-  const run = await db.run.create({
+  const run = await db.run.create({ ...alreadyScoped("created with its team"),
     data: {
       runNumber: await nextRunNumber(db),
       appId,
@@ -89,6 +93,7 @@ export async function startCheck(
       deploySha: input.deploy?.sha ?? null,
       deployEnv: input.deploy?.env || null,
       ownerId: opts.ownerId,
+      teamId: opts.teamId ?? null,
       anonKeyHash: opts.anonKeyHash,
       paidCheckoutSessionId: opts.paid?.checkoutSessionId ?? null,
       ephemeral: Boolean(opts.ephemeral),

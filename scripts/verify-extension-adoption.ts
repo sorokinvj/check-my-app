@@ -5,7 +5,13 @@ async function main() {
   const mocks: Record<string, string> = {
     'next/server': 'export const NextResponse = { json: (value, init) => new Response(JSON.stringify(value), init) };',
     '@/lib/db': 'export const getDbFromContext = async () => fixture.db;',
-    '@/lib/auth': 'export const getOptionalUser = async () => fixture.user;',
+    // CHE-253: routes resolve the team the caller acts for alongside the user.
+    '@/lib/auth': 'export const getOptionalUser = async () => fixture.user; export const optionalTeamContext = async (_db, user) => user ? { team: { id: `team_${user.id}`, name: user.email ?? user.id, isPersonal: true, plan: fixture.plan ?? "free", stripeCustomerId: null, stripeSubscriptionId: null }, scope: "admin" } : null;',
+    // CHE-255: the route asks the scope table whether this caller may connect
+    // an integration. The stub answers as an admin of the caller's own team —
+    // and refuses when there is no caller, which is the behaviour the route
+    // relies on for its 401.
+    '@/lib/team-auth': 'export const requireScope = async (_db, _req, _action) => fixture.user ? { ok: true, grant: { user: fixture.user, team: { id: `team_${fixture.user.id}`, name: fixture.user.id, isPersonal: true, plan: fixture.plan ?? "free", stripeCustomerId: null, stripeSubscriptionId: null }, scope: "admin", via: "clerk" } } : { ok: false, response: new Response(JSON.stringify({ error: "Sign in to do that" }), { status: 401 }) };',
     '@/lib/crypto': 'export const encryptSecret = () => "encrypted-fixture";',
     '@/lib/github': 'export class GitHubError extends Error {} export const validateRepoAccess = async () => { fixture.validations++; return { defaultBranch: "main" }; };',
   };

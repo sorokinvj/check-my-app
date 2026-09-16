@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { getDb } from "@/lib/db";
 import { getOptionalUser } from "@/lib/auth";
+import { requireScope } from "@/lib/team-auth";
 import {
   BILLING_UNCONFIGURED,
   getStripe,
@@ -29,10 +30,11 @@ export async function POST(req: Request) {
   if (!stripe) return NextResponse.json(BILLING_UNCONFIGURED, { status: 503 });
 
   const db = getDb(env as unknown as { DB: D1Database });
-  const user = await getOptionalUser(db);
-  if (!user) {
-    return NextResponse.json({ error: "Sign in to upgrade" }, { status: 401 });
-  }
+  // CHE-255: one guard, one registry entry. The subscription belongs to the
+  // team this person is acting for, and only an admin may buy one.
+  const decision = await requireScope(db, req, "billing.manage", "Sign in to upgrade");
+  if (!decision.ok) return decision.response;
+  const { user, team } = decision.grant;
 
   const json = (await req.json().catch(() => null)) as { plan?: unknown } | null;
   const plan = json?.plan;
@@ -50,25 +52,27 @@ export async function POST(req: Request) {
   const createCustomer = async () => {
     const customer = await stripe.customers.create({
       email: user.email || undefined,
-      name: user.name ?? undefined,
-      metadata: { userId: user.id },
+      name: team.name || user.name || undefined,
+      metadata: { teamId: team.id, createdByUserId: user.id },
     });
-    await db.user.update({
-      where: { id: user.id },
+    await db.team.update({
+      where: { id: team.id },
       data: { stripeCustomerId: customer.id },
     });
     return customer.id;
   };
-  let customerId = user.stripeCustomerId ?? (await createCustomer());
+  let customerId = team.stripeCustomerId ?? (await createCustomer());
 
   const createSession = (customer: string) =>
     stripe.checkout.sessions.create({
       mode: "subscription",
       customer,
       line_items: [{ price: priceId, quantity: 1 }],
-      // Both id carriers on purpose: the webhook resolves the user from either.
+      // client_reference_id stays the person (it is what PostHog joins on);
+      // teamId is what the webhook writes the plan to. userId is kept so a
+      // session created before CHE-253 and paid after it still resolves.
       client_reference_id: user.id,
-      metadata: { userId: user.id },
+      metadata: { teamId: team.id, userId: user.id },
       success_url: `${APP_URL}/dashboard?upgraded=1`,
       cancel_url: `${APP_URL}/pricing`,
     });

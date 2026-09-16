@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import type { Journey, Step } from "@/generated/prisma/client";
 import { STEP_STATUS_META } from "@/lib/status";
+import { JourneyNumbersBlock, type JourneyNumbersProps } from "@/components/journey-numbers-block";
 
 type JourneyWithSteps = Journey & { steps: Step[] };
 
@@ -12,10 +13,13 @@ type JourneyWithSteps = Journey & { steps: Step[] };
 // screenshot people share — keep it beautiful.
 export function JourneyStrips({
   journeys,
+  numbers,
   emptyNote,
   carriedRunNumbers,
 }: {
   journeys: JourneyWithSteps[];
+  // CHE-240: our estimate and their measurement, keyed by journey id.
+  numbers?: Record<string, JourneyNumbersProps>;
   // Why there are no strips, when the run knows. A green verdict next to a bare
   // "no journeys" reads as a contradiction — a replay-first smoke pass (CHE-51)
   // says here that it carried the verdict forward without re-walking.
@@ -57,6 +61,7 @@ export function JourneyStrips({
         <JourneyCard
           key={journey.id}
           journey={journey}
+          numbers={numbers?.[journey.id]}
           collapsedByDefault={i >= 2}
           carriedRunNumber={
             journey.carriedFromRunId ? carriedRunNumbers?.[journey.carriedFromRunId] : undefined
@@ -75,10 +80,12 @@ function JourneyCard({
   journey,
   collapsedByDefault,
   carriedRunNumber,
+  numbers,
 }: {
   journey: JourneyWithSteps;
   collapsedByDefault: boolean;
   carriedRunNumber?: number;
+  numbers?: JourneyNumbersProps;
 }) {
   const [open, setOpen] = useState(!collapsedByDefault);
   const [selected, setSelected] = useState<Step | null>(null);
@@ -245,6 +252,11 @@ function JourneyCard({
               <span className="text-fg-muted">{journey.summary}</span>
             </p>
           )}
+
+          {/* CHE-240: what we judged, and what their own analytics counted —
+              the same kind of row each, every one naming its source, so a
+              reader compares them instead of guessing which is which. */}
+          {numbers && <JourneyNumbersBlock {...numbers} />}
 
           {lightbox && <Lightbox {...lightbox} onClose={() => setLightbox(null)} />}
 

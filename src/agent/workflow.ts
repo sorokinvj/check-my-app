@@ -45,13 +45,14 @@ import { discoverApp, type KnownMap, type ProposedJourney, type RunInput } from 
 import { loadKnownMap } from "./known-map";
 import { loadAppKnowledge, type AppKnowledge } from "./knowledge";
 import { walkOneJourney, type WalkRun } from "./execution";
-import { catalogIsDeduplicated, recordJourneyCost } from "./journey-catalog";
+import { catalogIsDeduplicated, journeysForPlanning, noteDiscoveryCoverage, recordJourneyCost } from "./journey-catalog";
 import { orderByFocus } from "./limits";
 import { parseActions, replayJourney, type ReplayResult } from "./journey-replay";
 import { claimedHands, drivenControls, gateFindings } from "./findings-gate";
 import { synthesizeVerdict, type SynthesizedFinding } from "./synthesis";
 import { autoFileFindings } from "./autofile";
 import { fileCapabilityGaps, fileDeliveryGap } from "./capability-gaps";
+import { measureRunJourneys, measurementNote } from "./journey-measurement";
 import { GAP_CLASSES } from "./gap-classes";
 import { auditCreatedResources } from "./cleanup";
 import { reconcileIssueLinks, reverifyInstructions, verifyFixedLinks } from "./reconcile";
@@ -84,6 +85,7 @@ import {
 } from "./snapshot";
 import {
   carryJourney,
+  fullRunQueue,
   partialBottomLine,
   planPartialRun,
   type PartialDecision,
@@ -135,6 +137,8 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
           appId: true,
           // CHE-136: tracker settlements are kept per owner (CHE-101).
           ownerId: true,
+          // CHE-253/CHE-262: whose run this is, and therefore who hears about it.
+          teamId: true,
         },
       });
       if (!r) throw new Error(`run ${runId} not found`);
@@ -581,16 +585,58 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
       // they had in the baseline, with the carried ones filling the rest — so
       // journey order, dedupKeys (CHE-50) and synthesis stepRefs all line up with
       // the picture the owner already knows.
+      // CHE-232: on a full run the catalog gets the last slots. Discovery
+      // proposes what it sees; the catalog knows what has waited longest, and
+      // without this the model picks its five headline flows every run and the
+      // long tail of a big app is never walked again. Partial runs already plan
+      // from the catalog, and they are one run in five.
+      // CHE-232: a journey the product no longer has retires after three full
+      // checks that mapped the app and did not find it. Only here, and only on
+      // a full run: a smoke pass and a partial run propose nothing, and reading
+      // their silence as absence would retire a whole catalog in three quiet
+      // days. Best-effort by contract, like every other catalog write.
+      if (!plan.taken && run.appId && discovery?.journeys?.length) {
+        await step.do("journey-retirement", async () => {
+          try {
+            const retired = await noteDiscoveryCoverage(env, run.appId as string, discovery.journeys);
+            if (retired.length) {
+              await appendEvent(env, runId, "discovery", {
+                icon: "info",
+                text: `No longer part of this app: ${retired.slice(0, 4).join(" · ")}${retired.length > 4 ? ` and ${retired.length - 4} more` : ""}`,
+              });
+            }
+          } catch (err) {
+            console.warn(`[journey] retirement pass skipped: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        });
+      }
+
+      const fullWalkList = await step.do("walk-queue", async (): Promise<ProposedJourney[]> => {
+        const focused = orderByFocus(discovery?.journeys ?? [], run.focusAreas);
+        if (!run.appId) return focused;
+        try {
+          const catalog = await journeysForPlanning(env, run.appId);
+          const queue = fullRunQueue({ proposed: focused, catalog, now: new Date() });
+          const added = queue.filter((q) => !focused.slice(0, queue.length).some((f) => f.title === q.title));
+          if (added.length) {
+            console.log(`[rotation] full run: ${added.length} slot(s) to the catalog queue — ${added.map((a) => a.title).join(" · ")}`);
+          }
+          return queue;
+        } catch (err) {
+          // A catalog we could not read costs this run its rotation, never the
+          // run: the same swallow contract every pre-flight rung here uses.
+          console.warn(`[rotation] full-run queue fell back to discovery order: ${err instanceof Error ? err.message : String(err)}`);
+          return focused;
+        }
+      });
+
       const walkList: Array<{ order: number; proposed: ProposedJourney }> = plan.taken
         ? plan.rewalk.map((r) => ({ order: r.order, proposed: { title: r.title, steps: r.steps } }))
         : // CHE-134: journeys covering the owner's focus areas walk first, so a
           // budget cut (an iteration cap, a run time limit, a retry that gives
           // up) lands on the journeys they did not single out. `order` is
           // assigned after the sort: it is the walk position, 0..n-1.
-          orderByFocus(discovery?.journeys ?? [], run.focusAreas).map((proposed, i) => ({
-            order: i,
-            proposed,
-          }));
+          fullWalkList.map((proposed, i) => ({ order: i, proposed }));
 
       await step.do("walking-start", async () => {
         await transition(env, runId, "walking", {
@@ -922,6 +968,24 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
         } catch (err) {
           const text = err instanceof Error ? err.message : String(err);
           console.warn(`[capability] gap filing failed: ${text}`);
+        }
+      });
+
+      // CHE-239: what the customer's own analytics say happened on the journeys
+      // we just walked. One point per journey per run, so the series can later
+      // answer "conversion fell from 31% to 12%" rather than only "it is 12%".
+      //
+      // After the walk and after gap filing, and wrapped in its own step: this
+      // is a read of someone else's system, and a failure in it must cost the
+      // measurement and nothing else. measureRunJourneys never throws; the
+      // try/catch is the second belt.
+      await step.do("measure-journeys", async () => {
+        try {
+          const summary = await measureRunJourneys(env, runId, { appUrl: env.bindings.APP_URL });
+          const note = measurementNote(summary);
+          if (note) await appendEvent(env, runId, "writing", { icon: "info", text: note });
+        } catch (err) {
+          console.warn(`[measure] skipped: ${err instanceof Error ? err.message : String(err)}`);
         }
       });
 

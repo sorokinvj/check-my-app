@@ -62,7 +62,7 @@ async function main() {
   assert.equal(extensionCoverageGap(joblander, JSON.stringify(complete)), "our_capability");
   assert.equal(extensionCoverageGap(joblander, "invalid evidence"), "our_capability");
   const accountingFinal = { disposed: true, session: { ...identity, sessions: [{ id: "extension-capture", state: "stopped", cleanup: { applicationStopObserved: true } }], applicationCleanup: "ui-stop-observed", billingCleanup: "confirmed", billing: { assessment: { status: "confirmed", twoMinuteSteps: true, observedMinutes: 3, sessions: [{ id: "own-history-row", kind: "extension", dateUtc: "2026-09-12 20:07", durationSeconds: 149 }] } } } };
-  assert.match(extensionAccountingStep(accountingFinal)!.observed, /3 minutes.*149 seconds.*unchanged/);
+  assert.match(extensionAccountingStep(accountingFinal)!.observed, /3 minutes.*149 seconds.*Charging stopped when the session did/);
   assert.equal(extensionAccountingStep({ ...accountingFinal, disposed: false }), null);
   // The case we know least about must not record the most. An unconfirmed
   // cleanup used to return nothing at all, so the journey rolled up "ok" on the

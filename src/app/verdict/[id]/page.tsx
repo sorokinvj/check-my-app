@@ -6,12 +6,13 @@ import { normalizeAnatomy } from "@/lib/anatomy";
 import { VERDICT_META } from "@/lib/status";
 import { AppLensSection } from "@/components/app-lens";
 import { JourneyStrips } from "@/components/journey-strip";
+import { numbersForJourneys } from "@/lib/journey-numbers-load";
 import { AppAnatomySection } from "@/components/app-anatomy";
 import { FindingsList } from "@/components/findings-list";
 import { EnableWatchButton, FullRecheckButton, RecheckButton } from "@/components/verdict-actions";
 import { ExportSpecs } from "@/components/export-specs";
 import { TrackOnView, TrackedLink } from "@/components/track";
-import { canMutateOwned, getOptionalUser } from "@/lib/auth";
+import { canMutateOwned, getOptionalUser, optionalTeamContext } from "@/lib/auth";
 import { viewerCapabilities } from "@/lib/viewer-capabilities";
 import { FINDING_PUBLIC_SELECT } from "@/lib/finding-fields";
 import { fullRechecksRemaining } from "@/lib/plans";
@@ -19,6 +20,7 @@ import type { UserPlan } from "@/lib/enums";
 import type { AppLens, RunEvent } from "@/lib/types";
 import { OG_IMAGE } from "@/lib/site-metadata";
 import { extensionDisplayName, extensionReportPublished } from "@/lib/extension-target";
+import { alreadyScoped, publicRow } from "@/lib/tenant-db";
 
 export const dynamic = "force-dynamic";
 
@@ -38,7 +40,7 @@ function formatDuration(start: Date, end: Date | null): string | null {
 // here is how many problems we found on it, and nothing about how we looked.
 export async function generateMetadata({ params }: { params: Promise<{ id: string }> }) {
   const prisma = await getDbFromContext();
-  const run = await prisma.run.findUnique({
+  const run = await prisma.run.findUnique({ ...publicRow(),
     where: { publicId: (await params).id },
     select: { appSlug: true, targetKind: true, targetUrl: true, extensionEvidence: true, verdict: true, _count: { select: { findings: true } } },
   });
@@ -85,7 +87,7 @@ export default async function VerdictPage({
         ? "That run no longer exists."
         : (recheck ?? null);
   const prisma = await getDbFromContext();
-  const run = await prisma.run.findUnique({
+  const run = await prisma.run.findUnique({ ...publicRow(),
     where: { publicId: (await params).id },
     include: {
       journeys: { include: { steps: { orderBy: { order: "asc" } } }, orderBy: { order: "asc" } },
@@ -130,12 +132,14 @@ export default async function VerdictPage({
   // so "Export to GitHub" renders in its connected state. Anonymous viewers get
   // the connect path (the export API redirects them to sign-in).
   const viewer = await getOptionalUser(prisma);
+  // CHE-253: the allowance shown to a signed-in viewer is their team's.
+  const viewerTeam = await optionalTeamContext(prisma, viewer);
   // CHE-202: an ephemeral run has no App and gets none — the lookup is skipped
   // rather than tolerated, so a preview hostname that happens to match an
   // onboarded app's slug never borrows that app's repo connection.
   const viewerApp =
     viewer && !run.ephemeral
-      ? await prisma.app.findUnique({
+      ? await prisma.app.findUnique({ ...alreadyScoped("the unique key names the owner"),
         where: { ownerId_appSlug: { ownerId: viewer.id, appSlug: run.appSlug } },
         include: { repo: { select: { repoFullName: true } } },
       })
@@ -158,7 +162,10 @@ export default async function VerdictPage({
   // reads the owner's current plan).
   const fullRecheckAllowance =
     caps.fullRecheck && viewer
-      ? await fullRechecksRemaining(prisma, { id: viewer.id, plan: viewer.plan as UserPlan })
+      ? await fullRechecksRemaining(prisma, {
+          id: viewerTeam!.team.id,
+          plan: (viewerTeam?.team.plan ?? "free") as UserPlan,
+        })
       : null;
   // The refusal of a full re-check comes back as ?recheck=<reason>, worded by
   // fullRecheckGate in src/lib/plans.ts; both of its refusals start with
@@ -184,17 +191,25 @@ export default async function VerdictPage({
   const carriedRunIds = [
     ...new Set(run.journeys.map((j) => j.carriedFromRunId).filter((id): id is string => Boolean(id))),
   ];
+  // CHE-240: the two numbers for each journey — what we judged by walking it,
+  // and what the customer's own analytics counted. Read here, labelled here,
+  // and never blended: a reader who cannot tell an estimate from a measurement
+  // will act on the wrong one.
+  const journeyNumbers = await numbersForJourneys(
+    prisma,
+    run.journeys.map((j) => ({ id: j.id, appJourneyId: j.appJourneyId })),
+  );
   const carriedRunNumbers = Object.fromEntries(
     carriedRunIds.length
       ? (
-          await prisma.run.findMany({
+          await prisma.run.findMany({ ...publicRow(),
             where: { id: { in: carriedRunIds } },
             select: { id: true, runNumber: true },
           })
         ).map((r) => [r.id, r.runNumber])
       : [],
   );
-  const newerRun = await prisma.run.findFirst({
+  const newerRun = await prisma.run.findFirst({ ...publicRow(),
     where: { baselineRunId: run.id, status: { in: ["completed", "partial"] } },
     orderBy: { createdAt: "desc" },
     select: { publicId: true, completedAt: true },
@@ -361,6 +376,7 @@ export default async function VerdictPage({
         />
         <JourneyStrips
           journeys={run.journeys}
+          numbers={journeyNumbers}
           carriedRunNumbers={carriedRunNumbers}
           emptyNote={
             smokePass

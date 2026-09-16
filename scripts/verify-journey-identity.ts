@@ -287,6 +287,69 @@ console.log("\nWhat the product does outranks what the title says");
     journeyKey("Session minutes", [k1, k2], null, "practice-extension"));
 }
 
+// CHE-247 layer 3. Before this, checkmyapp.dev held twelve catalog rows for
+// "start a check", because the product's own verbs were stopwords: "Check a web
+// app (primary value action)" reduced to [web], and a one-token title can never
+// reach the two-shared-token floor.
+console.log("\nThe product's own verb is not noise");
+{
+  const startish = [
+    "Check a web app (primary value action)",
+    "Analyze a web app by URL (primary value action)",
+    "Run a check on a target app URL",
+    "Verify the site end to end",
+  ];
+  for (const t of startish) {
+    check(`"${t.slice(0, 34)}…" carries the check verb`, tokenize(t).includes("start"), tokenize(t).join(" "));
+  }
+
+  // The floor itself: two titles that reduce to the SAME single token are the
+  // same journey. Only when both are one token — [start] must not swallow
+  // [start, web], or every check-shaped title would collapse into one row.
+  const a = "Run an app check (primary value action)";
+  const b = "Run a new app check (anonymous)";
+  check("two titles that reduce to the same lone token are one journey",
+    matchJourney(b, [{ key: "start", title: a }])?.key === "start",
+    `${tokenize(a).join()} vs ${tokenize(b).join()}`);
+  check("…but a lone token does not swallow a longer title",
+    matchJourney("Check a web app (primary value action)", [{ key: "start", title: a }]) === null,
+    String(matchJourney("Check a web app (primary value action)", [{ key: "start", title: a }])?.key));
+
+  // What this does NOT do, asserted so nobody reads more into it later: twelve
+  // wordings become five journeys, not one. "Check a link", "Check a web app"
+  // and "Run a free first-app check" still read as different journeys to a
+  // token rule, because the words that differ are the only words left. Going
+  // further needs a signal that is not the title — which is what scenario is
+  // for on the extension side, and what nothing provides for a website today.
+  const twelve = [
+    "Analyze a web app by URL (primary value action)",
+    "Check an app by URL (primary value action)",
+    "Check a web app (primary value action)",
+    "Check a link (primary value action)",
+    "Check a public app URL",
+    "Run a check on your app (core flow, stop before paid submit)",
+    "Run an app check (primary value action)",
+    "Run a new app check (anonymous)",
+    "Run a check on a target app URL",
+    "Run a free first-app check",
+    "Submit a URL for a free check",
+    "Submit an App for Automated QA Check (Primary Value Action)",
+  ];
+  const clustered: JourneyCandidate[] = [];
+  for (const title of twelve) {
+    const hit = matchJourney(title, clustered);
+    if (hit) {
+      (hit.aliases ??= [hit.title]).push(title);
+      continue;
+    }
+    clustered.push({ key: `k${clustered.length}`, title, aliases: [title] });
+  }
+  check("twelve wordings of one journey collapse to no more than six rows",
+    clustered.length <= 6, `${clustered.length} rows`);
+  check("…and not to one — a token rule cannot go further without a non-title signal",
+    clustered.length > 1, `${clustered.length} rows`);
+}
+
 console.log("\nA surface is a place, not a sentence about one");
 {
   check('"/pricing → /sign-up" is not a path', normalizeSurface("/pricing → /sign-up") === null, String(normalizeSurface("/pricing → /sign-up")));

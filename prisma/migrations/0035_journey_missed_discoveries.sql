@@ -1,0 +1,26 @@
+-- CHE-232: how many consecutive full checks mapped this app and did not find
+-- this journey.
+--
+-- The catalog already has `retiredAt` and every read filters on it, but nothing
+-- ever sets it: a journey the product removed stays in the catalog forever,
+-- taking a place in the rotation and a line in the map discovery is asked to
+-- confirm. checkmyapp.dev carries rows for journeys whose pages no longer
+-- exist.
+--
+-- Why a counter rather than a date. "Not walked for N days" cannot mean this:
+-- with the rotation, a healthy journey at the back of a long queue is not
+-- walked for days on purpose, and retiring it would be exactly wrong. What
+-- matters is a different question — did a run that MAPPED the app still see
+-- this journey? Only a full check maps; a smoke pass and a partial run never
+-- propose anything, so neither touches this number.
+--
+-- Three, not one: a journey can be missed for a run because a page was slow, an
+-- A/B test hid an entry point, or the model spent its budget elsewhere. Three
+-- consecutive full checks that all failed to see it is the product having
+-- changed, not a bad night.
+--
+-- A journey that is walked again has its counter cleared and its retirement
+-- undone (journey-catalog.ts) — a page that comes back brings its history with
+-- it rather than starting a new row beside the old one.
+
+ALTER TABLE "AppJourney" ADD COLUMN "missedDiscoveries" INTEGER NOT NULL DEFAULT 0;
