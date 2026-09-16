@@ -12,6 +12,7 @@ import { DeleteAppSection } from "@/components/delete-app";
 import { fullRechecksRemaining } from "@/lib/plans";
 import type { UserPlan } from "@/lib/enums";
 import { memberOfRows, teamOwned } from "@/lib/tenant-db";
+import { setAppNotifiers } from "@/app/dashboard/actions";
 import { switchTeamAction } from "@/app/team/switch-actions";
 
 // Per-app settings (CHE-64, redesigned CHE-81). Three meaning-first sections —
@@ -63,6 +64,18 @@ export default async function AppSettingsPage({
       </main>
     );
   }
+
+  // CHE-262: who on the team is told about this app. No chosen recipients means
+  // the team's admins, which is what the copy below says rather than leaving the
+  // reader to infer it from an empty list.
+  const teamMembers = await db.membership.findMany({
+    where: { teamId: team.id },
+    select: { userId: true, scope: true, user: { select: { email: true, name: true } } },
+    orderBy: { createdAt: "asc" },
+  });
+  const chosen = new Set(
+    (await db.appNotifier.findMany({ where: { appId }, select: { userId: true } })).map((n) => n.userId),
+  );
 
   const pickupLabels = (JSON.parse(app.policy?.pickupLabels ?? "[]") as string[]).join(", ");
   const repoLabel = app.policy?.repoLabel ?? "";
@@ -239,6 +252,31 @@ export default async function AppSettingsPage({
           </div>
         </section>}
       </form>
+
+      {/* ── Who hears about it (CHE-262) ──────────────────────────────── */}
+      <section className="mt-12 space-y-4">
+        <div>
+          <h2 className="text-lg font-medium">Who hears about it</h2>
+          <p className="mt-1 text-sm text-fg-muted">
+            {chosen.size === 0
+              ? "Nobody chosen yet, so verdicts go to the team's admins. Pick people and they go to them instead."
+              : "Verdicts for this app go to the people ticked here."}
+          </p>
+        </div>
+        <form action={setAppNotifiers.bind(null, appId)} className="card space-y-3 p-4">
+          {teamMembers.map((m) => (
+            <label key={m.userId} className="flex items-center gap-3 text-sm">
+              <input type="checkbox" name="notifier" value={m.userId} defaultChecked={chosen.has(m.userId)} />
+              <span>
+                {m.user.name?.trim() || m.user.email}
+                <span className="text-fg-muted"> · {m.scope}</span>
+                {m.userId === user.id && <span className="text-fg-muted"> · you</span>}
+              </span>
+            </label>
+          ))}
+          <button type="submit" className="btn-secondary text-sm">Save who hears about it</button>
+        </form>
+      </section>
 
       {/* ── 3 · Where results go ──────────────────────────────────────── */}
       <section className="mt-12 space-y-4">
