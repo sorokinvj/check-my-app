@@ -11,6 +11,8 @@ import { Button } from "@/components/ui/button";
 import { setIntegrationEndpoints } from "./actions";
 import { ApiKeys } from "@/components/api-keys";
 import { AnalyticsConnection } from "@/components/analytics-connection";
+import { AppPostHogProject } from "@/components/app-posthog-project";
+import { teamProjects } from "@/lib/posthog/choices";
 import { isStranded } from "@/lib/posthog/token";
 import { watchTrialState, PLAN_LIMITS } from "@/lib/plans";
 import type { UserPlan } from "@/lib/enums";
@@ -86,6 +88,15 @@ export default async function DashboardPage({
   );
 
   const posthog = await analyticsConnection(db, team.id);
+  // CHE-237: the projects this team's connection can see, listed ONCE for the
+  // whole page. Every app row picks from the same list — one request, however
+  // many apps. Null means there is no connection, or we could not list them;
+  // either way no picker is offered, because a dropdown with nothing in it is
+  // an invitation to wonder what went wrong.
+  const posthogProjects = await teamProjects(db, {
+    teamId: team.id,
+    clientId: `${((getCloudflareContext().env as Record<string, string | undefined>).APP_URL ?? "https://checkmyapp.dev").replace(/\/+$/, "")}/.well-known/posthog-client.json`,
+  });
 
   // CHE-67: the Connect Linear flow bounces back here with a hint when the
   // integration isn't set up yet or the OAuth handshake failed — surface it as
@@ -250,6 +261,21 @@ export default async function DashboardPage({
                     >
                       Connect Linear →
                     </a>
+                  )}
+                  {/* CHE-237: which PostHog project feeds THIS app. The
+                      connection is the team's; the project is the app's, and
+                      until this row existed there was no way to tell which fed
+                      which. A setting nobody can find is a setting nobody sets. */}
+                  {posthogProjects !== null && (
+                    <AppPostHogProject
+                      appId={app.id}
+                      chosen={
+                        app.posthogProjectId
+                          ? { id: app.posthogProjectId, name: app.posthogProjectName }
+                          : null
+                      }
+                      projects={posthogProjects}
+                    />
                   )}
                   {/* Outbound webhooks (CHE-53): generic endpoint + Slack preset,
                       POSTed after every completed watch run. */}
