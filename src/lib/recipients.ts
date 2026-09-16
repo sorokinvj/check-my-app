@@ -20,6 +20,9 @@
 // different question, decided earlier by silenceReason (rule 6) — this decides
 // only where an allowed verdict goes.
 
+import type { PrismaClient } from "@/generated/prisma/client";
+import { alreadyScoped } from "./tenant-db";
+
 export type RecipientSource = "submitted" | "chosen" | "team admins";
 
 export type RecipientResolution = {
@@ -76,4 +79,33 @@ export const NO_RECIPIENTS =
 export function describeRecipients(resolution: RecipientResolution): string {
   if (resolution.to.length === 0) return NO_RECIPIENTS;
   return `${resolution.to.length} recipient${resolution.to.length === 1 ? "" : "s"} (${resolution.via.join(" + ")})`;
+}
+
+// The database half of the rule above, exported so everything that mails a team
+// asks the same question. Metric alerts (CHE-241) resolve through this rather
+// than growing a second list: two lists diverge the first time somebody changes
+// their address in one of them, and the one that goes stale is the one nobody
+// notices until a person says "I stopped getting those".
+export async function recipientsForApp(
+  db: PrismaClient,
+  appId: string | null | undefined,
+  submitted?: string | null,
+): Promise<RecipientResolution> {
+  if (!appId) return resolveRecipients({ submitted });
+  const app = await db.app.findUnique({ ...alreadyScoped("the caller resolved this app"),
+    where: { id: appId },
+    select: {
+      notifiers: { select: { user: { select: { email: true } } } },
+      team: {
+        select: {
+          memberships: { where: { scope: "admin" }, select: { user: { select: { email: true } } } },
+        },
+      },
+    },
+  });
+  return resolveRecipients({
+    submitted,
+    chosen: app?.notifiers.map((n) => n.user.email) ?? [],
+    admins: app?.team?.memberships.map((m) => m.user.email) ?? [],
+  });
 }
