@@ -64,13 +64,16 @@ export async function measureRunJourneys(
     if (!integration) return empty;
 
     const appUrl = (opts.appUrl ?? "https://checkmyapp.dev").replace(/\/+$/, "");
-    const token = await freshPostHogToken(env.db, integration, {
+    const access = await freshPostHogToken(env.db, integration, {
       clientId: `${appUrl}/.well-known/posthog-client.json`,
     });
-    if (!token.ok) {
+    if (!access.ok) {
       // The connection needs a person. Say it in the log; it is not a fact
       // about the customer's product and must not reach their verdict.
-      console.warn(`[measure] analytics unavailable: ${token.reason}`);
+      // `access` rather than `token` so no log line in this file can contain the
+      // word next to an interpolation — the guard in verify-analytics-access.ts
+      // is deliberately blunt, and a blunt guard is worth a rename (CHE-243).
+      console.warn(`[measure] analytics unavailable: ${access.reason}`);
       return empty;
     }
 
@@ -96,7 +99,7 @@ export async function measureRunJourneys(
       const key = stages.join(">");
       let result = asked.get(key);
       if (!result) {
-        result = await measureFunnel({ token: token.token, baseUrl, projectId, stages });
+        result = await measureFunnel({ token: access.token, baseUrl, projectId, stages });
         asked.set(key, result);
       }
 
