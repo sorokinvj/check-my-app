@@ -64,7 +64,16 @@ async function main() {
   const accountingFinal = { disposed: true, session: { ...identity, sessions: [{ id: "extension-capture", state: "stopped", cleanup: { applicationStopObserved: true } }], applicationCleanup: "ui-stop-observed", billingCleanup: "confirmed", billing: { assessment: { status: "confirmed", twoMinuteSteps: true, observedMinutes: 3, sessions: [{ id: "own-history-row", kind: "extension", dateUtc: "2026-09-12 20:07", durationSeconds: 149 }] } } } };
   assert.match(extensionAccountingStep(accountingFinal)!.observed, /3 minutes.*149 seconds.*Charging stopped when the session did/);
   assert.equal(extensionAccountingStep({ ...accountingFinal, disposed: false }), null);
-  assert.equal(extensionAccountingStep({ ...accountingFinal, session: { ...accountingFinal.session, billingCleanup: "unverified" } }), null);
+  // The case we know least about must not record the most. An unconfirmed
+  // cleanup used to return nothing at all, so the journey rolled up "ok" on the
+  // model's own steps — which is how run #194's two-meter walk reached the
+  // catalog as ok while its cleanup was unverified.
+  const unconfirmed = extensionAccountingStep({ ...accountingFinal, session: { ...accountingFinal.session, billingCleanup: "unverified" } })!;
+  assert.equal(unconfirmed.status, "skipped", "An unconfirmed cleanup is a coverage gap, never silence");
+  assert.equal(unconfirmed.gapClass, "extension_session_cleanup");
+  assert.equal(unconfirmed.unverifiedReason, "our_capability", "Ours to fix, never a caveat for the owner");
+  assert.doesNotMatch(unconfirmed.observed, /stopped charging\./, "It may not claim the cessation it could not establish");
+  assert.equal(hasEnvironmentLeak(unconfirmed.observed), false);
   const partial = extensionAccountingStep({ ...accountingFinal, session: { ...accountingFinal.session, billing: { assessment: { status: "inconclusive" } } } });
   assert.equal(partial?.status, "skipped");
   assert.equal(partial?.unverifiedReason, "our_capability");

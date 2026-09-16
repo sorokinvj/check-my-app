@@ -32,7 +32,18 @@ export function extensionProductFailureStep(final: ExtensionFinalEvidence) {
 export function extensionAccountingStep(final: ExtensionFinalEvidence) {
   const session = final.session;
   const accounting = session?.billing?.assessment;
-  if (!final.disposed || !session || !session.sessions?.length || !extensionCleanupComplete(session)) return null;
+  if (!final.disposed || !session || !session.sessions?.length) return null;
+  // A phase whose cleanup could not be confirmed knows LESS than one whose
+  // minutes could not be confirmed — and until now it recorded MORE. The step
+  // was omitted entirely, so the journey rolled up on the model's own steps
+  // and landed "ok": run #194's two-meter walk sits in the catalog as ok with
+  // its cleanup unverified. The worse case cannot read better than the milder
+  // one, so it gets a step of its own and the gap that belongs to it.
+  if (!extensionCleanupComplete(session)) {
+    return { label: "Session minutes", status: "skipped" as const, unverifiedReason: "our_capability" as const, gapClass: "extension_session_cleanup",
+      attempted: "End the session and check what it charged.",
+      observed: "Whether this session stopped charging, and what it finally charged, were not established." };
+  }
   if (accounting?.status !== "confirmed" || !accounting.twoMinuteSteps || !Number.isSafeInteger(accounting.observedMinutes) || !accounting.sessions?.length) {
     return { label: "Session minutes", status: "skipped" as const, unverifiedReason: "our_capability" as const, gapClass: "extension_minute_accounting",
       attempted: "Check minute-by-minute charges and each session's final rounding.",
