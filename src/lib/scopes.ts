@@ -186,3 +186,20 @@ export function refusal(scope: TeamScope, action: TeamAction): string | null {
   }
   return "Only an admin of this team can do that.";
 }
+
+// CHE-263: what scope a key may be minted with.
+//
+// Never above the scope of the person minting it — otherwise "admin" is one
+// API call away for any member, and the scope table becomes a suggestion. The
+// ladder is already monotonic (reader ⊆ member ⊆ admin), so "not above" is an
+// index comparison rather than a special case per pair.
+const LADDER: TeamScope[] = ["reader", "member", "admin"];
+
+export function canMintKey(minter: TeamScope, keyScope: TeamScope): boolean {
+  return LADDER.indexOf(keyScope) <= LADDER.indexOf(minter);
+}
+
+export function mintRefusal(minter: TeamScope, keyScope: TeamScope): string | null {
+  if (canMintKey(minter, keyScope)) return null;
+  return `You can't create a ${keyScope} key — a key can't do more than the person who made it.`;
+}
