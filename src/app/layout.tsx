@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Bricolage_Grotesque, IBM_Plex_Mono } from "next/font/google";
-import { ClerkProvider, Show, SignInButton, UserButton } from "@clerk/nextjs";
+import { ClerkProvider, Show, UserButton } from "@clerk/nextjs";
 import "./globals.css";
 import { OG_IMAGE, SITE } from "@/lib/site-metadata";
 import { AnalyticsProvider } from "@/components/analytics-provider";
@@ -95,11 +95,18 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                   >
                     About
                   </Link>
-                  <SignInButton mode="modal">
-                    <button className="font-mono text-[13px] text-fg-muted transition-colors hover:text-fg">
-                      Sign in
-                    </button>
-                  </SignInButton>
+                  {/* CHE-274: a link, not a modal. `SignInButton` cannot carry
+                      oidcPrompt — its props pick only redirects, initialValues,
+                      withSignUp and oauthFlow out of SignInProps — so a modal
+                      sign-in would silently keep reusing the browser's Google
+                      account while the page next to it asks properly. One
+                      surface, one behaviour. */}
+                  <Link
+                    href="/sign-in"
+                    className="font-mono text-[13px] text-fg-muted transition-colors hover:text-fg"
+                  >
+                    Sign in
+                  </Link>
                 </Show>
                 <Show when="signed-in">
                   <Link
