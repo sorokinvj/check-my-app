@@ -136,12 +136,25 @@ function main() {
     }
   }
 
-  console.log("\nA funnel that changes shape silently makes every comparison meaningless");
+  console.log("\nDrift means the shape CHANGED, not merely that the walk differed");
   {
     check("same shape is no drift", !funnelDrifted(["/", "/a"], ["/", "/a"]));
-    check("an added stage is drift", funnelDrifted(["/", "/a"], ["/", "/a", "/b"]));
-    check("a reordered funnel is drift", funnelDrifted(["/", "/a", "/b"], ["/", "/b", "/a"]));
+    check("a reordered funnel is drift — that is a different conversion path",
+      funnelDrifted(["/", "/a", "/b"], ["/", "/b", "/a"]));
     check("a renamed stage is drift", funnelDrifted(["/", "/a"], ["/", "/aa"]));
+    check("a wholly different path is drift", funnelDrifted(["/a", "/b"], ["/x", "/y"]));
+
+    // The real case, from two consecutive production runs of the same journey.
+    // Reporting this as drift would make the flag fire on ordinary entry-point
+    // variance — and a flag that fires on everything hides the real change.
+    check("entering from one page further back is NOT drift (run #204 vs #205)",
+      !funnelDrifted(["/checks/today", "/verdict/:id"], ["/check", "/checks/today", "/verdict/:id"]));
+    check("a walk that skipped a middle stage is NOT drift",
+      !funnelDrifted(["/", "/a", "/b"], ["/", "/b"]));
+    check("an extra stage in the middle is NOT drift",
+      !funnelDrifted(["/", "/b"], ["/", "/a", "/b"]));
+    check("…but dropping a stage AND reordering the rest is",
+      funnelDrifted(["/", "/a", "/b"], ["/b", "/"]));
   }
 
   console.log("\nThe shared normaliser did not change under the tickets keyed on it");
