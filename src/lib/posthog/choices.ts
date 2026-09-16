@@ -20,6 +20,7 @@ import {
   listProjects,
   rankProjects,
   suggestedProject,
+  type PostHogProject,
   type RankedProject,
 } from "./projects";
 
@@ -35,6 +36,39 @@ export type ProjectChoices =
  *  default for an account that never chose. */
 export function baseUrlForRegion(region: string | null): string {
   return POSTHOG_REGIONS.find((r) => r.region === region)?.baseUrl ?? POSTHOG_REGIONS[0].baseUrl;
+}
+
+/**
+ * Every project this team's connection can see — one request for a whole page.
+ *
+ * The dashboard lists apps, and each app needs the same list to pick from. Null
+ * means "no picker": either nothing is connected, or we could not ask. A
+ * dropdown with nothing in it is an invitation to wonder what went wrong, and
+ * an empty list is not the same fact as an absent connection.
+ *
+ * No host probing here on purpose. Working out WHICH project likely belongs to
+ * an app costs a query per project, and a dashboard with ten apps must not pay
+ * that ten times over. The suggestion, and the reason for it, live on the app's
+ * own settings page where the cost is paid once.
+ */
+export async function teamProjects(
+  db: PrismaClient,
+  args: { teamId: string; clientId: string },
+): Promise<PostHogProject[] | null> {
+  const integration = await db.postHogIntegration.findFirst({ where: { teamId: args.teamId } });
+  if (!integration) return null;
+
+  const token = await freshPostHogToken(db, integration, { clientId: args.clientId });
+  if (!token.ok) {
+    console.warn(`[posthog] project list unavailable: ${token.reason}`);
+    return null;
+  }
+  try {
+    return await listProjects({ token: token.token, baseUrl: baseUrlForRegion(integration.region) });
+  } catch (err) {
+    console.warn(`[posthog] could not list projects: ${err instanceof Error ? err.message : String(err)}`);
+    return null;
+  }
 }
 
 export async function projectChoicesFor(

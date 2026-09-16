@@ -40,11 +40,16 @@ export function AnalyticsConnection({ connection }: AnalyticsConnectionProps) {
         <div className="min-w-0 space-y-1">
           {connection ? (
             <>
+              {/* Name the system, and do not let the organisation pass for an
+                  app. "Connected as JobLander" read as "the JobLander app is
+                  connected" on an account that also watches joblander.app —
+                  the org and the app genuinely share a name (owner, 2026-09-16). */}
               <p className="text-sm text-fg">
                 <span className={stranded ? "text-status-confusing" : "text-status-ok"}>
                   {stranded ? "!" : "✓"}
                 </span>{" "}
-                Connected as{" "}
+                <span className="font-medium">PostHog</span>
+                <span className="text-fg-muted"> · organisation </span>
                 <span className="font-mono">{connection.organizationName ?? "—"}</span>
                 {connection.region && (
                   <span className="text-fg-faint"> · {connection.region.toUpperCase()}</span>
@@ -53,7 +58,7 @@ export function AnalyticsConnection({ connection }: AnalyticsConnectionProps) {
               <p className="text-xs text-fg-faint">
                 {stranded
                   ? "This connection has expired — reconnect to keep reading your funnels."
-                  : "Read-only. We read your funnels; we never write to your analytics."}
+                  : "Read-only, shared by every app below. Each app reads its own project."}
               </p>
             </>
           ) : (
