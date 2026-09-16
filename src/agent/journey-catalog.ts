@@ -26,6 +26,7 @@ import {
 } from "@/lib/journey-key";
 import type { AgentEnv } from "./env";
 import { decideMetric, type JourneyMetric, type RawMetric } from "./journey-metrics";
+import { funnelDrifted, type DerivedFunnel } from "@/lib/funnel";
 
 /** The statuses that mean the journey is in good shape (partial.ts agrees). */
 const HEALTHY = new Set(["ok", "partial"]);
@@ -199,6 +200,47 @@ export async function resolveJourney(
 }
 
 /**
+ * What this walk says about the journey's funnel (CHE-238).
+ *
+ * The rule is first-derivation-wins. A stored funnel is never overwritten by a
+ * later walk that went a different way, because then yesterday's 12% and
+ * today's 40% would look like a trend while measuring two different questions.
+ * Disagreement is recorded in `funnelDriftAt` so it is visible rather than
+ * silent, and changing the funnel stays a decision somebody makes.
+ *
+ * A walk that did not happen says nothing either way — an all-skipped journey
+ * must not erase a funnel we already knew.
+ */
+function funnelUpdate(
+  row: { funnelStages: string | null },
+  args: { funnel?: DerivedFunnel | null },
+  at: Date,
+  walked: boolean,
+): Record<string, unknown> {
+  if (!walked || !args.funnel) return {};
+  const stored = parseJson<string[]>(row.funnelStages);
+
+  if (!args.funnel.ok) {
+    // We could not derive one this time. Keep whatever we already knew — a
+    // single wandering walk does not unmake a funnel — but record the refusal,
+    // because that is what the gap ticket is filed from (rule 2).
+    return { funnelRefusal: args.funnel.refusal };
+  }
+
+  if (!stored?.length) {
+    return {
+      funnelStages: JSON.stringify(args.funnel.stages),
+      funnelRefusal: null,
+      funnelDerivedAt: at,
+    };
+  }
+
+  return funnelDrifted(stored, args.funnel.stages)
+    ? { funnelRefusal: null, funnelDriftAt: at }
+    : { funnelRefusal: null };
+}
+
+/**
  * What the walk learned about this journey. Called after the per-run Journey row
  * is finished, with the status that landed on it.
  *
@@ -223,6 +265,8 @@ export async function recordWalk(
     scenario?: string | null;
     /** CHE-235: the price this run may record — already judged by journeyMetric. */
     metric?: JourneyMetric | null;
+    /** CHE-238: the funnel this walk implies, or why there is none. */
+    funnel?: DerivedFunnel | null;
     at?: Date;
   },
 ): Promise<void> {
@@ -237,6 +281,7 @@ export async function recordWalk(
       scenario: true,
       price: true,
       conversion: true,
+      funnelStages: true,
     },
   });
   if (!row) return;
@@ -246,6 +291,7 @@ export async function recordWalk(
   const healthy = HEALTHY.has(args.status);
   const consecutiveBad = !walked ? row.consecutiveBad : healthy ? 0 : row.consecutiveBad + 1;
   const metric = metricUpdate(row, args, at);
+  const funnel = funnelUpdate(row, args, at, walked);
 
   await env.db.appJourney.update({
     where: { id: args.appJourneyId },
@@ -276,6 +322,7 @@ export async function recordWalk(
       // retirement is undone and its miss counter cleared, so a page that comes
       // back brings its history with it instead of starting a row beside it.
       ...(walked ? { retiredAt: null, retiredReason: null, missedDiscoveries: 0 } : {}),
+      ...funnel,
       ...metric,
     },
   });
