@@ -3,7 +3,7 @@ import Link from "next/link";
 import { Bricolage_Grotesque, IBM_Plex_Mono } from "next/font/google";
 import { ClerkProvider, Show, UserButton } from "@clerk/nextjs";
 import "./globals.css";
-import { OG_IMAGE, SITE } from "@/lib/site-metadata";
+import { HOME_PATH, OG_IMAGE, SITE, TAGLINE } from "@/lib/site-metadata";
 import { AnalyticsProvider } from "@/components/analytics-provider";
 
 const sans = Bricolage_Grotesque({
@@ -28,9 +28,6 @@ const mono = IBM_Plex_Mono({
 // requires; templated titles let a page name itself without repeating the
 // product name. Pages that want their own card use pageMetadata() from
 // src/lib/site-metadata.ts — the image has to travel with them, see there.
-const TAGLINE =
-  "Paste a link and we check your app the way a person would — then tell you what a visitor hits.";
-
 export const metadata: Metadata = {
   metadataBase: new URL(SITE),
   title: { default: "CheckMyApp", template: "%s · CheckMyApp" },
@@ -40,7 +37,7 @@ export const metadata: Metadata = {
     siteName: "CheckMyApp",
     title: "CheckMyApp",
     description: TAGLINE,
-    url: SITE,
+    url: `${SITE}${HOME_PATH}`,
     images: [OG_IMAGE],
   },
   twitter: {

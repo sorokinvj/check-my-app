@@ -1,7 +1,14 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { SubmitForm } from "@/components/submit-form";
 import { TrackedLink } from "@/components/track";
 import { EXAMPLE_VERDICT_PATH } from "@/lib/example-verdict";
+import { HOME_PATH, canonical } from "@/lib/site-metadata";
+
+// The home page. Title and card come from the root layout; what this page
+// adds is its address, so `/`, `?url=` prefills and http:// all resolve here
+// instead of competing with it in a search index.
+export const metadata: Metadata = { alternates: canonical(HOME_PATH) };
 
 // Screen 1 — Submit · /check
 // ?url= prefills the input (CHE-39) so saved/shared links land ready to go.
