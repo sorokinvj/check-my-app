@@ -84,7 +84,11 @@ async function liveChecks(site: string) {
     const html = await res.text();
     const tag = html.match(/<link rel="canonical" href="([^"]+)"/)?.[1] ?? null;
     check(`live: ${p} answers 200`, res.status === 200, String(res.status));
-    check(`live: ${p} declares itself canonical`, tag === url, tag ?? "no canonical tag");
+    // Next writes the root's canonical as the bare origin ("https://host"),
+    // which RFC 3986 normalises to "https://host/" — one URL, two spellings.
+    // Every other path must match to the character.
+    const same = p === "/" ? tag === url || tag === site : tag === url;
+    check(`live: ${p} declares itself canonical`, same, tag ?? "no canonical tag");
   }
 
   const robotsTxt = await (await fetch(`${site}/robots.txt`)).text();
