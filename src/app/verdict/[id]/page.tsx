@@ -18,7 +18,7 @@ import { FINDING_PUBLIC_SELECT } from "@/lib/finding-fields";
 import { fullRechecksRemaining } from "@/lib/plans";
 import type { UserPlan } from "@/lib/enums";
 import type { AppLens, RunEvent } from "@/lib/types";
-import { OG_IMAGE } from "@/lib/site-metadata";
+import { OG_IMAGE, canonical } from "@/lib/site-metadata";
 import { extensionDisplayName, extensionReportPublished } from "@/lib/extension-target";
 import { alreadyScoped, publicRow } from "@/lib/tenant-db";
 
@@ -40,8 +40,9 @@ function formatDuration(start: Date, end: Date | null): string | null {
 // here is how many problems we found on it, and nothing about how we looked.
 export async function generateMetadata({ params }: { params: Promise<{ id: string }> }) {
   const prisma = await getDbFromContext();
+  const { id } = await params;
   const run = await prisma.run.findUnique({ ...publicRow(),
-    where: { publicId: (await params).id },
+    where: { publicId: id },
     select: { appSlug: true, targetKind: true, targetUrl: true, extensionEvidence: true, verdict: true, _count: { select: { findings: true } } },
   });
   if (!run) return {};
@@ -61,6 +62,7 @@ export async function generateMetadata({ params }: { params: Promise<{ id: strin
   return {
     title,
     description,
+    alternates: canonical(`/verdict/${id}`),
     openGraph: { title, description, type: "article", images: [OG_IMAGE] },
     twitter: { card: "summary_large_image" as const, title, description, images: [OG_IMAGE.url] },
   };

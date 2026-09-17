@@ -13,6 +13,25 @@ export const SITE = process.env.NEXT_PUBLIC_APP_URL ?? "https://checkmyapp.dev";
 
 export const OG_IMAGE = { url: "/og.png", width: 1200, height: 630, alt: "CheckMyApp" };
 
+export const TAGLINE =
+  "Paste a link and we check your app the way a person would — then tell you what a visitor hits.";
+
+// The one public address of the product. `/` is an alias that 308s here, so
+// this is what the sitemap lists, what the canonical tag on the page says and
+// what the site-wide og:url points at. Search Console filed the pair as
+// duplicates when nothing on the site said which one was real (2026-09-16).
+export const HOME_PATH = "/check";
+
+// What the sitemap lists: every public page, each at its canonical address.
+export const PUBLIC_PATHS: `/${string}`[] = [HOME_PATH, "/checks/today", "/pricing", "/faq", "/about"];
+
+// Every public page names its own address. Without it Google picks a canonical
+// on its own, and http://, a trailing slash or a tracking parameter each become
+// a second copy competing with the page.
+export function canonical(path: `/${string}`): NonNullable<Metadata["alternates"]> {
+  return { canonical: path };
+}
+
 // `title` is the page's own name; the root layout's template appends the
 // product name to <title>, while the og/twitter titles get it explicitly
 // because templates do not apply to them.
@@ -29,6 +48,7 @@ export function pageMetadata({
   return {
     title,
     description,
+    alternates: canonical(path),
     openGraph: {
       type: "website",
       siteName: "CheckMyApp",
