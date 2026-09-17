@@ -62,8 +62,8 @@ export async function POST(req: Request) {
     // the pending check from either.
     client_reference_id: pending.id,
     metadata: { pendingCheckId: pending.id },
-    success_url: `${APP_URL}/check/paid?session_id={CHECKOUT_SESSION_ID}`,
-    cancel_url: `${APP_URL}/check?url=${encodeURIComponent(input.url)}`,
+    success_url: `${APP_URL}/paid?session_id={CHECKOUT_SESSION_ID}`,
+    cancel_url: `${APP_URL}/?url=${encodeURIComponent(input.url)}`,
   });
   if (!session.url) {
     return NextResponse.json({ error: "Stripe returned no checkout URL" }, { status: 502 });

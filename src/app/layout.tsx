@@ -57,7 +57,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <AnalyticsProvider />
           <header className="border-b border-ink-800">
             <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4">
-              <Link href="/check" className="group flex items-center gap-2.5">
+              <Link href="/" className="group flex items-center gap-2.5">
                 <span className="flex h-6 w-6 items-center justify-center rounded-md bg-accent/15 font-mono text-[13px] font-semibold text-accent transition-colors group-hover:bg-accent/25">
                   ✓
                 </span>
@@ -119,7 +119,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                     Accuracy
                   </Link>
                   <Link
-                    href="/check"
+                    href="/"
                     className="font-mono text-[13px] text-fg-muted transition-colors hover:text-fg"
                   >
                     Check a link

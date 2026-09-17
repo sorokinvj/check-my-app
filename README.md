@@ -28,7 +28,7 @@ finding without verifiable artifacts isn't trusted.
 
 | # | Route            | Screen           | Notes |
 |---|------------------|------------------|-------|
-| 1 | `/check`         | Submit           | test creds + notify email behind "Add login & notes" |
+| 1 | `/`              | Submit           | test creds + notify email behind "Add login & notes" |
 | 2 | `/run/{id}`      | In-progress      | live SSE theatre: feed + agent's browser screenshot |
 | 3 | `/verdict/{id}`  | Verdict          | App Lens, journeys, anatomy, findings, specs |
 | 4 | `/watch/{slug}`  | Watch settings   | history, frequency, notify, pause |

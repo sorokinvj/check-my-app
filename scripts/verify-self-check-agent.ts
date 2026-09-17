@@ -201,7 +201,7 @@ async function main() {
   // the preflight met the bundle's 307. The rule is proven twice: on the pure
   // decision, and on the real routing handler with a stub context.
   {
-    const mutating = { url: `${SELF}/api/checks`, method: "POST", initiatorUrl: `${SELF}/check` };
+    const mutating = { url: `${SELF}/api/checks`, method: "POST", initiatorUrl: `${SELF}/` };
     check("headers: a mutating request to our own host carries x-checkmyapp-checker: 1",
       selfCheckRequestHeaders(SELF, mutating)?.[SELF_CHECK_HEADER] === "1",
       JSON.stringify(selfCheckRequestHeaders(SELF, mutating)));
@@ -209,7 +209,7 @@ async function main() {
 
     const cases: [string, string, StubRequest, boolean][] = [
       // target, name, request, does it carry the announcement
-      [SELF, "POST /api/checks on our host", { url: `${SELF}/api/checks`, method: "POST", from: `${SELF}/check` }, true],
+      [SELF, "POST /api/checks on our host", { url: `${SELF}/api/checks`, method: "POST", from: `${SELF}/` }, true],
       [SELF, "PATCH a lens on our host", { url: `${SELF}/api/runs/143/lens`, method: "PATCH", from: `${SELF}/verdict/abc` }, true],
       [SELF, "PUT on our host", { url: `${SELF}/api/apps/9`, method: "PUT", from: `${SELF}/apps/9` }, true],
       [SELF, "DELETE on our host", { url: `${SELF}/api/apps/9`, method: "DELETE", from: `${SELF}/apps/9` }, true],
@@ -221,15 +221,15 @@ async function main() {
       [SELF, "a third-party CDN script", { url: CDN, from: `${SELF}/` }, false],
       [SELF, "a font from a third party", { url: "https://fonts.gstatic.com/s/inter/v13/font.woff2", from: `${SELF}/` }, false],
       [SELF, "the GET document of our own page", { url: `${SELF}/sign-in`, method: "GET", from: `${SELF}/` }, false],
-      [SELF, "a GET API call on our own host", { url: `${SELF}/api/checks/today`, method: "GET", from: `${SELF}/check` }, false],
-      [SELF, "a HEAD on our own host", { url: `${SELF}/api/checks`, method: "HEAD", from: `${SELF}/check` }, false],
+      [SELF, "a GET API call on our own host", { url: `${SELF}/api/checks/today`, method: "GET", from: `${SELF}/` }, false],
+      [SELF, "a HEAD on our own host", { url: `${SELF}/api/checks`, method: "HEAD", from: `${SELF}/` }, false],
       [SELF, "a script served by our own host", { url: `${SELF}/_next/static/chunks/main.js`, from: `${SELF}/` }, false],
       [SELF, "a cross-origin POST to our host from somewhere else", { url: `${SELF}/api/checks`, method: "POST", from: "https://evil.example/page" }, false],
       [SELF, "a POST whose initiator cannot be read (service worker)", { url: `${SELF}/api/checks`, method: "POST" }, false],
       [CUSTOMER, "a mutating request on a customer's app", { url: `${CUSTOMER}/api/orders`, method: "POST", from: `${CUSTOMER}/cart` }, false],
       [CUSTOMER, "a customer's app posting to our host", { url: `${SELF}/api/checks`, method: "POST", from: `${CUSTOMER}/cart` }, false],
       ["https://evil-checkmyapp.dev", "a look-alike host", { url: "https://evil-checkmyapp.dev/api/x", method: "POST", from: "https://evil-checkmyapp.dev/" }, false],
-      ["not a url", "an unparsable target", { url: `${SELF}/api/checks`, method: "POST", from: `${SELF}/check` }, false],
+      ["not a url", "an unparsable target", { url: `${SELF}/api/checks`, method: "POST", from: `${SELF}/` }, false],
     ];
     for (const [target, name, request, expect] of cases) {
       const decided = selfCheckRequestHeaders(target, {
@@ -267,7 +267,7 @@ async function main() {
       const posted = await routed.send({
         url: `${SELF}/api/checks`,
         method: "POST",
-        from: `${SELF}/check`,
+        from: `${SELF}/`,
         headers: { "content-type": "application/json", cookie: "__session=abc" },
       });
       check("routing: the announced request keeps the headers it already had",
@@ -287,12 +287,12 @@ async function main() {
     {
       const staging = "https://staging.example.com";
       check("decision: an env-listed staging host is announced",
-        selfCheckRequestHeaders(staging, { url: `${staging}/api/checks`, method: "POST", initiatorUrl: `${staging}/check` }, "staging.example.com")?.[SELF_CHECK_HEADER] === "1");
+        selfCheckRequestHeaders(staging, { url: `${staging}/api/checks`, method: "POST", initiatorUrl: `${staging}/` }, "staging.example.com")?.[SELF_CHECK_HEADER] === "1");
       check("decision: a customer target with the env list set still carries nothing",
         selfCheckRequestHeaders(CUSTOMER, { url: `${CUSTOMER}/api/orders`, method: "POST", initiatorUrl: `${CUSTOMER}/cart` }, "staging.example.com") === undefined);
       const routed = routedContext();
       await announceSelfCheckOn(routed.context, staging, "staging.example.com");
-      const sent = await routed.send({ url: `${staging}/api/checks`, method: "POST", from: `${staging}/check` });
+      const sent = await routed.send({ url: `${staging}/api/checks`, method: "POST", from: `${staging}/` });
       check("routing: an env-listed staging host is announced through the real handler", sent[SELF_CHECK_HEADER] === "1");
       check("routing: a subdomain of the staging host is not intercepted", !routed.intercepted("https://clerk.staging.example.com/x.js"));
     }

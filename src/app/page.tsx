@@ -1,13 +1,61 @@
-import { permanentRedirect } from "next/navigation";
+import type { Metadata } from "next";
+import Link from "next/link";
+import { SubmitForm } from "@/components/submit-form";
+import { TrackedLink } from "@/components/track";
+import { EXAMPLE_VERDICT_PATH } from "@/lib/example-verdict";
+import { HOME_PATH, canonical } from "@/lib/site-metadata";
 
-// No landing page in MVP — go straight to the submit screen.
-//
-// Permanent (308), not temporary. A 307 here told Google that `/` was the
-// real address and `/check` a stand-in, so it indexed `/` and filed `/check`
-// — the page every link, funnel and experiment metric is keyed on — as
-// "Duplicate without user-selected canonical" (Search Console, 2026-09-16).
-// A 308 says the opposite: `/check` is the page, `/` is the alias. The
-// canonical tag on /check and the sitemap say the same thing.
-export default function Home() {
-  permanentRedirect("/check");
+// The home page is the form. It lived at /check from the first scaffold
+// (2026-06-10, "no landing page in MVP — go straight to the submit screen")
+// with `/` redirecting to it, and nothing ever needed the extra address:
+// Search Console filed the pair as duplicates, every visit paid a redirect,
+// and the brand query showed a path instead of the domain. Owner decision,
+// 2026-09-17: there is no /check. Title and card come from the root layout;
+// this page adds only its address, so `?url=` prefills and http:// resolve
+// here instead of competing with it in a search index.
+export const metadata: Metadata = { alternates: canonical(HOME_PATH) };
+
+// ?url= prefills the input (CHE-39) so saved/shared links land ready to go.
+export default async function Home({
+  searchParams,
+}: {
+  searchParams: Promise<{ url?: string }>;
+}) {
+  const { url } = await searchParams;
+  return (
+    <main className="flex min-h-[calc(100vh-3.5rem)] flex-col items-center justify-center px-4 py-16">
+      <SubmitForm initialUrl={url ?? ""} />
+      {/* Issue #9: someone deciding whether to paste their own link wants to
+          see what they would get first. One quiet line, under the form, to a
+          public verdict of someone else's product. */}
+      <p className="mt-10 w-full max-w-xl text-center font-mono text-[13px] leading-6 text-fg-faint">
+        Not ready to paste your own link?{" "}
+        <TrackedLink
+          event="example_verdict_clicked"
+          href={EXAMPLE_VERDICT_PATH}
+          className="text-accent transition-colors hover:underline"
+        >
+          See an example verdict →
+        </TrackedLink>
+      </p>
+      {/* Owner decision, 2026-09-05: every anonymous check is public. Say so
+          where the link is pasted, and make it the reason to sign in. */}
+      <p className="mt-3 w-full max-w-xl text-center font-mono text-[13px] leading-6 text-fg-faint">
+        Anonymous checks are public and listed in{" "}
+        <Link href="/checks/today" className="text-accent transition-colors hover:underline">
+          today&apos;s checks
+        </Link>
+        .{" "}
+        <TrackedLink
+          event="sign_in_clicked"
+          props={{ from: "home" }}
+          href="/sign-in?redirect_url=%2F"
+          className="text-accent transition-colors hover:underline"
+        >
+          Sign in
+        </TrackedLink>{" "}
+        to keep yours unlisted and get 3 free checks.
+      </p>
+    </main>
+  );
 }

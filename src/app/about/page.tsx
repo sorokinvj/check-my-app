@@ -51,7 +51,7 @@ export default function AboutPage() {
       </div>
 
       <p className="mt-10 font-mono text-[13px] text-fg-faint">
-        <Link href="/check" className="text-accent hover:underline">
+        <Link href="/" className="text-accent hover:underline">
           Check your app →
         </Link>{" "}
         · first run is free, no signup.

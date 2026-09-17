@@ -8,8 +8,8 @@ import { HOME_PATH, PUBLIC_PATHS, SITE } from "@/lib/site-metadata";
 // and is the customer's to share or not; putting those in a sitemap would hand
 // every check we have ever run to a search engine.
 //
-// Only canonical addresses belong here. `/` is not one — it redirects to
-// HOME_PATH — and listing both told Google we had two home pages
+// Only canonical addresses belong here. When the home page had two — `/`
+// redirecting to /check — listing both told Google we had two home pages
 // ("Duplicate without user-selected canonical", 2026-09-16).
 export default function sitemap(): MetadataRoute.Sitemap {
   const now = new Date();

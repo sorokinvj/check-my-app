@@ -23,7 +23,7 @@ interface VerdictReadyArgs {
   // Verdict of the finished run — surfaced in the subject and body when known.
   verdict?: string | null;
   // The run came from a Daily Watch, so the mail is a recurring report rather
-  // than the one-off result the /check form promised.
+  // than the one-off result the home-page form promised.
   recurring?: boolean;
   // CHE-96: the answer itself, so the mail is worth opening on its own. The
   // bottom line is already written for exactly this job — leading with it beats

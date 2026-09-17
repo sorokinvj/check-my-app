@@ -29,7 +29,7 @@ export default function robots(): MetadataRoute.Robots {
         "/sign-in",
         "/sign-up",
         "/run/",
-        "/check/paid",
+        "/paid",
       ],
     },
     sitemap: `${SITE}/sitemap.xml`,

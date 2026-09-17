@@ -247,7 +247,7 @@ export default async function VerdictPage({
           <TrackedLink
             event="sign_in_clicked"
             props={{ from: "verdict" }}
-            href="/sign-in?redirect_url=%2Fcheck"
+            href="/sign-in?redirect_url=%2F"
             className="text-accent underline-offset-2 hover:underline"
           >
             Sign in

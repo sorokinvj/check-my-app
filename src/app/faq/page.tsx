@@ -108,8 +108,8 @@ const FAQS: Faq[] = [
           today&apos;s checks
         </Link>
         , and the next visitor who pastes the same app on{" "}
-        <Link href="/check" className="text-accent hover:underline">
-          /check
+        <Link href="/" className="text-accent hover:underline">
+          the home page
         </Link>{" "}
         may be shown its previous verdict. With a free account your verdicts are unlisted —
         they open only by their link — you get 3 checks, and they stay in your dashboard with
@@ -147,7 +147,7 @@ export default function FaqPage() {
         </div>
 
         <p className="font-mono text-[13px] text-fg-faint">
-          <Link href="/check" className="text-accent hover:underline">
+          <Link href="/" className="text-accent hover:underline">
             Check your app →
           </Link>{" "}
           · first run is free, no signup.

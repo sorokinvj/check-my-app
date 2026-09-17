@@ -98,7 +98,7 @@ function trimmed(path: string): string {
  * funnels came out as:
  *
  *   / → /login → /dashboard → /practice/coaching_1788470882972 → /settings
- *   /check → /onboarding → /dashboard → /dashboard/cmtmsvbyx0001rz1tkzevj5dc
+ *   / → /onboarding → /dashboard → /dashboard/cmtmsvbyx0001rz1tkzevj5dc
  *
  * A session id and a cuid. Stored, each would drift on the next run — and
  * worse, "how many people reached /practice/coaching_1788470882972" measures a

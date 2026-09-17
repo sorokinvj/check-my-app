@@ -28,7 +28,7 @@ export function normalizeTargetUrl(raw: string): string {
   return /^https?:\/\//i.test(u) ? u : `https://${u}`;
 }
 
-// Submission payload from the /check form (Screen 1).
+// Submission payload from the home-page form.
 export const createCheckSchema = z.object({
   url: z
     .string()
