@@ -234,7 +234,7 @@ say("Handed to the implementer. This tick is done — nothing here decides wheth
 //
 // Strictly after everything above, and unable to affect any of it. Comparing
 // two implementers on two different tickets measures the tickets; this puts
-// both on one. What comes out is a draft on journeyman/*, which the shepherd
+// both on one. What comes out is a draft on mender/*, which the shepherd
 // cannot see (it reads doer/* and skips drafts) and the queue does not count.
 //
 // It runs last and its result is ignored on purpose: a measurement that can

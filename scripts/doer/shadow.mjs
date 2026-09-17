@@ -1,6 +1,6 @@
 // The shadow run (CHE-128): a second implementer on the same ticket.
 //
-// Comparing Journeyman with Codex across different tickets measures the
+// Comparing Mender with Codex across different tickets measures the
 // tickets, not the implementers — the spread between two tickets is larger than
 // the spread between two models. So one ticket gets both, and the second one
 // publishes a DRAFT that never merges.
@@ -14,7 +14,7 @@
 // against the code before this file was written rather than assumed:
 //
 //   - shepherd.mjs takes only PRs that are `doer/*` AND not drafts, so a draft
-//     on `journeyman/*` is invisible to the merge gate twice over;
+//     on `mender/*` is invisible to the merge gate twice over;
 //   - tick.mjs counts only `doer/*` branches for the one-open-PR rail, so a
 //     shadow PR does not block the queue.
 //
@@ -23,14 +23,14 @@
 //
 // Three rules this file exists to keep:
 //
-//   1. A Journeyman failure never fails the tick. It is a measurement running
+//   1. A Mender failure never fails the tick. It is a measurement running
 //      alongside production, not a dependency of it. Every path below returns;
 //      none throws.
-//   2. Every attempt is priced, including the failed ones. Journeyman writes
+//   2. Every attempt is priced, including the failed ones. Mender writes
 //      that row itself; this file checks that it landed and says so loudly when
 //      it did not, because an unpriced attempt is what makes the week's total a
 //      guess.
-//   3. The shadow is never mergeable. The `journeyman/` prefix is the mechanism;
+//   3. The shadow is never mergeable. The `mender/` prefix is the mechanism;
 //      the draft flag and the `shadow` label are what a person sees. If the
 //      draft conversion fails the PR is still unreachable by the gate, and the
 //      failure is logged rather than swallowed.
@@ -40,8 +40,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-/** Journeyman creates its own branches under this prefix and refuses any other. */
-export const SHADOW_BRANCH_PREFIX = "journeyman/";
+/** Mender creates its own branches under this prefix and refuses any other. */
+export const SHADOW_BRANCH_PREFIX = "mender/";
 /** What a person sees on the PR. The prefix is what the gate sees. */
 export const SHADOW_LABEL = "shadow";
 
@@ -53,7 +53,7 @@ export function isShadowBranch(ref) {
  * May the shadow leg run here at all? Pure, because "it silently did nothing"
  * is the failure mode this whole file is trying to avoid.
  *
- * Journeyman is a CLI on the operator's machine, not a service. In GitHub
+ * Mender is a CLI on the operator's machine, not a service. In GitHub
  * Actions — where the dispatcher actually runs — none of this is present, and
  * the honest outcome is a named skip rather than a broken tick.
  *
@@ -61,14 +61,14 @@ export function isShadowBranch(ref) {
  */
 export function decideShadow({ home = "", hasCli = false, hasUv = false, disabled = false }) {
   if (disabled) return { run: false, reason: "turned off for this tick (DOER_SHADOW=0)" };
-  if (!home) return { run: false, reason: "no journeyman checkout found — set JOURNEYMAN_HOME" };
+  if (!home) return { run: false, reason: "no mender checkout found — set MENDER_HOME" };
   if (!hasCli) return { run: false, reason: `no cli/main.py under ${home}` };
-  if (!hasUv) return { run: false, reason: "uv is not on PATH — journeyman runs under uv" };
-  return { run: true, reason: `journeyman at ${home}` };
+  if (!hasUv) return { run: false, reason: "uv is not on PATH — mender runs under uv" };
+  return { run: true, reason: `mender at ${home}` };
 }
 
 /**
- * The argv for `uv`. The ticket class is left to journeyman unless forced: it
+ * The argv for `uv`. The ticket class is left to mender unless forced: it
  * infers the class from the issue's own labels and lets "bug" win ties, which
  * is the stricter reading and not ours to weaken from here.
  */
@@ -81,7 +81,7 @@ export function shadowCommand({ repo, issueNumber, tier, budget, ticketClass, ru
     "--runner-timeout", String(runnerTimeout),
   ];
   if (ticketClass) args.push("--class", ticketClass);
-  // Journeyman's own --dry-run: the real gate, a stubbed model, nothing
+  // Mender's own --dry-run: the real gate, a stubbed model, nothing
   // published and nothing spent. It is the only way to exercise this leg
   // end-to-end — home discovery, the spawn, the ledger row, the PR snapshot —
   // without buying a model call every time somebody changes a line here.
@@ -90,7 +90,7 @@ export function shadowCommand({ repo, issueNumber, tier, budget, ticketClass, ru
 }
 
 /**
- * Which open `journeyman/*` PRs appeared while we were running. Journeyman
+ * Which open `mender/*` PRs appeared while we were running. Mender
  * names its own branch from the issue title, with a slug rule that is its own
  * and could drift from ours; recomputing that name here would be a second copy
  * of somebody else's decision. A before/after snapshot asks GitHub instead.
@@ -132,7 +132,7 @@ export function ledgerRowsSince(csv, startedAtMs) {
  * A row that recorded no money for an attempt that really called a provider.
  * `stub` rows come from --dry-run and genuinely cost nothing.
  *
- * This is the shape journeyman itself calls a bug rather than a gap: on
+ * This is the shape mender itself calls a bug rather than a gap: on
  * 2026-09-04 a killed runner recorded $0.00 for an attempt the provider had
  * billed $0.155 for, and the ledger under-reported the month by a third.
  */
@@ -149,12 +149,12 @@ export function unpricedAttempt(row) {
  * attempt itself never landed anywhere.
  */
 export function noPrExplanation({ row, rehearse = false }) {
-  if (rehearse) return "a rehearsal — journeyman publishes nothing on --dry-run, by design";
-  if (!row) return "journeyman recorded no attempt at all; look in its runs/ directory";
+  if (rehearse) return "a rehearsal — mender publishes nothing on --dry-run, by design";
+  if (!row) return "mender recorded no attempt at all; look in its runs/ directory";
   if (row.verdict === "green") {
-    return "journeyman's gate went green but no pull request appeared — that is a defect, not a result";
+    return "mender's gate went green but no pull request appeared — that is a defect, not a result";
   }
-  return `journeyman's gate was ${row.verdict}${row.failure_stage ? ` at ${row.failure_stage}` : ""}, and only green publishes`;
+  return `mender's gate was ${row.verdict}${row.failure_stage ? ` at ${row.failure_stage}` : ""}, and only green publishes`;
 }
 
 // ─── The impure half ─────────────────────────────────────────────────────────
@@ -162,7 +162,7 @@ export function noPrExplanation({ row, rehearse = false }) {
 const HERE = dirname(fileURLToPath(import.meta.url));
 
 /**
- * Where journeyman lives. `JOURNEYMAN_HOME` when set — and then only there,
+ * Where mender lives. `MENDER_HOME` when set — and then only there,
  * never falling back: an operator who names a path and silently gets a
  * different checkout is the "configuration" defect class in CLAUDE.md §8, our
  * own wrong input mistaken for somebody else's result. When it is unset the
@@ -170,9 +170,9 @@ const HERE = dirname(fileURLToPath(import.meta.url));
  * a wrong guess there is safe by construction, because decideShadow requires
  * cli/main.py to exist and the worst outcome is a named skip.
  */
-export function findJourneymanHome(env = process.env, exists = (p) => existsSync(p)) {
-  if (env.JOURNEYMAN_HOME) return resolve(env.JOURNEYMAN_HOME);
-  const sibling = resolve(HERE, "../../../journeyman");
+export function findMenderHome(env = process.env, exists = (p) => existsSync(p)) {
+  if (env.MENDER_HOME) return resolve(env.MENDER_HOME);
+  const sibling = resolve(HERE, "../../../mender");
   return exists(join(sibling, "cli", "main.py")) ? sibling : "";
 }
 
@@ -206,7 +206,7 @@ function openPrs(repo) {
  *
  * Exported because it is the one half of this file no fixture can prove: it
  * only does anything against a real pull request. Run against #14 on
- * 2026-09-04, which journeyman had left open, non-draft and unlabelled since
+ * 2026-09-04, which mender had left open, non-draft and unlabelled since
  * before any of this existed — it is now a draft carrying `shadow`, and the
  * shepherd's next dry run listed only #20.
  */
@@ -242,7 +242,7 @@ export function markAsShadow(repo, prNumber, say = console.log) {
  */
 export function shadowRun({ repo, issueNumber, dry = false, say = console.log, env = process.env }) {
   try {
-    const home = findJourneymanHome(env);
+    const home = findMenderHome(env);
     const decision = decideShadow({
       home,
       hasCli: !!home && existsSync(join(home, "cli", "main.py")),
@@ -276,11 +276,11 @@ export function shadowRun({ repo, issueNumber, dry = false, say = console.log, e
     const ledger = join(home, "runs", "ledger.csv");
     const startedAt = Date.now();
 
-    // The deadline is a last resort, not a control: journeyman bounds its own
+    // The deadline is a last resort, not a control: mender bounds its own
     // runner and asks it to stop before killing it, precisely so the price
     // survives. A kill from here lands on a python process that writes its
     // ledger row last, so the row is lost — which is why the deadline is far
-    // outside journeyman's own and why a missing row is shouted about below.
+    // outside mender's own and why a missing row is shouted about below.
     const deadline = Number(env.DOER_SHADOW_TIMEOUT ?? 2700) * 1000;
     const r = spawnSync("uv", args, { cwd: home, stdio: "inherit", timeout: deadline });
     if (r.error?.code === "ETIMEDOUT") {
@@ -288,7 +288,7 @@ export function shadowRun({ repo, issueNumber, dry = false, say = console.log, e
     } else if (r.error) {
       say(`   The shadow run could not be started: ${r.error.message}`);
     } else {
-      say(`   journeyman exited ${r.status} (1 just means the gate was not green).`);
+      say(`   mender exited ${r.status} (1 just means the gate was not green).`);
     }
 
     // Priced or not, and said out loud either way.
@@ -305,7 +305,7 @@ export function shadowRun({ repo, issueNumber, dry = false, say = console.log, e
       }
     }
 
-    // Journeyman publishes only on green (M0, by design), so no PR here is
+    // Mender publishes only on green (M0, by design), so no PR here is
     // usually a measurement rather than a malfunction — but not always, and the
     // three cases are not the same news.
     const fresh = newShadowPrs(before, openPrs(repo));

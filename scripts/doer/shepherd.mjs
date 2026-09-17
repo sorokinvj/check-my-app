@@ -181,7 +181,7 @@ if (stopped) {
 // approval policy protecting strangers' forks is left exactly as it is.
 //
 // This runs before the "no PRs to shepherd" exit on purpose: a shadow draft on
-// journeyman/* is not a merge candidate and never appears below, but its checks
+// mender/* is not a merge candidate and never appears below, but its checks
 // are still the measurement CHE-128 exists to take.
 unparkOurRuns({
   repo: REPO,
