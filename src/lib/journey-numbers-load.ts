@@ -12,6 +12,7 @@
 // disappear from the page.
 
 import type { PrismaClient } from "@/generated/prisma/client";
+import { pathEndsOf } from "./posthog/measure";
 import type { NoMeasurement, OurJudgement, TheirMeasurement } from "./journey-numbers";
 
 export interface JourneyNumbers {
@@ -41,7 +42,12 @@ export async function numbersForJourneys(
       metricPoints: {
         orderBy: { measuredAt: "desc" },
         take: 1,
-        select: { conversion: true, sampleSize: true, windowDays: true },
+        // `steps` carries the stages as they were when the point was written,
+        // which is the only honest source for the two ends of the counted path
+        // (CHE-279): the journey's funnel may have been re-derived since, and
+        // labelling an old count with today's stages would describe a path
+        // nobody was counted along.
+        select: { conversion: true, sampleSize: true, windowDays: true, steps: true },
       },
     },
   });
@@ -55,10 +61,22 @@ export async function numbersForJourneys(
     const ours: OurJudgement = { price: c.price, conversion: c.conversion };
     const point = c.metricPoints[0];
 
-    if (point?.conversion !== null && point !== undefined) {
+    // A percentage may only be shown with both ends of the path it counted
+    // named beside it (CHE-279). A point whose stages we cannot read is a
+    // number we cannot label, and an unlabelled rate is exactly the defect:
+    // it gets read as "how many finish this journey". Fall through to the
+    // absence sentences instead, which are true.
+    const path = pathEndsOf(point?.steps ?? null);
+    if (point?.conversion !== null && point !== undefined && path) {
       out[j.id] = {
         ours,
-        theirs: { conversion: point.conversion, sample: point.sampleSize, windowDays: point.windowDays },
+        theirs: {
+          conversion: point.conversion,
+          sample: point.sampleSize,
+          windowDays: point.windowDays,
+          from: path.from,
+          to: path.to,
+        },
         absent: null,
       };
       continue;
@@ -70,8 +88,12 @@ export async function numbersForJourneys(
     const connected = Boolean(c.app?.team?.posthog && c.app?.posthogProjectId);
     const absent: NoMeasurement = !connected
       ? "not_connected"
-      : point
+      : point && point.conversion === null
         ? // We counted and there were too few people. A real answer.
+          // Keyed on the missing percentage rather than on the row existing: a
+          // row whose percentage we hold but whose path we cannot name is a
+          // different fact, and calling it "not enough traffic" would state
+          // something about the customer's users that is not true (CHE-279).
           "below_floor"
         : !c.funnelStages
           ? // Connected, but this journey has no measurable path (CHE-238).

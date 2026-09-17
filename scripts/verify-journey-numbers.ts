@@ -20,9 +20,6 @@
 // Usage: npx tsx --tsconfig tsconfig.json scripts/verify-journey-numbers.ts
 
 import {
-  HEALTHY_CONVERSION,
-  SHARP_DISAGREEMENT,
-  comparisonLine,
   measuredLine,
   noMeasurementLine,
   ourLines,
@@ -45,17 +42,11 @@ function everyString(): string[] {
     }
   }
   for (const conv of [null, 0, 38, 100]) {
-    const l = measuredLine({ conversion: conv, sample: 412, windowDays: 14 });
+    const l = measuredLine({ conversion: conv, sample: 412, windowDays: 14, from: "/cart", to: "/thanks" });
     if (l) out.push(l.label, l.value, l.source);
   }
   for (const r of ["not_connected", "no_funnel", "not_measured_yet", "below_floor"] as NoMeasurement[]) {
     out.push(noMeasurementLine(r), noMeasurementLine(r, 25));
-  }
-  for (const ourC of [10, 45, 90]) {
-    for (const theirC of [2, 12, 38, 95]) {
-      const s = comparisonLine({ price: 8, conversion: ourC }, { conversion: theirC, sample: 412, windowDays: 14 });
-      if (s) out.push(s);
-    }
   }
   return out;
 }
@@ -72,9 +63,10 @@ function main() {
       ours.every((l) => !l.value.includes("%")));
     check("every one of our lines is sourceKind 'ours'", ours.every((l) => l.sourceKind === "ours"));
 
-    const theirs = measuredLine({ conversion: 38, sample: 412, windowDays: 14 });
-    check("their line is a percentage of real people over a window",
-      theirs?.value === "38% of 412 people, last 14 days", theirs?.value);
+    const theirs = measuredLine({ conversion: 38, sample: 412, windowDays: 14, from: "/cart", to: "/thanks" });
+    check("their line is a percentage of real people over a window, along a named path",
+      theirs?.value === "38% of the 412 people who reached /cart went on to /thanks, last 14 days",
+      theirs?.value);
     check("…sourced to them, not to us", theirs?.source === "your analytics", theirs?.source);
     check("…and marked as a measurement", theirs?.sourceKind === "measured");
 
@@ -89,7 +81,8 @@ function main() {
       ourLines({ price: null, conversion: null }).length === 0);
     check("a zero we did judge is still a line — 0 is a number, not an absence",
       ourLines({ price: null, conversion: 0 }).length === 1);
-    check("a large sample is readable", measuredLine({ conversion: 5, sample: 41234, windowDays: 14 })?.value.includes("41,234"));
+    check("a large sample is readable",
+      measuredLine({ conversion: 5, sample: 41234, windowDays: 14, from: "/a", to: "/b" })?.value.includes("41,234"));
   }
 
   console.log("\nNo measurement is three different sentences, never a blank");
@@ -115,36 +108,21 @@ function main() {
       !all.some((s) => /\b0%/.test(s)));
   }
 
-  console.log("\nThe sentence worth more than either number alone");
+  console.log("\nThe two numbers sit side by side and are never subtracted");
   {
-    // The most valuable one on the page: we were optimistic, their users are not.
-    const bad = comparisonLine({ price: 8, conversion: 90 }, { conversion: 12, sample: 412, windowDays: 14 });
-    check("we were optimistic and their users are not finishing → said plainly",
-      bad !== null && bad.includes("88%"), String(bad));
-    check("…and it is about THEIR users, not about our check",
-      bad !== null && /your own numbers|your users/i.test(bad), String(bad));
-
-    const better = comparisonLine({ price: 8, conversion: 20 }, { conversion: 85, sample: 412, windowDays: 14 });
-    check("we were pessimistic and they are fine → also said",
-      better !== null && better.includes("85%"), String(better));
-
-    const agreeBad = comparisonLine({ price: 8, conversion: 15 }, { conversion: 12, sample: 412, windowDays: 14 });
-    check("agreement on a struggling journey is worth a line — it is evidence, not an opinion",
-      agreeBad !== null && /agree/i.test(agreeBad), String(agreeBad));
-
-    const agreeFine = comparisonLine({ price: 8, conversion: 80 }, { conversion: 85, sample: 412, windowDays: 14 });
-    check("agreement on a healthy journey says nothing — a page that comments on everything is skipped",
-      agreeFine === null, String(agreeFine));
-
-    check("no measured number, no comparison",
-      comparisonLine({ price: 8, conversion: 45 }, { conversion: null, sample: 12, windowDays: 14 }) === null);
-    check("no estimate of ours, no comparison",
-      comparisonLine({ price: null, conversion: null }, { conversion: 38, sample: 412, windowDays: 14 }) === null);
-
-    check("the disagreement threshold is a stated number",
-      SHARP_DISAGREEMENT > 0 && SHARP_DISAGREEMENT <= 50, String(SHARP_DISAGREEMENT));
-    check("the healthy threshold is a stated number",
-      HEALTHY_CONVERSION > 0 && HEALTHY_CONVERSION <= 100, String(HEALTHY_CONVERSION));
+    // There WAS a sentence here joining them, and it was the best line on the
+    // page when it was right. It is gone because the subtraction is invalid:
+    // our estimate counts people who set out to do the journey, the measurement
+    // counts people who reached one page of it, and on joblander.app the gap
+    // between those two denominators was 67 points and produced
+    // "97% do not finish it" about a login our own walk had just completed.
+    // scripts/verify-measured-denominator.ts is the structural guard; this is
+    // the reminder at the place someone would reach for it again (CHE-279).
+    const theirs = measuredLine({ conversion: 12, sample: 412, windowDays: 14, from: "/", to: "/login" });
+    check("a measured line stands on its own without a verdict attached",
+      theirs !== null && !/expect|finish|do not/i.test(theirs.value), theirs?.value);
+    check("…and says which two pages it counted between",
+      theirs?.value.includes("/") === true && theirs?.value.includes("/login") === true, theirs?.value);
   }
 
   console.log("\nRule 1: every string here is read by the customer");

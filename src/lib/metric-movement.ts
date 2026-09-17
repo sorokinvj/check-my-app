@@ -121,6 +121,17 @@ export function movementOf(points: readonly MetricPoint[]): Movement {
     : { kind: "rose", from, to, points: points_, z };
 }
 
+/** The two ends of the path the numbers were counted along. */
+export interface MeasuredPath {
+  from: string;
+  to: string;
+}
+
+/** "1 point" / "2 points" — a sentence that miscounts its own unit reads as sloppy. */
+function points(n: number): string {
+  return `${n} ${n === 1 ? "point" : "points"}`;
+}
+
 /**
  * The sentence the owner reads, or null when there is nothing to say.
  *
@@ -129,21 +140,36 @@ export function movementOf(points: readonly MetricPoint[]): Movement {
  * someone needs in order to go and look. A rise gets one sentence and no alarm
  * — it is good news and good news does not need a siren.
  *
+ * It says what moved along the path, not that fewer people "finished" (CHE-279).
+ * The movement itself is sound either way — both readings count the same two
+ * pages a fortnight apart — but the funnel's first stage is where our walk
+ * entered the app, so the people in the denominator are everyone who arrived,
+ * not everyone who set out to do this journey. "Finishing for fewer people" is
+ * therefore a claim the count does not carry, and this sentence is emailed.
+ *
+ * `path` is required rather than optional on purpose: a caller who has not got
+ * the two page names cannot accidentally send the older, shorter sentence.
+ *
  * Rule 1: the customer's product only. Nothing about how we measured, and never
  * a request that they go and verify it.
  */
-export function movementSentence(journeyTitle: string, m: Movement): string | null {
+export function movementSentence(
+  journeyTitle: string,
+  m: Movement,
+  path: MeasuredPath,
+): string | null {
   if (m.kind === "fell") {
     return (
-      `“${journeyTitle}” is finishing for fewer people: ${Math.round(m.to.conversion)}% of ` +
-      `${m.to.sample.toLocaleString("en-US")}, against ${Math.round(m.from.conversion)}% before — ` +
-      `${Math.abs(m.points)} points down.`
+      `“${journeyTitle}” — fewer people are getting from ${path.from} to ${path.to}: ` +
+      `${Math.round(m.to.conversion)}% of ${m.to.sample.toLocaleString("en-US")}, ` +
+      `against ${Math.round(m.from.conversion)}% before — ${points(Math.abs(m.points))} down.`
     );
   }
   if (m.kind === "rose") {
     return (
-      `“${journeyTitle}” is finishing for more people: ${Math.round(m.to.conversion)}% of ` +
-      `${m.to.sample.toLocaleString("en-US")}, up ${m.points} points on its own recent average.`
+      `“${journeyTitle}” — more people are getting from ${path.from} to ${path.to}: ` +
+      `${Math.round(m.to.conversion)}% of ${m.to.sample.toLocaleString("en-US")}, ` +
+      `up ${points(m.points)} on its own recent average.`
     );
   }
   return null;

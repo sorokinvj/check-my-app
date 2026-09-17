@@ -33,6 +33,9 @@ function check(name: string, ok: boolean, detail = "") {
   console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? `  →  ${detail}` : ""}`);
 }
 
+/** The two pages a count was taken between. Every sentence names them (CHE-279). */
+const PATH = { from: "/cart", to: "/thanks" } as const;
+
 /** Points newest first, as CHE-239 stores them. */
 const pts = (...rows: Array<[number | null, number]>): MetricPoint[] =>
   rows.map(([conversion, sampleSize], i) => ({
@@ -94,14 +97,14 @@ function main() {
     const wobble = movementOf(pts([32, 50], [40, 50], [40, 50], [40, 50], [40, 50]));
     check("an 8-point drop on 50 people is noise, not news",
       wobble.kind === "noise", `${wobble.kind} z=${"z" in wobble ? wobble.z.toFixed(2) : "-"}`);
-    check("…and produces no sentence", movementSentence("Checkout", wobble) === null);
+    check("…and produces no sentence", movementSentence("Checkout", wobble, PATH) === null);
     check("…and is not alertable", !isAlertable(wobble));
 
     // Statistically certain and completely uninteresting.
     const tiny = movementOf(pts([39.6, 5000], [40, 5000], [40, 5000], [40, 5000], [40, 5000]));
     check("a fraction of a point on huge samples is immaterial, however certain",
       tiny.kind === "immaterial" || tiny.kind === "noise", `${tiny.kind}`);
-    check("…and produces no sentence", movementSentence("Checkout", tiny) === null);
+    check("…and produces no sentence", movementSentence("Checkout", tiny, PATH) === null);
 
     const noHistory = movementOf(pts([12, 900], [40, 900]));
     check("two points is not a history", noHistory.kind === "no_baseline");
@@ -117,7 +120,7 @@ function main() {
     const fell = movementOf(pts([28, 1800], [40, 2000], [41, 2000], [39, 2000]));
     check("a real, large fall is reported", fell.kind === "fell", `${fell.kind}`);
     check("…and it is alertable", isAlertable(fell));
-    const sentence = movementSentence("Sign up and reach the dashboard", fell);
+    const sentence = movementSentence("Sign up and reach the dashboard", fell, PATH);
     check("…and the sentence names the journey", sentence?.includes("Sign up and reach the dashboard") === true, String(sentence));
     check("…the movement", sentence?.includes("12 points down") === true, String(sentence));
     check("…what it moved from", sentence?.includes("40%") === true, String(sentence));
@@ -128,9 +131,9 @@ function main() {
   {
     const rose = movementOf(pts([52, 2000], [40, 2000], [39, 2000], [41, 2000]));
     check("a real, large rise is recognised", rose.kind === "rose", `${rose.kind}`);
-    check("…it gets a sentence", movementSentence("Checkout", rose) !== null);
+    check("…it gets a sentence", movementSentence("Checkout", rose, PATH) !== null);
     check("…but it is NOT alertable — direction is not symmetric in tone", !isAlertable(rose));
-    const s = movementSentence("Checkout", rose) ?? "";
+    const s = movementSentence("Checkout", rose, PATH) ?? "";
     check("…and the sentence does not sound like a warning",
       !/down|worse|fewer|problem|alert/i.test(s), s);
   }
@@ -144,7 +147,7 @@ function main() {
       pts([0, 900], [40, 2000], [41, 2000], [39, 2000]),
       pts([100, 900], [40, 2000], [41, 2000], [39, 2000]),
     ]) {
-      const s = movementSentence("Sign up", movementOf(p));
+      const s = movementSentence("Sign up", movementOf(p), PATH);
       if (s) cases.push(s);
     }
     check("there are sentences to check", cases.length >= 3, String(cases.length));
@@ -152,8 +155,16 @@ function main() {
     check("none narrates how we check", !cases.some((s) => hasNarration(s)), cases.filter(hasNarration).join(" | "));
     check("none mentions our machinery",
       !cases.some((s) => /\b(browser|headless|we walked|our check|crawl|test run)\b/i.test(s)), cases.join(" | "));
-    check("every sentence is about the customer's users finishing something",
-      cases.every((s) => /finishing for/i.test(s)), cases.join(" | "));
+    // This check used to require the opposite: that every sentence said
+    // "finishing for fewer/more people". It asserted the claim CHE-279 removed
+    // — the count is of people moving between two pages, and the first of those
+    // is where our walk entered the app, so "finishing" is not what was
+    // counted. The check moves because it was wrong, not because the wording
+    // became inconvenient.
+    check("every sentence is about the customer's users moving between two named pages",
+      cases.every((s) => /getting from \S+ to \S+/i.test(s)), cases.join(" | "));
+    check("…and none of them claims those people finished the journey",
+      !cases.some((s) => /finish|complete|convert/i.test(s)), cases.join(" | "));
   }
 
   console.log("\n'All good' and 'fewer people finish' are both true at once");

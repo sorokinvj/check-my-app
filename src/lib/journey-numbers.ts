@@ -33,6 +33,19 @@ export interface TheirMeasurement {
   /** People who reached the first stage. Always known when a point exists. */
   sample: number;
   windowDays: number;
+  /**
+   * The two ends of the path that was counted, as pages of the customer's own
+   * product.
+   *
+   * They are part of the value, not decoration (CHE-279). The funnel we measure
+   * along comes from a walk, and a walk enters the app at its front door and
+   * stops wherever it stopped — neither end is reliably the journey's own start
+   * or finish. Naming both makes the number true whatever the funnel turned out
+   * to span; leaving them out is what let "50 of 1,690" be read as "3% of people
+   * finish logging in", about a login that works.
+   */
+  from: string;
+  to: string;
 }
 
 /** Why there is no measured number. Each is a different sentence, on purpose. */
@@ -76,12 +89,23 @@ export function ourLines(j: OurJudgement): NumberLine[] {
   return lines;
 }
 
-/** What their analytics counted. Never called an estimate. */
+/**
+ * What their analytics counted. Never called an estimate, and never called a
+ * finish.
+ *
+ * It says "of the people who reached A, this many went on to B" and stops
+ * there, because that is the whole of what was counted. The earlier version
+ * said "Actually finished — 3% of 1,690 people", which is the same arithmetic
+ * carrying a claim the arithmetic does not support: the 1,690 were everyone who
+ * arrived at the app, not everyone who set out to do this (CHE-279).
+ */
 export function measuredLine(m: TheirMeasurement): NumberLine | null {
   if (m.conversion === null) return null;
   return {
-    label: "Actually finished",
-    value: `${m.conversion}% of ${m.sample.toLocaleString("en-US")} people, last ${m.windowDays} days`,
+    label: "Along this path",
+    value:
+      `${m.conversion}% of the ${m.sample.toLocaleString("en-US")} people who reached ` +
+      `${m.from} went on to ${m.to}, last ${m.windowDays} days`,
     source: "your analytics",
     sourceKind: "measured",
   };
@@ -112,37 +136,27 @@ export function noMeasurementLine(reason: NoMeasurement, sample?: number): strin
   }
 }
 
-/**
- * The sentence worth more than either number alone.
- *
- * When our judgement and their traffic disagree sharply, saying so is the most
- * valuable thing on the page — "we thought this was fine and most of your users
- * do not finish it" is what an owner is paying to be told. When they agree, the
- * agreement is worth one line too: it turns our opinion into something with
- * evidence behind it.
- *
- * Returns null when there is nothing worth saying, which is most of the time.
- * A page that comments on every journey teaches people to skip the comments.
- */
-export function comparisonLine(ours: OurJudgement, theirs: TheirMeasurement): string | null {
-  if (ours.conversion === null || theirs.conversion === null) return null;
-  const gap = theirs.conversion - ours.conversion;
-
-  // Below this the two are saying the same thing and a sentence adds nothing.
-  if (Math.abs(gap) < SHARP_DISAGREEMENT) {
-    return theirs.conversion >= HEALTHY_CONVERSION
-      ? null
-      : `We expected this to be hard going, and your own numbers agree: ${theirs.conversion}% finish it.`;
-  }
-
-  if (gap < 0) {
-    // The valuable one: we were optimistic and their users are not finishing.
-    return `We expected most people to get through this. Your own numbers say ${100 - theirs.conversion}% do not finish it.`;
-  }
-  return `This looked harder than it turns out to be — ${theirs.conversion}% of your users finish it.`;
-}
-
-/** Percentage points between our estimate and their count before it is news. */
-export const SHARP_DISAGREEMENT = 20;
-/** At or above this, a journey is doing fine and needs no commentary. */
-export const HEALTHY_CONVERSION = 50;
+// ── There is deliberately no comparison between the two numbers ──────────────
+//
+// There was one, and it was the best line on the page when it was right:
+// "We expected most people to get through this. Your own numbers say 97% do not
+// finish it." It is removed because the subtraction underneath it is invalid
+// (CHE-279).
+//
+// Our estimate answers "of the people who set out to do this, how many finish".
+// The measurement answers "of the people who reached one page, how many reached
+// another" — and the first of those pages is where our walk entered the app, so
+// it is shared by most journeys of that app and carries no intent. Two numbers
+// over different denominators can be subtracted, and the result is an artefact.
+// On joblander.app that artefact was 67 points, and the sentence it produced was
+// about a login our own walk had just completed successfully.
+//
+// This is not a claim that the comparison is worthless. It is a claim that we
+// cannot make it yet, which makes it our gap rather than a caveat for the
+// customer (rule 2). It returns the day a funnel provably spans its journey at
+// both ends — and on that day it is one function and a threshold, not a
+// redesign. Until then, both numbers stand on the page with their sources
+// named, and the reader draws no line between them that we have not earned.
+//
+// scripts/verify-measured-denominator.ts reads this file and fails if a
+// comparison reappears under any name.
