@@ -65,6 +65,12 @@ jobs:
         run: npm ci
       - if: steps.creds.outputs.ready == 'true'
         run: npx prisma generate
+      # Wait for an extension check to finish before touching production. A
+      # deploy rolls the container image and an extension run in flight dies
+      # with it, leaving a paid session nobody stops (CHE-272). Before the
+      # migrations, because those touch production too.
+      - if: steps.creds.outputs.ready == 'true'
+        run: npx tsx --tsconfig tsconfig.json scripts/deploy-gate-extension.ts
       # Apply D1 migrations to the remote database before deploying.
       - if: steps.creds.outputs.ready == 'true'
         run: npx wrangler d1 migrations apply checkmyapp --remote

@@ -7,7 +7,7 @@
 // Watch whose previous run is still moving is skipped entirely.
 
 import { nextRunNumber } from "@/lib/db";
-import type { UserPlan, WatchFrequency } from "@/lib/enums";
+import { TERMINAL_RUN_STATUSES, type UserPlan, type WatchFrequency } from "@/lib/enums";
 import { PLAN_LIMITS } from "@/lib/plans";
 import { sweepExpiredEphemeral, sweepExpiredPendingChecks, sweepTestAccounts } from "./janitor";
 import { sendWatchTrialPaused } from "@/lib/email";
@@ -38,7 +38,10 @@ const TRIAL_RECHECK_HOURS = 1;
 // hypothetical: T12 canceled run #203 the moment a reader-scope key started it.
 // Two definitions of "terminal" disagreeing is how a watch goes quiet without
 // anything failing (rule 2 — the silence would be ours, not the app's).
-const TERMINAL_STATUSES = ["completed", "partial", "failed", "canceled"];
+// Read from the one classification rather than spelled again here: a status
+// added later is classified once, in enums.ts, and everything that asks "is
+// anything still running" follows without being edited.
+const TERMINAL_STATUSES = TERMINAL_RUN_STATUSES;
 
 export interface TickResult {
   started: string[];
