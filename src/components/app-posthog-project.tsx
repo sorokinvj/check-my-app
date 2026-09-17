@@ -13,12 +13,21 @@
 // worst way: quietly, with the screen agreeing with you. The Linear picker in
 // the row above already worked this way; matching it was the answer.
 //
-// The suggestion ("why this one?") stays on the app's settings page: working out
-// which project has seen this app's host costs a query per project, and a
-// dashboard listing ten apps must not pay that ten times over.
+// **This row is a control, not an explanation.** Two things were taken out of
+// it after the owner read them here (2026-09-17):
+//
+//   - the option said "— none: use our estimate —". A dropdown is not where
+//     anyone learns what an estimate is, and "our" read as the reader's own.
+//     It is "— none —" now, and what happens without a project is explained on
+//     the app's own settings page and on /analytics-access.
+//   - a "why this one?" link pointed at the suggestion and its reasoning. But
+//     the suggestion is not SHOWN here — working out which project has seen
+//     this app's host costs a query per project, and a dashboard listing ten
+//     apps must not pay that ten times over. So the link asked "why this one?"
+//     about a recommendation the reader could not see: an orphaned pointer,
+//     the same defect in prose as a code comment naming the wrong ticket.
 
 import { useState, useTransition } from "react";
-import Link from "next/link";
 import { setAppPosthogProject } from "@/app/dashboard/actions";
 import type { PostHogProject } from "@/lib/posthog/projects";
 
@@ -62,7 +71,7 @@ export function AppPostHogProject({
         className="rounded border border-ink-700 bg-transparent px-1.5 py-0.5 font-mono text-[11px] text-fg-muted outline-none"
       >
         <option value="" className="bg-ink-950">
-          — none: use our estimate —
+          — none —
         </option>
         {projects.map((p) => (
           <option key={p.id} value={p.id} className="bg-ink-950">
@@ -71,10 +80,20 @@ export function AppPostHogProject({
         ))}
       </select>
 
-      {/* Saying "saved" is not decoration here: it is the thing whose absence
-          made the first version lie. */}
-      {pending && <span className="text-xs text-fg-faint">saving…</span>}
-      {!pending && saved && <span className="text-xs text-status-ok">saved</span>}
+      {/* Two different facts, and the first version conflated them.
+          "saved" is an acknowledgement of an ACTION and dies on reload; a
+          stored project is a STATE and does not. Showing only the
+          acknowledgement meant that after a reload three rows the owner had
+          just changed said "saved" and the fourth — stored days earlier, and
+          perfectly fine — said nothing. Absence of the badge read as "not
+          saved" while the database held the value.
+          So the tick is the state and stays; "saving…" is the action. The
+          absence of a tick now means exactly what it looks like. */}
+      {pending ? (
+        <span className="text-xs text-fg-faint">saving…</span>
+      ) : value ? (
+        <span className="text-xs text-status-ok">{saved ? "✓ saved" : "✓"}</span>
+      ) : null}
 
       {chosen && !known && (
         <span className="text-xs text-status-confusing">
@@ -84,9 +103,6 @@ export function AppPostHogProject({
       {projects.length === 0 && (
         <span className="text-xs text-fg-faint">no projects readable on this connection</span>
       )}
-      <Link href={`/dashboard/${appId}`} className="text-xs text-fg-faint hover:text-fg-muted">
-        why this one?
-      </Link>
     </div>
   );
 }
