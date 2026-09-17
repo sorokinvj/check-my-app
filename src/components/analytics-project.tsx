@@ -48,6 +48,15 @@ export function AnalyticsProject({
         <p className="mt-1 text-sm text-fg-muted">
           Which PostHog project holds this app&apos;s data. Asked once.
         </p>
+        {/* The explanation the dashboard dropdown used to carry in an option
+            label. A dropdown is not where anyone learns a concept, and "use our
+            estimate" read as the reader's own estimate rather than ours. Here
+            there is room to say it properly (owner, 2026-09-17). */}
+        <p className="mt-1 text-sm text-fg-faint">
+          With a project, a check can say how many people actually finish each journey. Without
+          one, that number stays a judgement we formed by walking the app — never a count of your
+          users.
+        </p>
       </div>
 
       <div className="card space-y-3 p-4">
