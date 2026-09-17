@@ -135,7 +135,7 @@ export const BRANCH_PREFIX = "doer/";
 
 /**
  * A branch this dispatcher owns. Everything else — including the second
- * implementer's `journeyman/*` (CHE-128) — is somebody else's work, and the two
+ * implementer's `mender/*` (CHE-128) — is somebody else's work, and the two
  * rails below are the only reason a shadow PR is safe to open at all.
  *
  * Exported rather than written inline twice because the shadow design rests on

@@ -21,7 +21,7 @@ import {
   unpricedAttempt,
   isShadowBranch,
   noPrExplanation,
-  findJourneymanHome,
+  findMenderHome,
   SHADOW_BRANCH_PREFIX,
 } from "./doer/shadow.mjs";
 import { mayUnpark, unparkOurRuns, DOER_PR_AUTHOR, PARKED_STATUS } from "./doer/unpark.mjs";
@@ -216,11 +216,11 @@ const approved = [{ state: "APPROVED", headSha: "aaa" }];
 // ── the shadow run (CHE-128) ─────────────────────────────────────────────────
 //
 // The whole design rests on two rails that already existed, so they are asserted
-// here rather than trusted: a journeyman/* PR is not the doer's, and a draft is
+// here rather than trusted: a mender/* PR is not the doer's, and a draft is
 // never a merge candidate. If either stops holding, a second implementer's
 // unreviewed patch becomes something the gate could merge.
 {
-  check("a journeyman branch is not the doer's", isDoerBranch(`${SHADOW_BRANCH_PREFIX}7-x`) === false);
+  check("a mender branch is not the doer's", isDoerBranch(`${SHADOW_BRANCH_PREFIX}7-x`) === false);
   check("a doer branch still is", isDoerBranch("doer/7-x") === true);
   check(
     "the merge gate ignores a shadow PR",
@@ -238,13 +238,13 @@ const approved = [{ state: "APPROVED", headSha: "aaa" }];
     "an ordinary doer PR is",
     isMergeCandidate({ headRefName: "doer/7-x", isDraft: false }) === true,
   );
-  check("a shadow branch is recognised as one", isShadowBranch("journeyman/7-x") === true);
+  check("a shadow branch is recognised as one", isShadowBranch("mender/7-x") === true);
 }
 {
-  // Absent journeyman, the tick must say so by name and carry on. A silent skip
+  // Absent mender, the tick must say so by name and carry on. A silent skip
   // is how a measurement quietly stops being taken.
   const d = decideShadow({ home: "", hasCli: false, hasUv: false });
-  check("no journeyman checkout is a named skip", d.run === false && d.reason.includes("JOURNEYMAN_HOME"), d.reason);
+  check("no mender checkout is a named skip", d.run === false && d.reason.includes("MENDER_HOME"), d.reason);
 
   const noUv = decideShadow({ home: "/x", hasCli: true, hasUv: false });
   check("no uv is a named skip", noUv.run === false && noUv.reason.includes("uv"), noUv.reason);
@@ -260,17 +260,17 @@ const approved = [{ state: "APPROVED", headSha: "aaa" }];
   // "configuration" defect class of CLAUDE.md §8 — our own wrong input, read
   // later as somebody else's result. An explicit setting wins or it skips.
   check(
-    "JOURNEYMAN_HOME wins, and never falls back to a sibling",
-    findJourneymanHome({ JOURNEYMAN_HOME: "/nope" }, () => true) === "/nope",
+    "MENDER_HOME wins, and never falls back to a sibling",
+    findMenderHome({ MENDER_HOME: "/nope" }, () => true) === "/nope",
   );
   check(
     "with nothing set and no sibling, there is no home",
-    findJourneymanHome({}, () => false) === "",
+    findMenderHome({}, () => false) === "",
   );
   check(
     "with nothing set, the sibling checkout is used when it is really there",
-    findJourneymanHome({}, () => true).endsWith("/journeyman"),
-    findJourneymanHome({}, () => true),
+    findMenderHome({}, () => true).endsWith("/mender"),
+    findMenderHome({}, () => true),
   );
 }
 {
@@ -284,7 +284,7 @@ const approved = [{ state: "APPROVED", headSha: "aaa" }];
     args.join(" "),
   );
   check(
-    "the class is journeyman's to infer unless forced",
+    "the class is mender's to infer unless forced",
     !args.includes("--class"),
     args.join(" "),
   );
@@ -299,10 +299,10 @@ const approved = [{ state: "APPROVED", headSha: "aaa" }];
   check("a rehearsal spends nothing and publishes nothing", rehearsal.includes("--dry-run"));
 }
 {
-  // Journeyman names its own branch. We find the PR by what appeared, not by
+  // Mender names its own branch. We find the PR by what appeared, not by
   // recomputing somebody else's slug rule.
-  const before = [{ number: 14, headRefName: "journeyman/7-old" }, { number: 20, headRefName: "doer/6-x" }];
-  const after = [...before, { number: 21, headRefName: "journeyman/6-new" }, { number: 22, headRefName: "doer/6-y" }];
+  const before = [{ number: 14, headRefName: "mender/7-old" }, { number: 20, headRefName: "doer/6-x" }];
+  const after = [...before, { number: 21, headRefName: "mender/6-new" }, { number: 22, headRefName: "doer/6-y" }];
   const fresh = newShadowPrs(before, after);
   check("only the new shadow PR is picked up", fresh.length === 1 && fresh[0].number === 21, JSON.stringify(fresh));
 }
@@ -310,7 +310,7 @@ const approved = [{ state: "APPROVED", headSha: "aaa" }];
   // CRLF, because that is what Python's csv.writer produces and what the real
   // ledger contains. Written with "\n" this fixture passed while the parser read
   // every ts as undefined, and the tick announced an unpriced attempt on a run
-  // journeyman had priced correctly.
+  // mender had priced correctly.
   const csv = [
     "task_id,attempt_no,tier,model,provider,input_tokens,cached_input_tokens,output_tokens,cost_usd,sandbox_seconds,steps,verdict,failure_stage,diff_files,diff_lines,wall_seconds,ts",
     "a,1,t1,m,openrouter,1,0,1,0.04,10,3,red,no_patch,0,0,11,2026-09-04T04:00:00+00:00",
@@ -324,7 +324,7 @@ const approved = [{ state: "APPROVED", headSha: "aaa" }];
 }
 {
   // An attempt with no cost recorded is the row that makes the week's total a
-  // lie — journeyman lost $0.155 to exactly this on 2026-09-04.
+  // lie — mender lost $0.155 to exactly this on 2026-09-04.
   check("a real call recorded at $0.00 is unpriced",
     unpricedAttempt({ provider: "openrouter", cost_usd: "0.0" }) === true);
   check("a stub row is free, not unpriced",
@@ -389,7 +389,7 @@ const approved = [{ state: "APPROVED", headSha: "aaa" }];
       prs: [{ headRef: "feature/whatever", headRepo: REPO, author: DOER_PR_AUTHOR }],
       repo: REPO,
     });
-    check("a branch outside doer/* and journeyman/* stays parked", d.unpark === false, d.reason);
+    check("a branch outside doer/* and mender/* stays parked", d.unpark === false, d.reason);
   }
   {
     // Write access here is enough to push a `doer/*` branch, so the prefix alone
@@ -407,8 +407,8 @@ const approved = [{ state: "APPROVED", headSha: "aaa" }];
   }
   {
     const d = mayUnpark({
-      run: { ...parked, headBranch: "journeyman/7-x" },
-      prs: [{ headRef: "journeyman/7-x", headRepo: REPO, author: DOER_PR_AUTHOR }],
+      run: { ...parked, headBranch: "mender/7-x" },
+      prs: [{ headRef: "mender/7-x", headRepo: REPO, author: DOER_PR_AUTHOR }],
       repo: REPO,
     });
     check("the shadow leg's own branch is released too", d.unpark === true, d.reason);

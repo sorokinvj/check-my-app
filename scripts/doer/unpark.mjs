@@ -16,7 +16,7 @@
 // Three conditions, all of them required, none of them inferable by an outsider
 // who does not already have write access here:
 //
-//   1. the branch is one of ours — `doer/*` or `journeyman/*`;
+//   1. the branch is one of ours — `doer/*` or `mender/*`;
 //   2. the run's head repository is THIS repository, never a fork;
 //   3. an open pull request for that branch was opened by our bot.
 //
