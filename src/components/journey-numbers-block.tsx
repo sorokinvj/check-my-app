@@ -12,7 +12,6 @@
 // string no check sees.
 
 import {
-  comparisonLine,
   measuredLine,
   noMeasurementLine,
   ourLines,
@@ -31,7 +30,6 @@ export interface JourneyNumbersProps {
 export function JourneyNumbersBlock({ ours, theirs, absent, sample }: JourneyNumbersProps) {
   const oursRows = ourLines(ours);
   const theirsRow = theirs ? measuredLine(theirs) : null;
-  const comparison = theirs ? comparisonLine(ours, theirs) : null;
 
   // Nothing judged and nothing measured: no block at all. An empty frame with
   // dashes in it reads as "we looked and found nothing", which is a claim.
@@ -52,10 +50,12 @@ export function JourneyNumbersBlock({ ours, theirs, absent, sample }: JourneyNum
         <p className="text-xs text-fg-faint">{noMeasurementLine(absent, sample)}</p>
       )}
 
-      {/* The sentence worth more than either number alone. Only when the two
-          actually say something together — a page that comments on every
-          journey teaches people to skip the comments. */}
-      {comparison && <p className="text-xs text-fg-muted">{comparison}</p>}
+      {/* There was a sentence here drawing the two numbers together, and it is
+          gone on purpose (CHE-279): our estimate counts people who set out to do
+          the journey, the measurement counts people who reached one page of it,
+          and the difference between them is an artefact of the two denominators
+          rather than news about the product. The rows stay, each with its
+          source, and the reader is not handed a conclusion we cannot support. */}
     </div>
   );
 }

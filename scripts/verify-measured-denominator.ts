@@ -1,0 +1,228 @@
+// CHE-279 verification: a measured number never claims to be the journey's
+// completion rate.
+//
+// Found by dogfooding on 2026-09-17 (CHE-244), against real production data.
+// The funnel we derive from a walk does not span the journey at either end:
+//
+//   Journey  "Log in to an existing account"  (joblander.app, run #209, status ok)
+//   Walked   /  →  /login  →  /login  →  /login
+//   Stored   / → /login
+//   PostHog  / 1690  →  /login 50
+//
+// Stage 1 is where OUR WALK entered the app, so the denominator is everyone who
+// arrived, whatever they came to do — 5 of 6 funnels on checkmyapp.dev begin at
+// the same page, and 2 of 2 on joblander.app. The last stage is wherever the
+// URL happened to sit when the walk ended: sign-in demonstrably worked, and the
+// trail still ends on /login rather than on anything behind it.
+//
+// So "50 of 1690" is a true count of a path and a false answer to "how many
+// people finish logging in". Rendered through CHE-240 it read:
+//
+//   Actually finished — 3% of 1,690 people, last 14 days
+//   We expected most people to get through this. Your own numbers say 97% do
+//   not finish it.
+//
+// about a login that works. That is rule 8's failure exactly — our incapacity
+// sold as the customer's defect — and nothing fails on the way there: the
+// funnel is well-formed, the query is right, the API answers, the number
+// renders.
+//
+// Two mechanisms, because the wording alone would drift back:
+//
+//   1. no customer-facing string about a MEASURED number may say the people it
+//      counted finished, completed or converted — we counted a path, and the
+//      path is not the journey;
+//   2. nothing may do arithmetic between our estimate and their measurement.
+//      The two have different denominators, so any gap between them is an
+//      artefact. This is structural: the guard reads the source.
+//
+// Both come back the day a funnel provably spans its journey. Neither is a
+// statement that measuring is wrong — only that this measurement is not that
+// number.
+//
+// Usage: npx tsx --tsconfig tsconfig.json scripts/verify-measured-denominator.ts
+
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { measuredLine, noMeasurementLine, type NoMeasurement } from "@/lib/journey-numbers";
+import { movementOf, movementSentence, type MetricPoint } from "@/lib/metric-movement";
+import { pathEndsOf } from "@/lib/posthog/measure";
+import { hasHomework, hasNarration } from "@/lib/verdict-language";
+
+let failures = 0;
+function check(name: string, ok: boolean, detail = "") {
+  if (!ok) failures++;
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? `  →  ${detail}` : ""}`);
+}
+
+const root = join(import.meta.dirname, "..");
+function source(rel: string): string {
+  return readFileSync(join(root, rel), "utf8");
+}
+
+/**
+ * Words that turn a count of a path into a claim about finishing.
+ *
+ * "finished" is the one that actually shipped. The rest are the same sentence
+ * reached by a different route, which is how this would come back.
+ */
+const COMPLETION_WORDS = [
+  "finish",
+  "finished",
+  "finishes",
+  "complete",
+  "completed",
+  "completes",
+  "completion",
+  "convert",
+  "converted",
+  "conversion rate",
+  "made it through",
+  "got through",
+  "drop off",
+  "dropped off",
+];
+
+/** Every measured-number string the module can emit, across its whole range. */
+function measuredStrings(): string[] {
+  const out: string[] = [];
+  for (const conversion of [0, 3, 38, 100]) {
+    for (const sample of [30, 412, 41234]) {
+      const l = measuredLine({
+        conversion,
+        sample,
+        windowDays: 14,
+        from: "/login",
+        to: "/practice",
+      });
+      if (l) out.push(l.label, l.value, l.source);
+    }
+  }
+  return out;
+}
+
+console.log("\n— a measured number describes a path, not a finish —\n");
+
+{
+  const strings = measuredStrings();
+  check("the module emits measured strings at all", strings.length > 0);
+
+  for (const word of COMPLETION_WORDS) {
+    const guilty = strings.filter((s) => s.toLowerCase().includes(word));
+    check(
+      `no measured string says "${word}"`,
+      guilty.length === 0,
+      guilty.slice(0, 2).join(" | "),
+    );
+  }
+}
+
+console.log("\n— both ends of the counted path are named —\n");
+
+{
+  // A rate with only one end named is the defect wearing a different label:
+  // the reader still supplies "…of the journey" for the missing half.
+  const line = measuredLine({
+    conversion: 15,
+    sample: 1350,
+    windowDays: 14,
+    from: "/login",
+    to: "/practice",
+  });
+  check("a measured line exists", line !== null);
+  check("it names where the count started", line?.value.includes("/login") === true, line?.value);
+  check("it names where the count ended", line?.value.includes("/practice") === true, line?.value);
+  check("it still says how many people", line?.value.includes("1,350") === true, line?.value);
+  check("it still says the window", line?.value.includes("14 days") === true, line?.value);
+  check("it is sourced to their analytics", line?.source === "your analytics", line?.source);
+}
+
+console.log("\n— the alert sentence describes a path too, and it is the one that is emailed —\n");
+
+{
+  // A real fall: 40% → 15% over enough people to be significant and material.
+  const day = (n: number) => new Date(2026, 8, n);
+  const history: MetricPoint[] = [
+    { conversion: 40, sampleSize: 400, measuredAt: day(1) },
+    { conversion: 41, sampleSize: 400, measuredAt: day(4) },
+    { conversion: 39, sampleSize: 400, measuredAt: day(7) },
+    { conversion: 15, sampleSize: 400, measuredAt: day(10) },
+  ];
+  // Newest first, the order the caller reads them in.
+  const movement = movementOf([...history].reverse());
+  const sentence = movementSentence("Sign up / create a new account", movement, {
+    from: "/",
+    to: "/signup",
+  });
+
+  check("a real fall still produces an alert", typeof sentence === "string", String(sentence));
+  for (const word of COMPLETION_WORDS) {
+    check(
+      `the alert never says "${word}"`,
+      !(sentence ?? "").toLowerCase().includes(word),
+      sentence ?? "",
+    );
+  }
+  check("it names both ends of what moved", /\/signup/.test(sentence ?? ""), sentence ?? "");
+  check("it still carries the size of the move", /points? down/.test(sentence ?? ""), sentence ?? "");
+  check("it counts its own unit correctly", !/\b1 points\b/.test(sentence ?? ""), sentence ?? "");
+  check("no homework in the emailed sentence", !hasHomework(sentence ?? ""));
+  check("no narration in the emailed sentence", !hasNarration(sentence ?? ""));
+}
+
+{
+  // The gate: a point whose path cannot be read sends nothing rather than a
+  // sentence that gets read as "fewer people finish this journey".
+  check("unreadable steps yield no path", pathEndsOf("not json") === null);
+  check("a one-stage path is no path", pathEndsOf(JSON.stringify([{ stage: "/only", count: 9 }])) === null);
+  check("absent steps yield no path", pathEndsOf(null) === null);
+  const ok = pathEndsOf(
+    JSON.stringify([
+      { stage: "/", count: 1690 },
+      { stage: "/signup", count: 13 },
+      { stage: "/login", count: 5 },
+    ]),
+  );
+  check("a real stored path reads its two ends", ok?.from === "/" && ok?.to === "/login", JSON.stringify(ok));
+}
+
+console.log("\n— nothing compares our estimate to their measurement —\n");
+
+{
+  // Structural, not textual. The two numbers have different denominators, so
+  // subtracting them produces a number about nothing. Reading the source is the
+  // only check that survives someone re-adding it under a new name.
+  const numbers = source("src/lib/journey-numbers.ts");
+  const block = source("src/components/journey-numbers-block.tsx");
+
+  check(
+    "journey-numbers exports no comparison helper",
+    !/export\s+function\s+comparisonLine/.test(numbers),
+  );
+  check(
+    "no function there takes both judgement and measurement",
+    !/\(\s*ours\s*:\s*OurJudgement\s*,\s*theirs\s*:\s*TheirMeasurement/.test(numbers),
+    "a signature holding both is a comparison waiting to be written",
+  );
+  check(
+    "the disagreement threshold is gone",
+    !/SHARP_DISAGREEMENT|HEALTHY_CONVERSION/.test(numbers),
+    "a threshold exists only to be crossed by a comparison",
+  );
+  check("the block renders no comparison", !/comparisonLine/.test(block));
+}
+
+console.log("\n— rule 1 still holds on everything above —\n");
+
+{
+  const reasons: NoMeasurement[] = ["not_connected", "no_funnel", "not_measured_yet", "below_floor"];
+  const all = [...measuredStrings(), ...reasons.map((r) => noMeasurementLine(r)), noMeasurementLine("below_floor", 25)];
+  for (const s of all) {
+    if (hasHomework(s)) check(`no homework: "${s}"`, false);
+    if (hasNarration(s)) check(`no narration: "${s}"`, false);
+  }
+  check(`${all.length} customer-facing strings carry no leak`, true);
+}
+
+console.log(`\n${failures === 0 ? "ALL PASS" : `${failures} FAILED`}\n`);
+process.exit(failures === 0 ? 0 : 1);

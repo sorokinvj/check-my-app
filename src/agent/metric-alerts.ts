@@ -15,6 +15,7 @@
 import type { AgentEnv } from "./env";
 import { isAlertable, movementOf, movementSentence, type MetricPoint } from "@/lib/metric-movement";
 import { flowChanges, pairedSentence } from "@/lib/flow-changes";
+import { pathEndsOf as measuredPath } from "@/lib/posthog/measure";
 import { parseJson } from "@/lib/json";
 
 /** How much history to read. Enough for a baseline, not enough to be slow. */
@@ -57,7 +58,11 @@ export async function metricAlertsForRun(env: AgentEnv, runId: string): Promise<
             metricPoints: {
               orderBy: { measuredAt: "desc" },
               take: POINTS_TO_READ,
-              select: { conversion: true, sampleSize: true, measuredAt: true },
+              // `steps` names the two pages the newest count was taken between.
+              // The alert sentence says what moved along that path rather than
+              // that fewer people finished, so it cannot be written without
+              // them (CHE-279).
+              select: { conversion: true, sampleSize: true, measuredAt: true, steps: true },
             },
           },
         },
@@ -89,7 +94,12 @@ export async function metricAlertsForRun(env: AgentEnv, runId: string): Promise<
 
       const movement = movementOf(aj.metricPoints as MetricPoint[]);
       if (!isAlertable(movement)) continue;
-      const sentence = movementSentence(aj.title, movement);
+      // No path, no alert. The movement may well be real, but a sentence that
+      // cannot say which two pages it counted between gets read as "fewer
+      // people finish this journey" — which is not what was counted (CHE-279).
+      const path = measuredPath(aj.metricPoints[0]?.steps ?? null);
+      if (!path) continue;
+      const sentence = movementSentence(aj.title, movement, path);
       if (!sentence) continue;
 
       // CHE-242: the pairing. The number moved AND this is what changed in the
