@@ -188,9 +188,6 @@ export async function notifyVerdictReady(
     );
     return { kind: "skipped", reason: silent };
   }
-  if (run.watchId && !(await watchWantsNotice(env, run.watchId, run.baselineRunId, verdict))) {
-    return { kind: "skipped", reason: SKIP_UNCHANGED };
-  }
   // CHE-96: carry the answer into the mail. Read back rather than threaded
   // through, because both callers (smoke shortcut and full run) reach here at
   // different points, and the row is the single source of truth by now.
@@ -205,9 +202,25 @@ export async function notifyVerdictReady(
   const findings = written?.findings ?? [];
   // CHE-241: what moved, for the mail the Watch already sends. Read once for
   // the whole recipient loop; a failure here costs the sentence, never the mail.
+  //
+  // Computed BEFORE the change-only gate, and handed to it. The gate used to ask
+  // only whether the verdict differed from the baseline, so on a watch set to
+  // "tell me when something changes" a journey that converted twenty points
+  // worse was silently dropped whenever the app itself still worked — the
+  // verdict was `all_good` last week and `all_good` today, so nothing was sent.
+  // That is the exact sentence this epic exists to deliver, suppressed by a rule
+  // about verdicts, on every watch in production (all three were change-only).
+  // The ticket says it plainly: the app works AND fewer people finish, and both
+  // sentences stand.
   const metricAlerts = written
     ? (await metricAlertsForRun(env, written.id)).map((a) => a.sentence)
     : [];
+  if (
+    run.watchId &&
+    !(await watchWantsNotice(env, run.watchId, run.baselineRunId, verdict, metricAlerts))
+  ) {
+    return { kind: "skipped", reason: SKIP_UNCHANGED };
+  }
   try {
     // One message per recipient rather than one message with several addresses:
     // a verdict is somebody's own mail, and a shared To: line is how a team
@@ -253,14 +266,35 @@ async function ownedByTestAccount(env: AgentEnv, publicId: string): Promise<bool
   return Boolean(row?.owner?.isTestAccount);
 }
 
-// notifyOnChangeOnly means the owner only wants to hear from a recurring watch
-// when something moved: the verdict differs from the baseline this run was
-// diffed against. No baseline = first run of the watch = always worth sending.
+/**
+ * Did anything the owner asked to hear about actually move?
+ *
+ * `notifyOnChangeOnly` means a recurring watch only writes when something
+ * changed. "Something" is deliberately not just the verdict: a journey that
+ * converted materially worse is a change, and it is the one this epic exists to
+ * report (CHE-241). An app can work perfectly for weeks — verdict `all_good`,
+ * unchanged, every day — while the flow that makes the money quietly stops
+ * finishing, and a gate that reads only the verdict would swallow exactly that.
+ *
+ * `metricAlerts` is a required parameter rather than something fetched here, so
+ * the gate cannot be evaluated without them. An optional argument would have
+ * been forgotten at one of the call sites eventually, and the failure would look
+ * like silence, which is indistinguishable from nothing being wrong.
+ */
+export function changeOnlyWantsNotice(args: {
+  verdictChanged: boolean;
+  metricAlerts: readonly string[];
+}): boolean {
+  return args.verdictChanged || args.metricAlerts.length > 0;
+}
+
+// No baseline = first run of the watch = always worth sending.
 async function watchWantsNotice(
   env: AgentEnv,
   watchId: string,
   baselineRunId: string | null,
   verdict: string | null,
+  metricAlerts: readonly string[],
 ): Promise<boolean> {
   const watch = await env.db.watch.findUnique({
     where: { id: watchId },
@@ -272,5 +306,8 @@ async function watchWantsNotice(
     where: { id: baselineRunId },
     select: { verdict: true },
   });
-  return !baseline || baseline.verdict !== verdict;
+  return changeOnlyWantsNotice({
+    verdictChanged: !baseline || baseline.verdict !== verdict,
+    metricAlerts,
+  });
 }
