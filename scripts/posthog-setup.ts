@@ -89,8 +89,10 @@ const onCheckPage = {
   kind: "EventsNode",
   event: "$pageview",
   name: "$pageview",
-  custom_name: "Landing (/check) viewed",
-  properties: [{ key: "$pathname", value: "/check", operator: "exact", type: "event" }],
+  // The form is the home page (owner, 2026-09-17; it was /check before, and
+  // the live experiment 461342 was patched to "/" the same day).
+  custom_name: "Landing (/) viewed",
+  properties: [{ key: "$pathname", value: "/", operator: "exact", type: "event" }],
 };
 
 function funnelMetric(name: string, event: string): unknown {

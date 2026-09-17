@@ -83,7 +83,7 @@ export function silenceReason(input: {
 }
 
 // A run belongs to us when someone signed in started it, a team owns it, or a
-// watch scheduled it. An ownerless, teamless run came off the public /check
+// watch scheduled it. An ownerless, teamless run came off the public home-page form
 // form.
 //
 // CHE-253 added teamId, and it is read here on purpose rather than left to

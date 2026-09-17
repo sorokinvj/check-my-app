@@ -1,4 +1,4 @@
-// Cloudflare Turnstile verification (CHE-18) — protects the free /check
+// Cloudflare Turnstile verification (CHE-18) — protects the free home-page
 // submission from bot abuse. Enforced only when TURNSTILE_SECRET is set
 // (prod); a keyless local/dev environment skips it so the app still runs.
 

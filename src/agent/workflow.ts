@@ -1033,7 +1033,7 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
         });
       }
 
-      // Verdict-ready email (CHE: the /check form promises it). Non-fatal: a
+      // Verdict-ready email (CHE: the home-page form promises it). Non-fatal: a
       // notification failure must never fail a completed run. Watch runs arrive
       // here too — the scheduler copies notifyEmail onto the run — but a
       // notifyOnChangeOnly watch stays quiet while the verdict holds steady.

@@ -165,12 +165,12 @@ check(
 const pageview = guardEvent({
   ...base,
   event: "$pageview",
-  properties: { $current_url: "https://checkmyapp.dev/check", token: POSTHOG_TOKEN, $lib: "web", landing_variant: "B" },
+  properties: { $current_url: "https://checkmyapp.dev/", token: POSTHOG_TOKEN, $lib: "web", landing_variant: "B" },
 });
 check(
   "a pageview keeps the SDK's token, $-properties and the variant",
   pageview !== null &&
-    pageview.properties.$current_url === "https://checkmyapp.dev/check" &&
+    pageview.properties.$current_url === "https://checkmyapp.dev/" &&
     pageview.properties.token === POSTHOG_TOKEN &&
     pageview.properties.$lib === "web" &&
     pageview.properties.landing_variant === "B",

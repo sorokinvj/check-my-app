@@ -76,7 +76,7 @@ npx wrangler secret delete ANON_RUNS_PER_DAY_SITE     # or put 20
   in screenshots; cleared after a terminal run unless a Watch retains them.
 - R2 is private — evidence is proxied through the web Worker (`/api/evidence`);
   keys are content-addressed and the verdict permalink is unguessable.
-- Turnstile gates `/check`; add a Cloudflare WAF rate-limit rule on `/api/checks`.
+- Turnstile gates the home-page form; add a Cloudflare WAF rate-limit rule on `/api/checks`.
 
 ## Stripe setup (CHE-40 phase 3)
 

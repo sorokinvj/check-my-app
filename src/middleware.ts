@@ -4,7 +4,7 @@
 // @clerk/backend run on Edge/V8.
 //
 // Only owner-facing areas require a session. The entire anonymous free-run
-// funnel — `/`, `/check`, `/run/*`, `/verdict/*`, sign-in/up — stays public.
+// funnel — `/`, `/run/*`, `/verdict/*`, sign-in/up — stays public.
 import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
 
 const isProtectedRoute = createRouteMatcher(["/dashboard(.*)", "/onboarding(.*)", "/watch(.*)"]);

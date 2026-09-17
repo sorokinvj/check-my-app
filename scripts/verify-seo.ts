@@ -1,17 +1,19 @@
 // What the site tells a search engine about itself, checked two ways.
 //
-// On 2026-09-16 Search Console filed /check — the page every link, funnel and
-// experiment metric is keyed on — as "Duplicate without user-selected
-// canonical". Nothing on the site had said which address was real: `/` sent a
-// temporary redirect to /check, both were in the sitemap, no page carried a
-// canonical tag, and http:// answered 200 instead of redirecting. Google chose
-// `/` and dropped /check. Every one of those is a fact this script pins.
+// On 2026-09-16 Search Console filed /check — then the page every link,
+// funnel and experiment metric was keyed on — as "Duplicate without
+// user-selected canonical". Nothing on the site had said which address was
+// real: `/` sent a temporary redirect to /check, both were in the sitemap, no
+// page carried a canonical tag, and http:// answered 200 instead of
+// redirecting. The next day the owner removed the second address altogether:
+// the form is the home page, there is no /check. Every one of those facts is
+// pinned here.
 //
 // Static part (always): the source says one address per page.
 // Live part (when SEO_SITE is set, e.g. SEO_SITE=https://checkmyapp.dev): the
 // deployed site answers the way the source says it does. CI runs the static
 // part; the live part is the post-deploy dogfood step (CLAUDE.md rule 7).
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import sitemap from "../src/app/sitemap";
@@ -28,19 +30,17 @@ function check(name: string, ok: boolean, detail = "") {
 
 function staticChecks() {
   const home = readFileSync(path.join(repoRoot, "src/app/page.tsx"), "utf8");
-  check(
-    "`/` is a permanent redirect to the home page, not a temporary one",
-    /permanentRedirect\(\s*["']\/check["']\s*\)/.test(home) && !/\bredirect\(/.test(home),
-  );
-  check("HOME_PATH is /check — the address analytics and experiments are keyed on", HOME_PATH === "/check");
+  check("the home page is a page, not a redirect", !/\bredirect\(|permanentRedirect\(/.test(home) && /<SubmitForm/.test(home));
+  check("the home page declares its canonical", /canonical\(HOME_PATH\)/.test(home));
+  check("HOME_PATH is `/` — the form has one address", HOME_PATH === "/");
+  check("there is no /check route (owner, 2026-09-17)", !existsSync(path.join(repoRoot, "src/app/check")));
 
   const entries = sitemap();
   const urls = entries.map((e) => e.url);
-  check("sitemap has no bare root entry (it redirects, so it is not a canonical)", !urls.includes(SITE) && !urls.includes(`${SITE}/`));
-  check("sitemap lists the home page", urls.includes(`${SITE}${HOME_PATH}`));
+  check("sitemap lists the home page at the root", urls.includes(`${SITE}/`));
   check("sitemap is exactly the public pages", urls.join(",") === PUBLIC_PATHS.map((p) => `${SITE}${p}`).join(","));
-  check("sitemap URLs carry no trailing slash", urls.every((u) => !u.endsWith("/")));
-  check("home page has the top priority", entries.find((e) => e.url === `${SITE}${HOME_PATH}`)?.priority === 1);
+  check("no sitemap URL other than the root ends in a slash", urls.every((u) => u === `${SITE}/` || !u.endsWith("/")));
+  check("home page has the top priority", entries.find((e) => e.url === `${SITE}/`)?.priority === 1);
 
   const md = pageMetadata({ title: "T", description: "D", path: "/faq" });
   check("pageMetadata names its own canonical", md.alternates?.canonical === "/faq");
@@ -50,7 +50,7 @@ function staticChecks() {
   const r = robots();
   const rule = Array.isArray(r.rules) ? r.rules[0] : r.rules;
   const disallow = ([] as string[]).concat(rule.disallow ?? []);
-  for (const p of ["/dashboard", "/onboarding", "/api/", "/sign-in", "/run/"]) {
+  for (const p of ["/dashboard", "/onboarding", "/api/", "/sign-in", "/run/", "/paid"]) {
     check(`robots keeps ${p} out`, disallow.includes(p));
   }
   for (const p of PUBLIC_PATHS) {
@@ -69,14 +69,14 @@ async function liveChecks(site: string) {
   const origin = new URL(site);
   const httpOrigin = `http://${origin.host}`;
 
-  const root = await head(`${site}/`);
-  check("live: `/` answers 308 to the home page", root.status === 308 && !!root.location && new URL(root.location, site).pathname === HOME_PATH, `${root.status} ${root.location ?? ""}`);
-
   const http = await head(`${httpOrigin}/faq`);
   check("live: http:// is a permanent redirect to https://", (http.status === 301 || http.status === 308) && (http.location ?? "").startsWith("https://"), `${http.status} ${http.location ?? ""}`);
 
   const slash = await head(`${site}/faq/`);
   check("live: a trailing slash redirects to the canonical", slash.status === 308 && !!slash.location && new URL(slash.location, site).pathname === "/faq", `${slash.status} ${slash.location ?? ""}`);
+
+  const gone = await head(`${site}/check`);
+  check("live: /check is gone (no second address for the form)", gone.status === 404, String(gone.status));
 
   for (const p of PUBLIC_PATHS) {
     const url = `${site}${p}`;
@@ -92,8 +92,8 @@ async function liveChecks(site: string) {
   check("live: robots.txt keeps the dashboard out", /Disallow:\s*\/dashboard/.test(robotsTxt));
 
   const sitemapXml = await (await fetch(`${site}/sitemap.xml`)).text();
-  check("live: sitemap.xml has no bare root entry", !sitemapXml.includes(`<loc>${site}</loc>`) && !sitemapXml.includes(`<loc>${site}/</loc>`));
-  check("live: sitemap.xml lists the home page", sitemapXml.includes(`<loc>${site}${HOME_PATH}</loc>`));
+  check("live: sitemap.xml lists the home page at the root", sitemapXml.includes(`<loc>${site}/</loc>`));
+  check("live: sitemap.xml does not list /check", !sitemapXml.includes(`<loc>${site}/check</loc>`));
 }
 
 async function main() {

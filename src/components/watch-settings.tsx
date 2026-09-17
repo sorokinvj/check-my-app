@@ -129,7 +129,7 @@ export function WatchSettings({
                 const res = await fetch(`/api/watch/${slug}`, { method: "DELETE" }).catch(
                   () => null,
                 );
-                if (res?.ok) router.push("/check");
+                if (res?.ok) router.push("/");
                 else setBusy(false);
               }}
             >

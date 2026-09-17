@@ -144,7 +144,7 @@ a JSON body:
 
 | `code`                 | HTTP | Meaning | What to do |
 |------------------------|------|---------|------------|
-| `quota_site`           | 429  | Today's site-wide free checks are used up (resets midnight UTC) | Set `CHECKMYAPP_API_KEY`; or a $1 one-off check in the browser at `/check`. Do not retry |
+| `quota_site`           | 429  | Today's site-wide free checks are used up (resets midnight UTC) | Set `CHECKMYAPP_API_KEY`; or a $1 one-off check in the browser on the home page. Do not retry |
 | `quota_anon`           | 429  | This network's one anonymous run per day is used | Set `CHECKMYAPP_API_KEY`. Do not retry |
 | `quota_free`           | 429  | The Free plan's lifetime runs are used | Upgrade in the dashboard, or enable Daily Watch on an already-checked app. Do not retry |
 | `turnstile_failed`     | 403  | Anonymous submission without a browser Turnstile token (always, in production) | Set `CHECKMYAPP_API_KEY` |

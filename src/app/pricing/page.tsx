@@ -45,7 +45,7 @@ const PLANS: Plan[] = [
       "Evidence on every verdict — screenshots, network logs",
       "Agent-written Playwright specs",
     ],
-    cta: { label: "Check your app", href: "/check" },
+    cta: { label: "Check your app", href: "/" },
   },
   {
     name: "Starter",

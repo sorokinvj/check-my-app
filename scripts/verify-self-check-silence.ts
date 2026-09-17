@@ -55,7 +55,7 @@ interface Scenario {
   isTestAccount: boolean;
   selfCheckHosts?: string;
   notifyEmail?: string | null;
-  // Default: a signed-in run. `null` is the public /check form's anonymous run.
+  // Default: a signed-in run. `null` is the public home-page form's anonymous run.
   ownerId?: string | null;
   watchId?: string | null;
   baselineRunId?: string | null;

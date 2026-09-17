@@ -3,7 +3,7 @@ import { PaidCheckStart } from "@/components/paid-check-start";
 
 export const dynamic = "force-dynamic";
 
-// Stripe's success page for the $1 one-off check · /check/paid?session_id=…
+// Stripe's success page for the $1 one-off check · /paid?session_id=…
 // The run starts once Stripe reports the payment settled — usually by the time
 // the visitor lands here. The client component polls and moves them to the
 // live run; this page only needs to survive a missing session id.
@@ -25,7 +25,7 @@ export default async function PaidCheckPage({
             you gave an email.
           </p>
           <Link
-            href="/check"
+            href="/"
             className="inline-block font-mono text-[13px] text-accent transition-colors hover:underline"
           >
             Back to the form →
