@@ -58,6 +58,13 @@ export type AnalyticsEvents = {
    */
   check_rejected: {
     code: string;
+    /**
+     * What was typed, trimmed to 200 characters — the app URL a visitor
+     * wanted checked, which is public on /checks/today the moment it is
+     * accepted. Omitted when it contains "@": a userinfo URL or a pasted
+     * e-mail is not ours to keep.
+     */
+    inputText?: string;
     inputLength?: number;
     inputHasScheme?: boolean;
     inputHasDot?: boolean;
@@ -362,9 +369,20 @@ export function initAnalytics(): void {
     capture_pageleave: true,
     persistence: "localStorage+cookie",
     autocapture: true,
-    // Session replay would record the customer's app URL and test credentials
-    // as they are typed. Off until there is a reason and a masking review.
-    disable_session_recording: true,
+    // Session replay, with the masking review it was waiting for (2026-09-18):
+    // every input is masked — the test email, the password (always), notes —
+    // except the one field whose content is the point of the product, the
+    // app's URL, which the visitor is about to publish on /checks/today
+    // anyway. The reason: the only two strangers who pressed the button in
+    // a month were refused by the form, and nothing recorded what they had
+    // typed. Recording is also switched on in the project settings
+    // (session_recording_opt_in, 100 % sample); both have to be on.
+    disable_session_recording: false,
+    session_recording: {
+      maskAllInputs: true,
+      maskInputFn: (text, element) =>
+        element?.getAttribute("data-ph-unmask") === "url" ? text : "*".repeat(text.length),
+    },
     respect_dnt: true,
     // Masks e-mail addresses and the like inside captured URLs.
     mask_personal_data_properties: true,
