@@ -48,8 +48,23 @@ export type AnalyticsEvents = {
   pageview: { path: string };
   /** The check form was submitted and accepted client-side. */
   check_submitted: { appSlug: string; hasCredentials: boolean; hasNotifyEmail: boolean };
-  /** The server refused a check; `code` is the API's rejection code. */
-  check_rejected: { code: string };
+  /**
+   * A check was refused — by the form (`invalid_url`) or by the API (`code`
+   * is its rejection code). The `input*` fields describe what was typed
+   * without carrying it: on 2026-09-10 and 2026-09-11 the only two strangers
+   * who pressed the button in a month were refused with `invalid_url`, and
+   * the event said nothing about what they had typed. `inputHost` is the
+   * hostname when the text parses as a URL, else "" — same rule as `appSlug`.
+   */
+  check_rejected: {
+    code: string;
+    inputLength?: number;
+    inputHasScheme?: boolean;
+    inputHasDot?: boolean;
+    inputHasSpace?: boolean;
+    inputHost?: string;
+    extensionMode?: boolean;
+  };
   /** The site-wide daily quota page was shown. */
   quota_site_hit: undefined;
   /** The one-off paid check call to action was clicked. */
