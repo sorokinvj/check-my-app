@@ -10,49 +10,51 @@
 //
 // This process holds no opinion. It reads facts, runs them through the machine
 // (./machine.mjs), and does what the machine says. Every judgement in the loop
-// belongs to someone else: Codex writes, Claude reviews, and only a later
-// CheckMyApp run may say the problem is gone.
+// belongs to someone else: Mender writes (in the tick), Codex reviews, and only
+// a later CheckMyApp run may say the problem is gone.
 //
 //   node scripts/doer/shepherd.mjs --dry-run   # decide and print, touch nothing
 //   node scripts/doer/shepherd.mjs             # act
 
 import { execFileSync } from "node:child_process";
-import { decidePr, MAX_ROUNDS } from "./machine.mjs";
+import { decidePr, MAX_ROUNDS, ROUND_MARKER, roundState } from "./machine.mjs";
 import { HOLD_LABEL, STOP_LABEL, isMergeCandidate } from "./eligibility.mjs";
+import { findingsText } from "./mender.mjs";
+import { REVIEWER_LOGIN, REVIEW_REQUEST, askedSinceHead, codexSummaryState, reviewRequestNeeded } from "./review.mjs";
 import { unparkOurRuns } from "./unpark.mjs";
 
 const DRY = process.argv.includes("--dry-run");
 const REPO = process.env.DOER_REPO ?? "sorokinvj/check-my-app";
 
-function gh(args, { json = true } = {}) {
-  const out = execFileSync("gh", args, { encoding: "utf8", maxBuffer: 20 * 1024 * 1024 });
+function gh(args, { json = true, env = undefined } = {}) {
+  const out = execFileSync("gh", args, {
+    encoding: "utf8",
+    maxBuffer: 20 * 1024 * 1024,
+    env: env ? { ...process.env, ...env } : process.env,
+  });
   return json ? JSON.parse(out || "null") : out;
 }
-function act(cmd, args) {
+function act(cmd, args, opts = {}) {
   if (DRY) return console.log(`   [dry-run] ${cmd} ${args.slice(0, 4).join(" ")} …`);
-  execFileSync(cmd, args, { stdio: "inherit" });
+  execFileSync(cmd, args, { stdio: "inherit", ...opts });
 }
 
-// A marker only this process writes, so counting rounds needs no extra storage
-// and cannot be confused with a human asking for something.
-const ROUND_MARKER = "<!-- doer:round -->";
-
-// Whose plain comment counts as a verdict. Named, not inferred: any other
-// account commenting "looks fine to me" must not unblock a merge.
-const REVIEWER_LOGIN = "claude[bot]";
-
-// Unresolved review findings, read from GitHub's own reviewThreads state rather
-// than from the wording of a review. Classifying on a phrase reads the
-// vocabulary and misses the intent, and it would also tie us to one reviewer's
-// house style — this signal is the same whoever left the comment.
+// Review threads, read from GitHub's own reviewThreads state rather than from
+// the wording of a review. Classifying on a phrase reads the vocabulary and
+// misses the intent, and it would also tie us to one reviewer's house style —
+// this signal is the same whoever left the comment.
 //
 // isOutdated means the thread points at code the branch has since replaced; it
-// is not an objection to what is there now.
-function unresolvedFindings(prNumber) {
+// is not an objection to what is there now. The bodies come along because the
+// implementer's next round is built from them (mender.mjs findingsText).
+function reviewThreads(prNumber) {
   const q = `query($owner:String!,$repo:String!,$pr:Int!){
     repository(owner:$owner,name:$repo){
       pullRequest(number:$pr){
-        reviewThreads(first:100){ nodes { isResolved isOutdated } }
+        reviewThreads(first:100){ nodes {
+          isResolved isOutdated path line
+          comments(first:10){ nodes { author { login } body } }
+        } }
       }
     }
   }`;
@@ -64,23 +66,28 @@ function unresolvedFindings(prNumber) {
       "-F", `owner=${owner}`, "-F", `repo=${repo}`, "-F", `pr=${prNumber}`,
     ]);
     const nodes = r?.data?.repository?.pullRequest?.reviewThreads?.nodes ?? [];
-    return nodes.filter((t) => !t.isResolved && !t.isOutdated).length;
+    return nodes
+      .filter((t) => !t.isResolved && !t.isOutdated)
+      .map((t) => ({
+        path: t.path,
+        line: t.line,
+        comments: (t.comments?.nodes ?? []).map((c) => ({ author: c.author?.login ?? "?", body: c.body })),
+      }));
   } catch (err) {
     // Fail closed. An unreadable review is not a clean review — merging on an
     // unknown is how a gate lets through a change nobody looked at.
     console.warn(`[shepherd] could not read review threads for #${prNumber}: ${err.message}`);
-    return Number.POSITIVE_INFINITY;
+    return null;
   }
 }
 
 // Does this PR change anything a user could feel, or is it still just the claim?
-// The dispatcher opens the PR carrying one file, .doer/TICKET.md, and only then
-// asks the implementer. Until real files move, there is nothing to review and
-// nothing to merge — and the later guards would all say yes, because green CI
-// and a clean review are exactly what an empty diff produces.
-//
-// The same rule gates the reviewer (claude-review.yml paths-ignore), so the two
-// halves cannot disagree about whether this PR contains work.
+// The tick opens a pull request only after Mender's patch is on the branch, so
+// this is now a guard against a tick that died between the two pushes — and
+// against a hand-opened doer/* PR that carries nothing. Until real files move,
+// there is nothing to review and nothing to merge, and the later guards would
+// all say yes, because green CI and a clean review are exactly what an empty
+// diff produces.
 function hasImplementerWork(prNumber) {
   try {
     const files = gh([
@@ -99,27 +106,18 @@ function hasImplementerWork(prNumber) {
   }
 }
 
-// Did a reviewer finish on THIS head? A verdict about an earlier push was about
-// a different diff.
+// Did the reviewer finish on THIS head? A verdict about an earlier push was
+// about a different diff.
 //
-// Three shapes count, because a reviewer with nothing to say uses a different
-// one from a reviewer with findings — and only the first two carry a sha:
+// Three shapes count, because a reviewer with findings uses a different one
+// from a reviewer with nothing to say:
 //
-//   - a formal review on this commit;
+//   - a formal review on this commit (Codex with findings: state COMMENTED,
+//     commit_id = head — measured on #149, 2026-09-18);
 //   - an inline comment on this commit;
-//   - a plain comment from the reviewer, newer than this commit.
-//
-// The third exists because a clean review publishes exactly that: on 2026-09-03
-// the reviewer read the diff for three minutes, ran typecheck and lint in a
-// worktree, and said "No issues found" in an ordinary PR comment. The gate saw
-// formal reviews: 0, inline: 0, and would have waited forever for a verdict it
-// had already been given.
-//
-// Time is the tie to the head, since a plain comment carries no sha: a verdict
-// written before this commit existed was about a different diff, and is not
-// counted. That is the same rule as the other two, expressed with the only
-// evidence this shape offers.
-function reviewReportedForHead(prNumber, headSha) {
+//   - Codex's summary comment showing "Completed" for this head's sha, which
+//     is all a review with no findings leaves behind (review.mjs).
+function reviewReportedForHead(prNumber, headSha, comments) {
   // A review by github-actions[bot] is never a verdict. Enabling Actions to
   // create pull requests also grants it the right to approve them, so a
   // workflow could otherwise approve the branch a workflow just pushed — the
@@ -132,28 +130,22 @@ function reviewReportedForHead(prNumber, headSha) {
   ]) ?? []).filter((r) => r.who !== "github-actions[bot]");
   if (reviews.some((r) => r.sha === headSha)) return true;
 
-  const comments = gh([
+  const inline = gh([
     "api", `repos/${REPO}/pulls/${prNumber}/comments`,
     "--jq", "[.[] | {sha:.commit_id}]",
   ]) ?? [];
-  if (comments.some((c) => c.sha === headSha)) return true;
+  if (inline.some((c) => c.sha === headSha)) return true;
 
-  try {
-    // Read as text: gh prints a bare jq string unquoted, which is not JSON.
-    const headAt = gh([
-      "api", `repos/${REPO}/commits/${headSha}`, "--jq", ".commit.committer.date",
-    ], { json: false }).trim();
-    if (!headAt) return false;
-    const verdicts = gh([
-      "api", `repos/${REPO}/issues/${prNumber}/comments?per_page=100`,
-      "--jq", `[.[] | select(.user.login == "${REVIEWER_LOGIN}") | .created_at]`,
-    ]) ?? [];
-    return verdicts.some((at) => Date.parse(at) > Date.parse(headAt));
-  } catch (err) {
-    // Fail closed: an unreadable verdict is not a verdict.
-    console.warn(`[shepherd] could not read the reviewer's comments on #${prNumber}: ${err.message}`);
-    return false;
+  return comments.some((c) => c.who === REVIEWER_LOGIN && codexSummaryState(c.body, headSha) === "completed");
+}
+
+function summaryStateFor(comments, headSha) {
+  for (const c of comments) {
+    if (c.who !== REVIEWER_LOGIN) continue;
+    const s = codexSummaryState(c.body, headSha);
+    if (s) return s;
   }
+  return null;
 }
 
 // A stop the owner set outranks everything, including a PR mid-round — and
@@ -176,13 +168,9 @@ if (stopped) {
 // starts is a merge that never happens, and the loop's last step is a button.
 //
 // Released here rather than at the moment the PR is opened because every push
-// by the implementer parks a run of its own, and this process is the one that
-// comes back every twenty minutes. Only our own branches are touched; the
-// approval policy protecting strangers' forks is left exactly as it is.
-//
-// This runs before the "no PRs to shepherd" exit on purpose: a shadow draft on
-// mender/* is not a merge candidate and never appears below, but its checks
-// are still the measurement CHE-128 exists to take.
+// by the tick parks a run of its own, and this process is the one that comes
+// back every twenty minutes. Only our own branches are touched; the approval
+// policy protecting strangers' forks is left exactly as it is.
 unparkOurRuns({
   repo: REPO,
   gh,
@@ -201,37 +189,37 @@ if (prs.length === 0) {
 }
 
 for (const pr of prs) {
-  const issueNumber = Number(pr.headRefName.match(/^doer\/(\d+)/)?.[1]);
   const comments = gh([
-    "api", `repos/${REPO}/issues/${pr.number}/comments`,
-    "--jq", "[.[] | .body]",
+    "api", `repos/${REPO}/issues/${pr.number}/comments?per_page=100`,
+    "--jq", "[.[] | {body: .body, createdAt: .created_at, who: .user.login}]",
   ]) ?? [];
-  const roundsUsed = comments.filter((b) => b.includes(ROUND_MARKER)).length;
+  // Read as text: gh prints a bare jq string unquoted, which is not JSON.
+  const headAt = gh([
+    "api", `repos/${REPO}/commits/${pr.headRefOid}`, "--jq", ".commit.committer.date",
+  ], { json: false }).trim();
+  const { roundsUsed, pending } = roundState(comments, headAt);
 
-  const labels = issueNumber
-    ? (gh(["issue", "view", String(issueNumber), "--repo", REPO, "--json", "labels"])?.labels ?? [])
-    : [];
   // Merging is the default, and this is the line that decides it (owner,
   // 2026-09-03). It used to require an opt-in label, which made "stopped,
   // waiting for a person" the loop's normal state — the same manual button we
   // rejected the Linear handoff for, moved to the end of the pipeline. The
-  // owner already decided this work should happen when the ticket was filed;
-  // asking again at the merge is asking twice for one decision. The brakes are
-  // the labels that already exist: doer:hold for this ticket, doer:stop for
-  // everything.
-  const mayMerge = !labels.some((l) => l.name === HOLD_LABEL);
+  // brakes are the labels that already exist: doer:hold on the pull request,
+  // doer:stop for everything.
+  const prLabels = gh(["pr", "view", String(pr.number), "--repo", REPO, "--json", "labels"])?.labels ?? [];
+  const mayMerge = !prLabels.some((l) => l.name === HOLD_LABEL);
 
   const checks = gh([
     "api", `repos/${REPO}/commits/${pr.headRefOid}/check-runs`,
     "--jq", "[.check_runs[] | {name:.name, conclusion:.conclusion, headSha:.head_sha}]",
   ]) ?? [];
 
+  const threads = reviewThreads(pr.number);
   const facts = {
     headSha: pr.headRefOid,
     checks,
     hasImplementerWork: hasImplementerWork(pr.number),
-    reviewReportedForHead: reviewReportedForHead(pr.number, pr.headRefOid),
-    unresolvedFindings: unresolvedFindings(pr.number),
+    reviewReportedForHead: reviewReportedForHead(pr.number, pr.headRefOid, comments),
+    unresolvedFindings: threads === null ? Number.POSITIVE_INFINITY : threads.length,
     roundsUsed,
     mayMerge,
     ageHours: (Date.now() - new Date(pr.createdAt).getTime()) / 3_600_000,
@@ -239,19 +227,43 @@ for (const pr of prs) {
   const { state, reason } = decidePr(facts);
   console.log(`PR #${pr.number} (${pr.headRefName}) → ${state}: ${reason}`);
 
+  if (state === "waitingForReview") {
+    // Codex reviews a pull request opened for review on its own, and answers
+    // "@codex review" only from a ChatGPT-linked identity (CHE-155) — so the
+    // ask goes out under the owner's token, and only when nothing else will
+    // produce a verdict (review.mjs).
+    const need = reviewRequestNeeded({
+      verdictForHead: facts.reviewReportedForHead,
+      summaryState: summaryStateFor(comments, pr.headRefOid),
+      askedSinceHead: askedSinceHead(comments, headAt),
+      headAgeMinutes: (Date.now() - Date.parse(headAt)) / 60_000,
+    });
+    console.log(`   review request: ${need.reason}`);
+    if (need.ask) {
+      if (!process.env.CODEX_REVIEW_TOKEN) {
+        console.warn("   CODEX_REVIEW_TOKEN is not set — nobody can ask the reviewer, and this PR will wait forever");
+      } else {
+        act("gh", ["pr", "comment", String(pr.number), "--repo", REPO, "--body",
+          `${REVIEW_REQUEST} in ${REPO}.\n\nAsked by the shepherd for head ${pr.headRefOid.slice(0, 7)}.`],
+          { env: { ...process.env, GH_TOKEN: process.env.CODEX_REVIEW_TOKEN } });
+      }
+    }
+  }
+
   if (state === "fixing") {
-    // A non-review "@codex" comment on a PR starts a task that commits to this
-    // PR's branch — proven 2026-09-02. The repository is pinned inside the
-    // sentence because that is the only place the docs say it binds.
-    act("gh", ["pr", "comment", String(pr.number), "--repo", REPO, "--body",
-      `${ROUND_MARKER}\n@codex address the review findings on this pull request, in ${REPO}.\n\n` +
-      `This is round ${roundsUsed + 1} of ${MAX_ROUNDS}. ${reason}\n\n` +
-      `Resolve each unresolved review thread by fixing what it points at, or — if a finding is ` +
-      `wrong — reply on that thread saying why and leave the code as it is. Do not resolve a ` +
-      `thread by silently agreeing with it.\n\n` +
-      `Commit to this branch. If \`main\` has moved, rebase on it explicitly; your checkout is a ` +
-      `snapshot from when the task started. Do not merge, do not touch \`main\`, and do not edit ` +
-      `\`CLAUDE.md\` — see AGENTS.md for the commands and what counts as done.`]);
+    if (pending) {
+      // The implementer runs on the tick's rhythm, not ours. Asking again
+      // before it has answered would burn the three rounds in an hour.
+      console.log(`   round ${roundsUsed} is still waiting for the implementer — not asking again`);
+    } else {
+      const failed = checks
+        .filter((c) => c.headSha === pr.headRefOid && !["success", "neutral", "skipped"].includes(c.conclusion))
+        .map((c) => c.name);
+      const findings = findingsText(threads ?? [], failed);
+      act("gh", ["pr", "comment", String(pr.number), "--repo", REPO, "--body",
+        `${ROUND_MARKER}\n**Round ${roundsUsed + 1} of ${MAX_ROUNDS}.** ${reason}\n\n` +
+        `The next doer tick hands these to the implementer, on this branch:\n\n${findings}`]);
+    }
   }
 
   if (state === "blocked") {
@@ -260,9 +272,7 @@ for (const pr of prs) {
       `The loop is not converging, so it stops rather than spending a fourth round on the same ` +
       `ground. Nothing here is merged and nothing is lost — the branch and every round of ` +
       `review are above.`]);
-    if (issueNumber) {
-      act("gh", ["issue", "edit", String(issueNumber), "--repo", REPO, "--add-label", "doer:hold"]);
-    }
+    act("gh", ["pr", "edit", String(pr.number), "--repo", REPO, "--add-label", HOLD_LABEL]);
   }
 
   if (state === "withdrawn") {
@@ -273,17 +283,15 @@ for (const pr of prs) {
     act("gh", ["pr", "comment", String(pr.number), "--repo", REPO, "--body",
       `**Claim withdrawn.** ${reason}\n\n` +
       `Nothing was built and nothing is judged here — the ticket is untouched and may be ` +
-      `claimed again. This exists so that one implementer that never answered cannot hold ` +
+      `claimed again. This exists so that one attempt that never finished cannot hold ` +
       `the whole queue, which is what happened for two days before CHE-209.`]);
     act("gh", ["pr", "close", String(pr.number), "--repo", REPO, "--delete-branch"]);
   }
 
   if (state === "merging") {
     act("gh", ["pr", "merge", String(pr.number), "--repo", REPO, "--squash", "--delete-branch"]);
-    if (issueNumber) {
-      act("gh", ["issue", "comment", String(issueNumber), "--repo", REPO, "--body",
-        "Shipped. Whether the problem is actually gone is decided by the next CheckMyApp run " +
-        "against the deployed product — not by this merge."]);
-    }
+    act("gh", ["pr", "comment", String(pr.number), "--repo", REPO, "--body",
+      "Shipped. Whether the problem is actually gone is decided by the next CheckMyApp run " +
+      "against the deployed product — not by this merge."]);
   }
 }

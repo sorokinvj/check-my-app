@@ -16,17 +16,20 @@
 // Three conditions, all of them required, none of them inferable by an outsider
 // who does not already have write access here:
 //
-//   1. the branch is one of ours — `doer/*` or `mender/*`;
+//   1. the branch is one of ours — `doer/*`;
 //   2. the run's head repository is THIS repository, never a fork;
 //   3. an open pull request for that branch was opened by our bot.
 //
-// (3) is about the pull request's author, not the run's. After Codex pushes a
-// fix the run's actor is `chatgpt-codex-connector[bot]`, and that run parks for
-// the same reason — so keying on the run's actor would release the first run of
-// a PR and park every round after it.
+// (3) is about the pull request's author, not the run's. Every push on a doer
+// branch is the tick's own (Mender's patch, committed by the workflow), and a
+// run parks for the same reason on each of them; keying on the run's actor
+// would be fragile the day that changes, and the pull request's author is not.
+//
+// `mender/*` used to be listed under (1) for the shadow implementer's drafts
+// (CHE-128). Mender is the implementer now and publishes on the doer's own
+// branch, so there is no second prefix to release.
 
 import { isDoerBranch } from "./eligibility.mjs";
-import { isShadowBranch } from "./shadow.mjs";
 
 /** The account the doer's pull requests are opened by. Named, never inferred. */
 export const DOER_PR_AUTHOR = "github-actions[bot]";
@@ -79,7 +82,7 @@ export function mayUnpark({ run, prs = [], repo }) {
   if (run.headRepository !== repo) {
     return { unpark: false, reason: `head is ${run.headRepository ?? "unknown"}, not ${repo} — a fork waits for a person` };
   }
-  if (!isDoerBranch(branch) && !isShadowBranch(branch)) {
+  if (!isDoerBranch(branch)) {
     return { unpark: false, reason: `${branch} is not one of our branches` };
   }
 

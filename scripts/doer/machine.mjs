@@ -4,8 +4,9 @@
 // review → fixes → review again, up to three rounds, and then deciding.
 //
 // Roles, and the reason they are separate:
-//   doer      — Codex. Writes the code.
-//   reviewer  — Claude. Judges the code. A different vendor on purpose: one
+//   doer      — Mender. Writes the code (owner, 2026-09-18; Codex before that,
+//               which could not push here — CHE-155).
+//   reviewer  — Codex. Judges the code. A different vendor on purpose: one
 //               model that both writes and approves is the arrangement rule §8
 //               exists to forbid, and it is why this product exists at all.
 //   gate      — this machine. Merges when nothing objects. It holds no opinion,
@@ -37,6 +38,45 @@ export const MAX_ROUNDS = 3;
  * one edit in one place rather than a search.
  */
 export const CLAIM_EXPIRY_HOURS = 6;
+
+/**
+ * Markers only the loop writes, so counting rounds needs no extra storage and
+ * cannot be confused with a person asking for something. The shepherd writes
+ * the first when it hands findings back; the tick writes the second when it
+ * has answered — with a push, or with a report saying why there is none.
+ */
+export const ROUND_MARKER = "<!-- doer:round -->";
+export const ROUND_ANSWER_MARKER = "<!-- doer:round-answered -->";
+
+/**
+ * Where the fix rounds on a pull request stand, from its comments.
+ *
+ * A request is pending when the newest round marker is younger than the head
+ * (a push after the request answered it) and younger than the newest answer
+ * marker (a red attempt answered it without a push). Both are needed: the
+ * implementer runs on the tick's two-hour rhythm and the shepherd on twenty
+ * minutes, and without "pending" the shepherd would post three rounds in an
+ * hour and block the pull request before the implementer had looked once.
+ *
+ * @param {{body:string, createdAt:string}[]} comments
+ * @param {string} headAt ISO time of the head commit
+ * @returns {{roundsUsed:number, pending:{body:string, createdAt:string}|null}}
+ */
+export function roundState(comments = [], headAt) {
+  const requests = comments.filter((c) => String(c.body ?? "").includes(ROUND_MARKER));
+  const answers = comments.filter((c) => String(c.body ?? "").includes(ROUND_ANSWER_MARKER));
+  const newest = (list) => list.reduce((m, c) => Math.max(m, Date.parse(c.createdAt) || 0), 0);
+  const lastRequest = requests.reduce(
+    (best, c) => (!best || Date.parse(c.createdAt) > Date.parse(best.createdAt) ? c : best),
+    null,
+  );
+  const head = Date.parse(headAt) || 0;
+  const pending =
+    lastRequest && Date.parse(lastRequest.createdAt) > head && Date.parse(lastRequest.createdAt) > newest(answers)
+      ? lastRequest
+      : null;
+  return { roundsUsed: requests.length, pending };
+}
 
 // A check that ran and correctly did nothing is not a failure. Our deploy job
 // reports "skipped" on every PR because it deploys from main only — found by a

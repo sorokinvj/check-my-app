@@ -4,24 +4,31 @@
 # them. That is the builder grading its own work, which rule §8 forbids for
 # customers and should never have been acceptable for us.
 #
-# What this may do: claim one ticket, open a branch and a PR, and ask an
-# implementer that is not us to do the work. What it may never do: decide the
-# work succeeded. The dispatcher can say "shipped"; only a later CheckMyApp run,
-# walking the deployed product from outside, may say "resolved"
-# (src/agent/reconcile.ts). Those are different words with different authors.
+# What this may do: claim one ticket, have Mender attempt it, and publish the
+# attempt as a pull request. What it may never do: decide the work succeeded.
+# The dispatcher can say "shipped"; only a later CheckMyApp run, walking the
+# deployed product from outside, may say "resolved" (src/agent/reconcile.ts).
+# Those are different words with different authors.
 #
 # It runs here rather than on a VM for a reason that was paid for on 1 September:
 # JobLander's dispatcher died of an out-of-memory kill on 26 August and nobody
 # noticed for six days, because the board still looked alive — CheckMyApp had
 # been quietly covering for it. A stopped machine is silent; a failed workflow
 # is loud, and being loud is the whole requirement for something unattended.
+#
+# The implementer runs INSIDE this job (owner, 2026-09-18). Mender is a cheap
+# model in a bash loop whose only output is a patch, judged by a gate in a
+# checkout it never saw; it is checked out from JobLander-app/mender with a
+# read-only deploy key and given exactly one secret, the model key. It used to
+# be Codex, asked by a comment, and Codex could not push here (CHE-155).
 
 name: Doer
 
 on:
   schedule:
-    # Every two hours. The queue is nine tickets long; there is nothing to gain
-    # from tighter, and a slow loop that is trusted beats a fast one that is not.
+    # Every two hours. An attempt takes up to an hour end to end; there is
+    # nothing to gain from tighter, and a slow loop that is trusted beats a fast
+    # one that is not.
     - cron: "17 */2 * * *"
   workflow_dispatch:
 
@@ -40,7 +47,12 @@ permissions:
 jobs:
   tick:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Mender's runner is bounded at 30 minutes and its gate installs and runs
+    # the whole verify:* registry on a fresh checkout; the tick's own deadline
+    # for it is 60 (MENDER_TIMEOUT). Far outside Mender's own limits on
+    # purpose: a kill from outside lands on a process that writes its price
+    # last, and an unpriced attempt is a bug, not a gap.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
         with:
@@ -66,6 +78,18 @@ jobs:
       - name: Install
         run: npm ci
 
+      # The implementer. A read-only deploy key, so this workflow can read
+      # Mender's code and nothing else of that repository; its checkout sits
+      # beside ours, which is the layout its home discovery expects.
+      - name: Check out Mender
+        uses: actions/checkout@v4
+        with:
+          repository: JobLander-app/mender
+          ssh-key: ${{ secrets.MENDER_DEPLOY_KEY }}
+          path: mender
+
+      - uses: astral-sh/setup-uv@v5
+
       - name: Tick
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -75,4 +99,36 @@ jobs:
           # for this: these two are already here for the deploy.
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # Mender. One secret — the model key — and the model per tier stated
+          # here in the open, the way Mender's own ladder states it
+          # (JobLander-app/mender, docs/ladder.md). No model name is hardcoded
+          # in Mender; a tier nobody named is a run that refuses to start.
+          MENDER_HOME: ${{ github.workspace }}/mender
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          MENDER_T1: deepseek/deepseek-v4-flash
+          MENDER_T2: minimax/minimax-m3
+          MENDER_TIER: t1
+          MENDER_BUDGET: "1.50"
+          MENDER_RUNNER_TIMEOUT: "1800"
+          MENDER_MAX_STEPS: "40"
+          MENDER_TIMEOUT: "3600"
         run: node scripts/doer/tick.mjs
+
+      # Every attempt is priced and every price is kept: the ledger row and the
+      # run directory (task, patch, usage, gate log, trajectory) survive the
+      # runner as an artifact, whether or not a pull request came out of it.
+      - name: Keep the attempt's record
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mender-run-${{ github.run_id }}
+          path: |
+            mender/runs/ledger.csv
+            mender/runs/*/task.json
+            mender/runs/*/usage.json
+            mender/runs/*/verify.json
+            mender/runs/*/report.md
+            mender/runs/*/patch.diff
+            mender/runs/*/trajectory.jsonl
+          if-no-files-found: ignore
+          retention-days: 30

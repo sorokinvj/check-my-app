@@ -120,8 +120,8 @@ export function decideTick(state) {
     return {
       act: false,
       reason:
-        `every admitted ticket has had its claims withdrawn unanswered — ${list}. ` +
-        `The queue is not empty and nothing is wrong with it: no implementer is delivering.`,
+        `every admitted ticket has had its attempts withdrawn — ${list}. ` +
+        `The queue is not empty and nothing is wrong with it: no implementer is delivering on these.`,
     };
   }
 
@@ -134,20 +134,21 @@ export function decideTick(state) {
 export const BRANCH_PREFIX = "doer/";
 
 /**
- * A branch this dispatcher owns. Everything else — including the second
- * implementer's `mender/*` (CHE-128) — is somebody else's work, and the two
- * rails below are the only reason a shadow PR is safe to open at all.
+ * A branch this dispatcher owns. Everything else is somebody else's work. (The
+ * shadow implementer's `mender/*` drafts of CHE-128 used to be the reason this
+ * needed saying; Mender publishes on the doer's own branch now.)
  *
- * Exported rather than written inline twice because the shadow design rests on
- * both, and an invariant nobody can test is a comment.
+ * Exported rather than written inline twice because the merge gate and the
+ * unpark sweep both rest on it, and an invariant nobody can test is a comment.
  */
 export function isDoerBranch(ref) {
   return String(ref ?? "").startsWith(BRANCH_PREFIX);
 }
 
 /**
- * A PR the merge gate may consider. A draft is a proposal, not a candidate, and
- * the shadow run publishes drafts deliberately.
+ * A PR the merge gate may consider. A draft is a proposal, not a candidate:
+ * the tick opens a red attempt as a draft, for the record, and closes it in
+ * the same breath.
  */
 export function isMergeCandidate(pr) {
   return isDoerBranch(pr?.headRefName) && pr?.isDraft !== true;

@@ -1,0 +1,74 @@
+# The gate Mender judges a patch by. Mender is the doer's implementer
+# (scripts/doer/tick.mjs); its contract is in JobLander-app/mender, docs/contract.md.
+#
+# This file lives here rather than in Mender's tree because the model is shown
+# it as "the commands your patch will be judged by", and the gate reads the same
+# file — one copy, so the two cannot drift. Until 2026-09-18 it lived in the
+# Mender checkout, and one attempt spent forty steps writing a Playwright spec
+# into e2e/, which the gate runs through tsx and can never make pass.
+#
+# The commands are exactly the ones AGENTS.md calls "what CI runs, in this
+# order". The gate has no opinion of its own about this repository.
+
+version: 1
+
+runtime:
+  image: node:22
+  setup:
+    - npm ci
+    - npx prisma generate     # the workerd client; its output is gitignored, so it must be regenerated per checkout
+
+verify:
+  typecheck:
+    # Two of them: the agent worker has its own tsconfig, and `npm run
+    # typecheck` alone does not cover it. AGENTS.md calls it "easy to forget".
+    - npm run typecheck
+    - npm run agent:typecheck
+  lint: npm run lint
+  test:
+    # There is no unit-test runner here — the Playwright suite needs a deployed
+    # site, so it cannot judge a patch. What there is instead is the acceptance
+    # registry: the closed set of `verify:*` scripts the project treats as
+    # proof, run the way CI runs them.
+    - npm run verify:all
+  test_one: npx tsx --tsconfig tsconfig.json {test_path}
+
+# `npx opennextjs-cloudflare build` is NOT in the gate. It needs deploy-time
+# environment a checkout does not carry and fails for everyone outside CI;
+# AGENTS.md says so explicitly. A stage that always fails is a gate nobody can
+# pass, and a gate nobody can pass gets switched off.
+
+policy:
+  require_new_test_for: [bug]
+
+  # What a ticket is when its labels do not say. Every ticket in this queue is
+  # a "[Checker gap]" or "[Checker defect]" our own runs filed, and the rule for
+  # them (CLAUDE.md §9) is that a ticket states a symptom, the evidence, and how
+  # to know it is gone. That is a defect report with an acceptance test written
+  # into it. A ticket that genuinely is a chore gets `--class chore` from the
+  # operator, in the open.
+  default_class: bug
+
+  # In this repo the failing-then-passing test for a bug is a new acceptance
+  # script. AGENTS.md already requires one — "if the fix is not visible to a
+  # user, it lands with a verify: script of its own" — so the gate is checking
+  # a rule the repo wrote for itself, not one Mender invented.
+  test_file_globs:
+    - "scripts/verify-*.ts"
+    - "scripts/verify-*.mjs"
+
+  max_files_changed: 20
+  max_diff_lines: 600
+
+  forbidden_paths:
+    - "CLAUDE.md"                # the rules an agent is judged against are not the agent's to edit
+    - ".github/workflows/**"     # AGENTS.md: never, unless the ticket names it
+    - "**/*.lock"
+    - "package-lock.json"
+    - "wrangler.jsonc"           # deploy config; a wrong value here is only visible in production
+    - "wrangler-agent.jsonc"
+    - "mender.yml"               # the gate itself
+
+budget:
+  max_usd_per_task: 1.50
+  ladder: [t1, t2]

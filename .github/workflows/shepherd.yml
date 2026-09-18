@@ -7,8 +7,8 @@
 #
 # It holds no opinion. It reads facts — checks for the current head, unresolved
 # review threads, rounds already spent — runs them through the state machine,
-# and does what the machine says. Codex writes, Claude reviews, and only a later
-# CheckMyApp run may say the problem is actually gone.
+# and does what the machine says. Mender writes (in the doer tick), Codex
+# reviews, and only a later CheckMyApp run may say the problem is actually gone.
 
 name: Shepherd
 
@@ -56,4 +56,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DOER_REPO: ${{ github.repository }}
+          # Asking Codex for a review. It answers only an identity linked to a
+          # ChatGPT account (CHE-155), so the ask is posted under the owner's
+          # token and nothing else is done with it (scripts/doer/review.mjs).
+          CODEX_REVIEW_TOKEN: ${{ secrets.CODEX_REVIEW_TOKEN }}
         run: node scripts/doer/shepherd.mjs
