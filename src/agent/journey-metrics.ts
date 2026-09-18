@@ -103,7 +103,7 @@ Every journey carries two numbers, and both are stated from the user's side —
 not the product's, not the implementation's, and never ours.
 
 - **price** — how many actions the person performs to get the thing done.
-- **conversion** — of 100 people who start this journey, how many finish it.
+- **conversion** — of 100 people who set out to do this, how many finish it.
 
 Both are opinions. That is the point: "signing up costs your user eleven
 actions" is a judgement about someone's product that only an outside observer
@@ -149,7 +149,20 @@ what conversion is for.
 
 ## Judging the conversion
 
-Of 100 people who start, how many finish. Anchors, and pick the nearest:
+Of 100 people who **set out to do this**, how many finish.
+
+The denominator is intent, not arrival. Someone who lands on the first page of
+the flow with no interest in the outcome is not in this hundred. That is NOT the
+denominator a funnel in an analytics tool uses — that one counts everyone who
+touched the first page — so the two numbers will differ, often by a lot, and the
+difference is not a mistake by either of them. Measured side by side on our own
+product (CHE-244, 2026-09-18), this estimate stood at 90, 80 and 65 on the three
+journeys where both numbers existed, where the counted paths gave 33, 12 and 36
+on samples of 3, 25 and 14 people. Do not move this number towards theirs. They
+are answers to different questions, and the honest report is both numbers side
+by side, each labelled.
+
+Anchors, and pick the nearest:
 
 | conversion | what it looks like |
 |-----------|--------------------|
