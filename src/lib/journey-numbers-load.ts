@@ -14,7 +14,13 @@
 import type { PrismaClient } from "@/generated/prisma/client";
 import { parseJson } from "./json";
 import { journeyPages } from "./journey-numbers";
-import type { JourneyPages, NoMeasurement, OurJudgement, WalkedStage } from "./journey-numbers";
+import type {
+  JourneyPages,
+  NoMeasurement,
+  OurJudgement,
+  UnfinishedReason,
+  WalkedStage,
+} from "./journey-numbers";
 
 export interface JourneyNumbers {
   ours: OurJudgement;
@@ -31,6 +37,11 @@ export interface JourneyNumbers {
    * product.
    */
   walkFinished: boolean;
+  /**
+   * Why it did not finish, when it did not. Null when it finished, or when the
+   * reason was neither ours to fix nor the owner's to grant.
+   */
+  unfinished: UnfinishedReason | null;
   /** Why there is nothing measured. Null when `pages` is present. */
   absent: NoMeasurement | null;
   /** Sample seen, when we counted and it was too small to report. */
@@ -69,14 +80,23 @@ export async function numbersForJourneys(
   // per journey: one query for the whole page.
   const lastSteps = await db.step.findMany({
     where: { journeyId: { in: journeys.map((j) => j.id) } },
-    select: { journeyId: true, order: true, status: true },
+    select: { journeyId: true, order: true, status: true, unverifiedReason: true },
     orderBy: { order: "desc" },
   });
   const finished = new Map<string, boolean>();
+  // CHE-283: and when it did not finish, WHY. The reason is already recorded on
+  // the step — 25 of them say `missing_access` in recent runs — and until now it
+  // reached no customer-facing surface at all.
+  const unfinished = new Map<string, UnfinishedReason>();
   for (const s of lastSteps) {
     // Rows arrive highest-order first, so the first one seen per journey is its
     // last step.
-    if (!finished.has(s.journeyId)) finished.set(s.journeyId, s.status !== "skipped");
+    if (finished.has(s.journeyId)) continue;
+    const ok = s.status !== "skipped";
+    finished.set(s.journeyId, ok);
+    if (!ok && (s.unverifiedReason === "missing_access" || s.unverifiedReason === "our_capability")) {
+      unfinished.set(s.journeyId, s.unverifiedReason);
+    }
   }
 
   const catalog = await db.appJourney.findMany({
@@ -136,6 +156,7 @@ export async function numbersForJourneys(
           ours,
           pages: { ...split, windowDays: point.windowDays },
           walkFinished: finished.get(j.id) ?? false,
+          unfinished: unfinished.get(j.id) ?? null,
           absent: null,
         };
         continue;
@@ -167,6 +188,7 @@ export async function numbersForJourneys(
       ours,
       pages: null,
       walkFinished: finished.get(j.id) ?? false,
+      unfinished: unfinished.get(j.id) ?? null,
       absent,
       sample: point?.sampleSize,
     };
