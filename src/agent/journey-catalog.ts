@@ -211,8 +211,18 @@ export async function resolveJourney(
  * A walk that did not happen says nothing either way — an all-skipped journey
  * must not erase a funnel we already knew.
  */
+/**
+ * How long a funnel may disagree with the walks before the walks win.
+ *
+ * Three days, to match journey retirement's three consecutive checks: long
+ * enough that one odd walk never rewrites a funnel, short enough that a
+ * product change is followed within the week rather than measured against a
+ * page that no longer exists.
+ */
+export const FUNNEL_DRIFT_GRACE_MS = 3 * 24 * 60 * 60 * 1000;
+
 function funnelUpdate(
-  row: { funnelStages: string | null },
+  row: { funnelStages: string | null; funnelDriftAt: Date | null },
   args: { funnel?: DerivedFunnel | null },
   at: Date,
   walked: boolean,
@@ -235,9 +245,47 @@ function funnelUpdate(
     };
   }
 
-  return funnelDrifted(stored, args.funnel.stages)
-    ? { funnelRefusal: null, funnelDriftAt: at }
-    : { funnelRefusal: null };
+  if (!funnelDrifted(stored, args.funnel.stages)) {
+    // It agrees again. Any past disagreement was a one-off walk, and leaving
+    // the marker set would eventually replace a funnel that is perfectly
+    // current.
+    return row.funnelDriftAt ? { funnelRefusal: null, funnelDriftAt: null } : { funnelRefusal: null };
+  }
+
+  // ── A funnel changes when the change persists, not when a walk wanders ──────
+  //
+  // First-derivation-wins exists because yesterday's 12% and today's 40% would
+  // look like a trend while measuring two different questions. It was never
+  // meant to outlast the pages it names. checkmyapp.dev moved its form off
+  // `/check`, which now answers 404 — the survey even records it, "/check —
+  // 404" — and two stored funnels still began there, so their counts decay to
+  // zero and read as "nobody comes here" rather than "this page is gone"
+  // (CHE-281).
+  //
+  // So: note the disagreement, and if it is still there after the grace window,
+  // the product moved and the funnel follows. Same shape as journey retirement,
+  // which waits for three consecutive checks rather than trusting one.
+  //
+  // This is also the first thing that ever READS funnelDriftAt. It was written
+  // on every drifting run "so it is visible rather than silent" and displayed
+  // nowhere, which is a column that reads as coverage and provides none.
+  const firstNoticed = row.funnelDriftAt;
+  if (!firstNoticed) return { funnelRefusal: null, funnelDriftAt: at };
+
+  const drifting = at.getTime() - firstNoticed.getTime();
+  if (drifting < FUNNEL_DRIFT_GRACE_MS) {
+    // Still inside the window. Deliberately does NOT rewrite funnelDriftAt:
+    // overwriting it each run would restart the clock forever and the funnel
+    // would never be replaced, which is exactly the bug this fixes.
+    return { funnelRefusal: null };
+  }
+
+  return {
+    funnelStages: JSON.stringify(args.funnel.stages),
+    funnelDerivedAt: at,
+    funnelDriftAt: null,
+    funnelRefusal: null,
+  };
 }
 
 /**
@@ -282,6 +330,9 @@ export async function recordWalk(
       price: true,
       conversion: true,
       funnelStages: true,
+      // CHE-281: when the disagreement was FIRST noticed, so a funnel can be
+      // replaced once the change proves permanent rather than on one odd walk.
+      funnelDriftAt: true,
     },
   });
   if (!row) return;
