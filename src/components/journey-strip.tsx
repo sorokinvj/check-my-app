@@ -256,7 +256,7 @@ function JourneyCard({
           {/* CHE-240: what we judged, and what their own analytics counted —
               the same kind of row each, every one naming its source, so a
               reader compares them instead of guessing which is which. */}
-          {numbers && <JourneyNumbersBlock {...numbers} />}
+          {numbers && <JourneyNumbersBlock {...numbers} title={journey.title} />}
 
           {lightbox && <Lightbox {...lightbox} onClose={() => setLightbox(null)} />}
 
