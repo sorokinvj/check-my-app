@@ -15,11 +15,52 @@
 import type { AgentEnv } from "./env";
 import { isAlertable, movementOf, movementSentence, type MetricPoint } from "@/lib/metric-movement";
 import { flowChanges, pairedSentence } from "@/lib/flow-changes";
+import { namesAChangedPage } from "@/lib/funnel";
 import { pathEndsOf as measuredPath } from "@/lib/posthog/measure";
 import { parseJson } from "@/lib/json";
 
 /** How much history to read. Enough for a baseline, not enough to be slow. */
 const POINTS_TO_READ = 12;
+
+/**
+ * The pages this run's survey found different from the last comparable one
+ * (CHE-285).
+ *
+ * The survey has always taken this diff and always stored it — `AppSnapshot.diff`,
+ * reached from `Run.snapshotId` — and the pairing has always declined to speak
+ * about it, on the grounds that it was "not joined here". So it is joined here.
+ *
+ * `changed === true` is the whole comparability test: the survey writes a diff
+ * only when two snapshots were actually comparable, and `changed` stays NULL
+ * otherwise (a first snapshot, a blocked homepage, a survey with too little in
+ * common with the last one). A run with no answer contributes no paths, never
+ * every path.
+ *
+ * Never throws: a diff we could not read costs one line of the pairing. It does
+ * not cost the movement, which is the news.
+ */
+async function changedPagesOf(env: AgentEnv, runId: string): Promise<string[]> {
+  try {
+    const run = await env.db.run.findUnique({ where: { id: runId }, select: { snapshotId: true } });
+    if (!run?.snapshotId) return [];
+    const snap = await env.db.appSnapshot.findUnique({
+      where: { id: run.snapshotId },
+      select: { changed: true, diff: true },
+    });
+    if (snap?.changed !== true) return [];
+    const diff = parseJson<{ changedPaths?: string[]; addedPaths?: string[] }>(snap.diff);
+    // Changed AND appeared, the same union the prompts read (knowledge.ts). A
+    // page that was not there last time is not the page it was either. Removed
+    // paths are deliberately absent: a stage whose page is gone is a broken
+    // journey, which the walk says far better than this sentence could.
+    return [...(diff?.changedPaths ?? []), ...(diff?.addedPaths ?? [])];
+  } catch (err) {
+    console.warn(
+      `[metric-alert] could not read the page diff: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return [];
+  }
+}
 
 export interface MetricAlert {
   journeyTitle: string;
@@ -55,6 +96,9 @@ export async function metricAlertsForRun(env: AgentEnv, runId: string): Promise<
             prevPrice: true,
             plan: true,
             status: true,
+            // The pages this journey runs on, as the app holds them rather than
+            // as this run happened to walk them (CHE-285).
+            funnelStages: true,
             metricPoints: {
               orderBy: { measuredAt: "desc" },
               take: POINTS_TO_READ,
@@ -85,6 +129,10 @@ export async function metricAlertsForRun(env: AgentEnv, runId: string): Promise<
       titlesByJourneyIndex.set(ref.journeyIndex, list);
     }
 
+    // Read once for the whole run: the survey's diff is the app's, not any one
+    // journey's.
+    const changedPages = await changedPagesOf(env, runId);
+
     const alerts: MetricAlert[] = [];
     const seen = new Set<string>();
     for (const j of journeys) {
@@ -114,10 +162,11 @@ export async function metricAlertsForRun(env: AgentEnv, runId: string): Promise<
         status: j.status,
         prevStatus: aj.status,
         newFindings: (titlesByJourneyIndex.get(j.order) ?? []).slice(0, 2),
-        // The survey's snapshot diff (CHE-132) is per-run and not joined here;
-        // claiming "the page changed" without having compared the snapshots
-        // would be asserting something we have not checked.
-        pageChanged: false,
+        // CHE-285: the survey's snapshot diff (CHE-132), asked about THIS
+        // journey's pages. True only when we actually compared two snapshots
+        // and one of the pages this funnel names came back different — a
+        // journey with no funnel names no pages and says nothing.
+        pageChanged: namesAChangedPage(parseJson<string[]>(aj.funnelStages) ?? [], changedPages),
       });
       alerts.push({ journeyTitle: aj.title, sentence: pairedSentence(sentence, changes) });
     }
