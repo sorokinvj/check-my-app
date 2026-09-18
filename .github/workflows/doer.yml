@@ -65,18 +65,19 @@ jobs:
           node-version: 22
           cache: npm
 
-      # The rails are decisions, and a decision that cannot be tested is one
-      # nobody should trust unattended. If they do not hold, no tick happens.
-      # Deliberately before the install: the rails are plain node and need no
-      # dependencies, so a broken lockfile cannot stop them from being checked.
-      - name: Verify the rails before using them
-        run: node scripts/verify-doer.mjs
-
       # The queue is read with the product's own hashing (scripts/doer/board-queue.ts),
       # which needs the dependencies. Added in CHE-118, when the queue stopped
       # being a label on a GitHub issue.
       - name: Install
         run: npm ci
+
+      # The rails are decisions, and a decision that cannot be tested is one
+      # nobody should trust unattended. If they do not hold, no tick happens.
+      # After the install since 2026-09-18: the rails cover the fix-round state
+      # (machine.mjs, on xstate), and the first dispatched tick died here with
+      # ERR_MODULE_NOT_FOUND before it could read anything (run 35349779962).
+      - name: Verify the rails before using them
+        run: node scripts/verify-doer.mjs
 
       # The implementer. A read-only deploy key, so this workflow can read
       # Mender's code and nothing else of that repository; its checkout sits
