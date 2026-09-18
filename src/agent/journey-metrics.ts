@@ -28,8 +28,50 @@ export interface JourneyMetric {
   note: string;
 }
 
-/** What the model may not exceed, so one bad answer cannot poison a chart. */
+/**
+ * What the model may not exceed, so one bad answer cannot poison a chart.
+ *
+ * `maxPrice` is the last resort, for a journey we have never walked. It is not
+ * the working bound — see `priceCeiling` — because a constant this far from any
+ * real value cannot catch a wrong one. Set at 200, it let a live verdict page
+ * say "100 actions to finish" about a three-click flow for two days (CHE-282),
+ * while passing every check, because a guard wide enough never to fire is
+ * indistinguishable from no guard at all.
+ */
 export const METRIC_BOUNDS = { maxPrice: 200, maxConversion: 100 } as const;
+
+/**
+ * How many of a user's actions one recorded step may plausibly hold.
+ *
+ * A step can carry several — filling three fields is three actions in one step
+ * — so this is deliberately generous. Chosen from production rather than taste:
+ * across every priced journey, price divided by steps-per-walk ran from 0.13 to
+ * 1.7, and the one absurd value sat at 20. Four leaves every real number a wide
+ * margin and still refuses the absurd one by a factor of five.
+ */
+export const ACTIONS_PER_STEP = 4;
+
+/** Below this many steps of history, the ceiling stops shrinking: a journey
+ *  walked once, briefly, is not evidence that it is cheap. */
+export const MIN_PRICE_CEILING = 12;
+
+/**
+ * The most a journey can plausibly cost, given what its walks recorded.
+ *
+ * The point is that the number becomes answerable to something observed. `price`
+ * is a model judgement — the prompt asks for a user's actions on the shortest
+ * path, explicitly excluding our own detours — so nothing in it is counted, and
+ * until now nothing could contradict it. A journey whose walks record five steps
+ * does not cost a hundred user actions, and that is checkable without knowing
+ * anything about the product.
+ *
+ * `steps` is null for a journey we have never walked: there is nothing to be
+ * answerable to yet, and the blunt constant stands for one run.
+ */
+export function priceCeiling(steps: number | null): number {
+  if (steps === null || steps <= 0) return METRIC_BOUNDS.maxPrice;
+  return Math.max(MIN_PRICE_CEILING, Math.ceil(steps * ACTIONS_PER_STEP));
+}
 
 /** A note shorter than this says nothing; the value it defends is not accepted. */
 export const MIN_NOTE_CHARS = 12;
@@ -193,6 +235,12 @@ export interface MetricDecision {
    * priced nothing. Our defect, not the app's — the caller files it (rule 2).
    */
   unpriced?: boolean;
+  /**
+   * True when the STORED value fails the same test the proposed one failed, so
+   * it must be removed rather than kept. A wrong number that nothing can
+   * dislodge outlives every run that refuses to replace it (CHE-282).
+   */
+  clears?: boolean;
 }
 
 /**
@@ -207,7 +255,13 @@ export interface MetricDecision {
  *   - a first value needs a note too, but any real sentence will do: there is
  *     nothing to drift from yet.
  */
-export function decideMetric(raw: RawMetric | null | undefined, previous: JourneyMetric | null): MetricDecision {
+export function decideMetric(
+  raw: RawMetric | null | undefined,
+  previous: JourneyMetric | null,
+  /** Steps a typical past walk of this journey recorded. Null = never walked. */
+  walkedSteps: number | null = null,
+): MetricDecision {
+  const ceiling = priceCeiling(walkedSteps);
   const price = clamp(toInt(raw?.price), 0, METRIC_BOUNDS.maxPrice);
   const conversion = clamp(toInt(raw?.conversion), 0, METRIC_BOUNDS.maxConversion);
   const note = typeof raw?.note === "string" ? raw.note.trim() : "";
@@ -232,6 +286,23 @@ export function decideMetric(raw: RawMetric | null | undefined, previous: Journe
         : `refused ${price} actions — a journey costs at least ${MIN_PRICE}`,
       kept: Boolean(previous),
       unpriced: true,
+    };
+  }
+
+  // A price the walks cannot support (CHE-282). Refused like an impossible one
+  // — but the STORED value is checked against the same ceiling, because keeping
+  // an unsupportable number is how the live "100 actions to finish" survived
+  // every later run: each one refused a new value and left the old one standing.
+  if (price > ceiling) {
+    const storedAlsoUnsupportable = previous !== null && previous.price > ceiling;
+    return {
+      value: storedAlsoUnsupportable ? null : previous,
+      reason: storedAlsoUnsupportable
+        ? `refused ${price} actions — its walks record about ${walkedSteps} steps, so at most ${ceiling}; the stored ${previous.price} fails the same test and is cleared`
+        : `refused ${price} actions — its walks record about ${walkedSteps} steps, so at most ${ceiling}`,
+      kept: Boolean(previous) && !storedAlsoUnsupportable,
+      unpriced: true,
+      clears: storedAlsoUnsupportable,
     };
   }
 

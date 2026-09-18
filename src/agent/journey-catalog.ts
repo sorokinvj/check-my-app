@@ -347,11 +347,46 @@ export async function journeyMetric(
 ): Promise<JourneyMetric | null> {
   if (!raw) return null;
   const previous = appJourneyId ? await storedMetric(env, appJourneyId) : null;
-  const decision = decideMetric(raw, previous);
+  // CHE-282: what this journey's past walks recorded, so the price has
+  // something observed to be answerable to. Null for a journey never walked.
+  const walkedSteps = appJourneyId ? await typicalSteps(env, appJourneyId) : null;
+  const decision = decideMetric(raw, previous, walkedSteps);
   console.log(`[journey] metric ${decision.kept ? "kept" : "taken"}: ${decision.reason}`);
+
+  // A stored number its own walks cannot support is removed rather than left
+  // standing. An unpriced journey says "we have not priced this yet", which is
+  // true; a stored 100 says something false about the customer's product.
+  if (decision.clears && appJourneyId) {
+    await env.db.appJourney.update({
+      where: { id: appJourneyId },
+      data: { price: null, conversion: null, prevPrice: null, prevConversion: null },
+    });
+  }
   // A kept decision means "the stored value stands" — there is nothing new to
   // write, and writing the old value again would stamp it with today's run.
   return decision.kept ? null : decision.value;
+}
+
+/**
+ * Steps a typical past walk of this journey recorded (CHE-282).
+ *
+ * Averaged over its walks rather than summed: the question is "how big is one
+ * pass through this journey", and a journey walked thirty times is not thirty
+ * times more expensive. Null when it has never been walked — there is nothing
+ * to be answerable to yet.
+ *
+ * Read at metric time, which is BEFORE this run's own steps exist: the Journey
+ * row is created after the metric is decided, so only history can answer.
+ */
+async function typicalSteps(env: AgentEnv, appJourneyId: string): Promise<number | null> {
+  const walks = await env.db.journey.findMany({
+    where: { appJourneyId },
+    select: { _count: { select: { steps: true } } },
+    take: 20,
+  });
+  const counted = walks.map((w) => w._count.steps).filter((n) => n > 0);
+  if (counted.length === 0) return null;
+  return counted.reduce((a, b) => a + b, 0) / counted.length;
 }
 
 async function storedMetric(env: AgentEnv, appJourneyId: string): Promise<JourneyMetric | null> {
