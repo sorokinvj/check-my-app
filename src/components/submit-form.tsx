@@ -21,11 +21,12 @@ function rejectionCode(code: string | undefined): string {
   return code && REJECTION_CODES.has(code) ? code : "other";
 }
 
-// What a refused input looked like, without the input itself. Two strangers
-// in a month pressed the button and were refused with `invalid_url`
-// (2026-09-10, 2026-09-11); the event carried nothing to tell whether they
-// had typed nothing, a name without a dot, or a store link we could not
-// parse. The hostname is the same thing `appSlug` already carries.
+// What a refused input was. Two strangers in a month pressed the button and
+// were refused with `invalid_url` (2026-09-10, 2026-09-11); the event
+// carried nothing to tell whether they had typed nothing, a name without a
+// dot, or a store link we could not parse, and session replay was off. The
+// text itself goes along now (it is the URL of an app, public the moment a
+// check is accepted), except when it carries an "@".
 function describeInput(raw: string, extensionMode: boolean) {
   const text = raw.trim();
   let inputHost = "";
@@ -35,6 +36,7 @@ function describeInput(raw: string, extensionMode: boolean) {
     inputHost = "";
   }
   return {
+    ...(text.includes("@") ? {} : { inputText: text.slice(0, 200) }),
     inputLength: text.length,
     inputHasScheme: /^https?:\/\//i.test(text),
     inputHasDot: text.includes("."),
@@ -275,6 +277,8 @@ export function SubmitForm({ initialUrl = "" }: { initialUrl?: string }) {
           <input
             type="text"
             inputMode="url"
+            // The one field session replay may show unmasked (src/lib/analytics.ts).
+            data-ph-unmask="url"
             placeholder={isExtension ? "Chrome Web Store link" : "https://"}
             aria-label={isExtension ? "Chrome Web Store link" : "App URL"}
             value={url}
