@@ -20,6 +20,17 @@ export interface JourneyNumbers {
   ours: OurJudgement;
   /** The pages of this journey and how many people were on them. */
   pages: (JourneyPages & { windowDays: number }) | null;
+  /**
+   * Did this walk actually finish the journey? (CHE-283)
+   *
+   * Only then may anything here speak about completion. A walk whose last step
+   * was skipped never performed the finishing action, so its trail cannot hold
+   * the completion page and its last stage is merely where we stopped. Eight of
+   * sixteen journeys in production are in that state, on purpose: without test
+   * credentials we check read-only rather than create records in someone's
+   * product.
+   */
+  walkFinished: boolean;
   /** Why there is nothing measured. Null when `pages` is present. */
   absent: NoMeasurement | null;
   /** Sample seen, when we counted and it was too small to report. */
@@ -51,6 +62,22 @@ export async function numbersForJourneys(
 ): Promise<Record<string, JourneyNumbers>> {
   const ids = journeys.map((j) => j.appJourneyId).filter((id): id is string => Boolean(id));
   if (ids.length === 0) return {};
+
+  // CHE-283: did each of these walks reach the end of its journey? The last
+  // step tells us — skipped means the finishing action was never performed, so
+  // nothing downstream may speak about completion. Read here, once, rather than
+  // per journey: one query for the whole page.
+  const lastSteps = await db.step.findMany({
+    where: { journeyId: { in: journeys.map((j) => j.id) } },
+    select: { journeyId: true, order: true, status: true },
+    orderBy: { order: "desc" },
+  });
+  const finished = new Map<string, boolean>();
+  for (const s of lastSteps) {
+    // Rows arrive highest-order first, so the first one seen per journey is its
+    // last step.
+    if (!finished.has(s.journeyId)) finished.set(s.journeyId, s.status !== "skipped");
+  }
 
   const catalog = await db.appJourney.findMany({
     where: { id: { in: ids } },
@@ -105,7 +132,12 @@ export async function numbersForJourneys(
       // Every stage was the entry page: nothing of this journey's own was
       // counted, which is an absence rather than a number.
       if (split.own.length > 0) {
-        out[j.id] = { ours, pages: { ...split, windowDays: point.windowDays }, absent: null };
+        out[j.id] = {
+          ours,
+          pages: { ...split, windowDays: point.windowDays },
+          walkFinished: finished.get(j.id) ?? false,
+          absent: null,
+        };
         continue;
       }
     }
@@ -131,7 +163,13 @@ export async function numbersForJourneys(
             // sentence — calling this "not enough traffic" would state a fact
             // about the customer's users that we have not established.
             "not_measured_yet";
-    out[j.id] = { ours, pages: null, absent, sample: point?.sampleSize };
+    out[j.id] = {
+      ours,
+      pages: null,
+      walkFinished: finished.get(j.id) ?? false,
+      absent,
+      sample: point?.sampleSize,
+    };
   }
   return out;
 }

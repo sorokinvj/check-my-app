@@ -12,6 +12,8 @@
 // string no check sees.
 
 import {
+  comparisonLine,
+  completionOf,
   noMeasurementLine,
   ourLines,
   pagesLine,
@@ -24,13 +26,23 @@ export interface JourneyNumbersProps {
   ours: OurJudgement;
   /** The journey's own pages and how many people were on them (CHE-287). */
   pages: (JourneyPages & { windowDays: number }) | null;
+  /** Did the walk reach the end of this journey? Gates every completion claim. */
+  walkFinished: boolean;
   absent: NoMeasurement | null;
   sample?: number;
 }
 
-export function JourneyNumbersBlock({ ours, pages, absent, sample }: JourneyNumbersProps) {
+export function JourneyNumbersBlock({ ours, pages, walkFinished, absent, sample }: JourneyNumbersProps) {
   const oursRows = ourLines(ours);
   const theirsRow = pages ? pagesLine(pages, pages.windowDays) : null;
+
+  // CHE-283: the two numbers may only be compared when the walk actually
+  // finished the journey. Otherwise the last page counted is where WE stopped,
+  // not where the journey ends, and the difference between the two numbers is
+  // an artefact — which is what CHE-279 removed and this restores under the
+  // condition that makes it true.
+  const completion = pages && walkFinished ? completionOf(pages, pages.windowDays) : null;
+  const comparison = completion ? comparisonLine(ours, completion) : null;
 
   // Nothing judged and nothing measured: no block at all. An empty frame with
   // dashes in it reads as "we looked and found nothing", which is a claim.
@@ -51,12 +63,12 @@ export function JourneyNumbersBlock({ ours, pages, absent, sample }: JourneyNumb
         <p className="text-xs text-fg-faint">{noMeasurementLine(absent, sample)}</p>
       )}
 
-      {/* There was a sentence here drawing the two numbers together, and it is
-          gone on purpose (CHE-279): our estimate counts people who set out to do
-          the journey, the measurement counts people who reached one page of it,
-          and the difference between them is an artefact of the two denominators
-          rather than news about the product. The rows stay, each with its
-          source, and the reader is not handed a conclusion we cannot support. */}
+      {/* The sentence worth more than either number alone — and only where it is
+          true. It exists only for a journey our walk finished, because only then
+          is the last page counted the journey's end rather than the point where
+          we stopped (CHE-283). Removed entirely in CHE-279 for want of that
+          condition; restored with it. */}
+      {comparison && <p className="text-xs text-fg-muted">{comparison}</p>}
     </div>
   );
 }
