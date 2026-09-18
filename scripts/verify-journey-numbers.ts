@@ -20,7 +20,8 @@
 // Usage: npx tsx --tsconfig tsconfig.json scripts/verify-journey-numbers.ts
 
 import {
-  measuredLine,
+  journeyPages,
+  pagesLine,
   noMeasurementLine,
   ourLines,
   type NoMeasurement,
@@ -42,7 +43,7 @@ function everyString(): string[] {
     }
   }
   for (const conv of [null, 0, 38, 100]) {
-    const l = measuredLine({ conversion: conv, sample: 412, windowDays: 14, from: "/cart", to: "/thanks" });
+    const l = pagesLine(journeyPages([{ stage: "/", count: 412 }, { stage: "/cart", count: conv ?? 0 }, { stage: "/thanks", count: 7 }], "/"), 14);
     if (l) out.push(l.label, l.value, l.source);
   }
   for (const r of ["not_connected", "no_funnel", "not_measured_yet", "below_floor"] as NoMeasurement[]) {
@@ -63,9 +64,9 @@ function main() {
       ours.every((l) => !l.value.includes("%")));
     check("every one of our lines is sourceKind 'ours'", ours.every((l) => l.sourceKind === "ours"));
 
-    const theirs = measuredLine({ conversion: 38, sample: 412, windowDays: 14, from: "/cart", to: "/thanks" });
-    check("their line is a percentage of real people over a window, along a named path",
-      theirs?.value === "38% of the 412 people who reached /cart went on to /thanks, last 14 days",
+    const theirs = pagesLine(journeyPages([{ stage: "/", count: 412 }, { stage: "/cart", count: 38 }, { stage: "/thanks", count: 7 }], "/"), 14);
+    check("their line counts people on named pages of the customer's product",
+      theirs?.value === "38 people reached /cart, then 7 to /thanks — last 14 days",
       theirs?.value);
     check("…sourced to them, not to us", theirs?.source === "your analytics", theirs?.source);
     check("…and marked as a measurement", theirs?.sourceKind === "measured");
@@ -82,7 +83,7 @@ function main() {
     check("a zero we did judge is still a line — 0 is a number, not an absence",
       ourLines({ price: null, conversion: 0 }).length === 1);
     check("a large sample is readable",
-      measuredLine({ conversion: 5, sample: 41234, windowDays: 14, from: "/a", to: "/b" })?.value.includes("41,234"));
+      pagesLine(journeyPages([{ stage: "/", count: 9 }, { stage: "/a", count: 41234 }], "/"), 14)?.value.includes("41,234"));
   }
 
   console.log("\nNo measurement is three different sentences, never a blank");
@@ -118,11 +119,11 @@ function main() {
     // "97% do not finish it" about a login our own walk had just completed.
     // scripts/verify-measured-denominator.ts is the structural guard; this is
     // the reminder at the place someone would reach for it again (CHE-279).
-    const theirs = measuredLine({ conversion: 12, sample: 412, windowDays: 14, from: "/", to: "/login" });
+    const theirs = pagesLine(journeyPages([{ stage: "/", count: 412 }, { stage: "/login", count: 12 }], "/"), 14);
     check("a measured line stands on its own without a verdict attached",
       theirs !== null && !/expect|finish|do not/i.test(theirs.value), theirs?.value);
-    check("…and says which two pages it counted between",
-      theirs?.value.includes("/") === true && theirs?.value.includes("/login") === true, theirs?.value);
+    check("…and says which page it counted",
+      theirs?.value.includes("/login") === true, theirs?.value);
   }
 
   console.log("\nRule 1: every string here is read by the customer");

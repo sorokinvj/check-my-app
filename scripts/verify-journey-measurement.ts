@@ -190,6 +190,12 @@ async function main() {
     check("…with no percentage", b.created[0]?.conversion === null, JSON.stringify(b.created[0]?.conversion));
     check("…but with the sample size, so it is a fact with a number",
       b.created[0]?.sampleSize === MIN_SAMPLE - 1, String(b.created[0]?.sampleSize));
+    // A count needs no denominator and no minimum to be true. Withholding the
+    // counts along with the percentage threw away the honest half (CHE-287),
+    // and left a below-floor journey with nothing to show at all.
+    check("…and the per-page counts are kept, because a count has no floor",
+      typeof b.created[0]?.steps === "string" && String(b.created[0]?.steps).includes("/login"),
+      String(b.created[0]?.steps));
     check("…counted as belowFloor, not measured", s.belowFloor === 1 && s.measured === 0, JSON.stringify(s));
   }
   {

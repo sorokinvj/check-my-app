@@ -44,7 +44,7 @@
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { measuredLine, noMeasurementLine, type NoMeasurement } from "@/lib/journey-numbers";
+import { journeyPages, noMeasurementLine, pagesLine, type NoMeasurement } from "@/lib/journey-numbers";
 import { movementOf, movementSentence, type MetricPoint } from "@/lib/metric-movement";
 import { pathEndsOf } from "@/lib/posthog/measure";
 import { hasHomework, hasNarration } from "@/lib/verdict-language";
@@ -83,25 +83,23 @@ const COMPLETION_WORDS = [
   "dropped off",
 ];
 
-/** Every measured-number string the module can emit, across its whole range. */
+/** Every measured string the module can emit, across its whole range. */
 function measuredStrings(): string[] {
   const out: string[] = [];
-  for (const conversion of [0, 3, 38, 100]) {
-    for (const sample of [30, 412, 41234]) {
-      const l = measuredLine({
-        conversion,
-        sample,
-        windowDays: 14,
-        from: "/login",
-        to: "/practice",
-      });
-      if (l) out.push(l.label, l.value, l.source);
-    }
+  const shapes = [
+    [{ stage: "/", count: 1690 }, { stage: "/signup", count: 13 }, { stage: "/login", count: 5 }],
+    [{ stage: "/", count: 1690 }, { stage: "/login", count: 50 }],
+    [{ stage: "/login", count: 1 }, { stage: "/practice", count: 1 }],
+    [{ stage: "/", count: 41234 }, { stage: "/x", count: 0 }],
+  ];
+  for (const stages of shapes) {
+    const l = pagesLine(journeyPages(stages, "/"), 14);
+    if (l) out.push(l.label, l.value, l.source);
   }
   return out;
 }
 
-console.log("\n— a measured number describes a path, not a finish —\n");
+console.log("\n— a measured number describes pages, not a finish —\n");
 
 {
   const strings = measuredStrings();
@@ -117,24 +115,51 @@ console.log("\n— a measured number describes a path, not a finish —\n");
   }
 }
 
-console.log("\n— both ends of the counted path are named —\n");
+console.log("\n— every page the count refers to is named —\n");
 
 {
-  // A rate with only one end named is the defect wearing a different label:
-  // the reader still supplies "…of the journey" for the missing half.
-  const line = measuredLine({
-    conversion: 15,
-    sample: 1350,
-    windowDays: 14,
-    from: "/login",
-    to: "/practice",
-  });
+  // A number with only one end named is the defect wearing a different label:
+  // the reader still supplies "…of the journey" for the missing half. Counts
+  // avoid that by construction — each one is attached to the page it counted.
+  const line = pagesLine(
+    journeyPages(
+      [
+        { stage: "/", count: 1690 },
+        { stage: "/signup", count: 13 },
+        { stage: "/login", count: 5 },
+      ],
+      "/",
+    ),
+    14,
+  );
   check("a measured line exists", line !== null);
-  check("it names where the count started", line?.value.includes("/login") === true, line?.value);
-  check("it names where the count ended", line?.value.includes("/practice") === true, line?.value);
-  check("it still says how many people", line?.value.includes("1,350") === true, line?.value);
-  check("it still says the window", line?.value.includes("14 days") === true, line?.value);
+  check("it names the page people reached", line?.value.includes("/signup") === true, line?.value);
+  check("it names where they went next", line?.value.includes("/login") === true, line?.value);
+  check("it says how many people", line?.value.includes("13") === true, line?.value);
+  check("it says the window", line?.value.includes("14 days") === true, line?.value);
   check("it is sourced to their analytics", line?.source === "your analytics", line?.source);
+
+  // The entry page is the app's whole audience and drowns the journey.
+  check("it does NOT lead with the entry page's crowd",
+    line?.value.includes("1,690") === false, line?.value);
+}
+
+console.log("\n— no percentage is claimed for a journey —\n");
+
+{
+  const strings = measuredStrings();
+  const withPercent = strings.filter((s) => s.includes("%"));
+  check(
+    "no measured string carries a percent sign at all",
+    withPercent.length === 0,
+    withPercent.join(" | "),
+  );
+  check(
+    "journey-numbers exports no line that takes a conversion rate",
+    !/TheirMeasurement/.test(
+      readFileSync(join(import.meta.dirname, "..", "src/lib/journey-numbers.ts"), "utf8"),
+    ),
+  );
 }
 
 console.log("\n— the alert sentence describes a path too, and it is the one that is emailed —\n");
