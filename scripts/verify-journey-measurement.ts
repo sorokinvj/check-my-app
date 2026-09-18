@@ -35,6 +35,8 @@
 // never a real secret.
 process.env.CREDENTIALS_SECRET ??= "verify-journey-measurement-local-only";
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { encryptSecret } from "@/lib/crypto";
 import { measureRunJourneys, measurementNote } from "@/agent/journey-measurement";
 import { MIN_SAMPLE } from "@/lib/posthog/measure";
@@ -48,7 +50,8 @@ function check(name: string, ok: boolean, detail = "") {
 interface JourneySpec {
   id: string;
   title: string;
-  stages: string[] | null;
+  /** A string stands for a stored value we cannot parse — a shape, not an absence. */
+  stages: string[] | string | null;
 }
 
 interface Built {
@@ -93,16 +96,20 @@ function build(
       }),
       update: async () => ({}),
     },
-    journey: {
+    // The app's catalog, not this run's walk (CHE-289). The real query filters
+    // `funnelStages: { not: null }`, so a journey without one never arrives
+    // here — the stub honours that rather than returning rows production
+    // would not, which would test a branch that cannot happen.
+    appJourney: {
       findMany: async () =>
-        journeys.map((j) => ({
-          appJourneyId: j.id,
-          appJourney: {
+        journeys
+          .filter((j) => j.stages !== null)
+          .map((j) => ({
             id: j.id,
             title: j.title,
-            funnelStages: j.stages ? JSON.stringify(j.stages) : null,
-          },
-        })),
+            funnelStages:
+              typeof j.stages === "string" ? j.stages : JSON.stringify(j.stages),
+          })),
     },
     journeyMetricPoint: {
       create: async ({ data }: { data: Record<string, unknown> }) => {
@@ -217,11 +224,52 @@ async function main() {
     check("…and says nothing in the feed", measurementNote(s) === null, String(measurementNote(s)));
   }
   {
+    // No funnel at all: the query never returns it, so it costs nothing and is
+    // not an event of any kind — not even a skip.
     const b = build([{ id: "a", title: "Wandered", stages: null }]);
     const s = await run(b);
     check("a journey with no funnel costs no request", b.fetches.length === 0, `${b.fetches.length} requests`);
-    check("…and is counted as skipped", s.skipped === 1, JSON.stringify(s));
+    check("…and is not counted at all", s.skipped === 0 && s.measured === 0, JSON.stringify(s));
     check("…and says nothing in the feed either", measurementNote(s) === null, String(measurementNote(s)));
+  }
+  {
+    // A stored funnel we cannot parse is different from one that is absent: it
+    // is a shape we did not expect, and it is skipped rather than guessed at.
+    const b = build([{ id: "a", title: "Malformed", stages: "not json at all" }]);
+    const s = await run(b);
+    check("an unreadable stored funnel costs no request", b.fetches.length === 0, `${b.fetches.length} requests`);
+    check("…and is counted as skipped", s.skipped === 1, JSON.stringify(s));
+  }
+
+  console.log("\n— a run that walks nothing still measures —\n");
+  {
+    // Structural, because the smoke path cannot be driven here: workflow.ts
+    // imports `cloudflare:workers`. The claim is about ordering inside one
+    // branch, and ordering is exactly what a source read can settle.
+    //
+    // This is the case the whole feature is for. "Nothing is broken, AND the
+    // journey that makes you money converted worse" — and "nothing is broken"
+    // is the smoke run, which until CHE-289 asked the analytics nothing and
+    // starved the series on precisely the apps that are healthy.
+    const src = readFileSync(
+      join(import.meta.dirname, "..", "src/agent/workflow.ts"),
+      "utf8",
+    );
+    const branchAt = src.indexOf('if (mode.mode === "smoke"');
+    const measureAt = src.indexOf('"measure-journeys-smoke"');
+    const notifyAt = src.indexOf('"replay-notify"');
+
+    check("the smoke branch exists", branchAt > 0);
+    check("it measures before it ends", measureAt > branchAt, `branch ${branchAt}, measure ${measureAt}`);
+    check(
+      "…and before it notifies, so a moved metric can break the silence",
+      measureAt > 0 && notifyAt > 0 && measureAt < notifyAt,
+      `measure ${measureAt}, notify ${notifyAt}`,
+    );
+    check(
+      "the full run still measures too",
+      src.includes('"measure-journeys"'),
+    );
   }
 
   console.log("\n— the feed line names each state separately —\n");

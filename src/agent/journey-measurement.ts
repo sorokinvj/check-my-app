@@ -77,10 +77,24 @@ export async function measureRunJourneys(
       return empty;
     }
 
-    // Journeys this run actually walked, that have a funnel to measure along.
-    const journeys = await env.db.journey.findMany({
-      where: { runId, carriedFromRunId: null, appJourneyId: { not: null } },
-      select: { appJourneyId: true, appJourney: { select: { id: true, title: true, funnelStages: true } } },
+    // The app's live journeys that have a funnel — NOT the ones this run walked
+    // (CHE-289).
+    //
+    // A metric point belongs to the AppJourney, which outlives every run; the
+    // run is what triggers a reading, not what decides which readings exist.
+    // Keying this on the walk made the series a function of rotation: joblander
+    // holds 23 journeys against a walk budget of about five, so a given journey
+    // was measured roughly every fourth run and a baseline — four points — was
+    // three weeks away. Runs #214 and #215 measured three journeys and then two
+    // different ones, which is what that looks like in the data.
+    //
+    // It also means a run that walked nothing still measures, which is the case
+    // this whole feature is for: "nothing is broken, AND the journey that makes
+    // you money converted worse" — and "nothing is broken" is exactly the run
+    // that walks nothing.
+    const journeys = await env.db.appJourney.findMany({
+      where: { appId: run.appId, retiredAt: null, funnelStages: { not: null } },
+      select: { id: true, title: true, funnelStages: true },
     });
 
     const baseUrl = baseUrlForRegion(integration.region);
@@ -89,10 +103,12 @@ export async function measureRunJourneys(
     // that reduced to the same funnel are the same question.
     const asked = new Map<string, Awaited<ReturnType<typeof measureFunnel>>>();
 
-    for (const j of journeys) {
-      const aj = j.appJourney;
-      const stages = parseJson<string[]>(aj?.funnelStages ?? null);
-      if (!aj || !stages?.length) {
+    for (const aj of journeys) {
+      const stages = parseJson<string[]>(aj.funnelStages);
+      if (!stages?.length) {
+        // A stored funnel we cannot read. The query above already excludes
+        // journeys with none at all, so this is a shape we did not expect
+        // rather than an absence, and it is skipped rather than guessed at.
         summary.skipped++;
         continue;
       }

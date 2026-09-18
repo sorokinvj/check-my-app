@@ -373,9 +373,28 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
           });
         });
 
+        // CHE-289: measure here too. A smoke run walks nothing, and until now
+        // it therefore asked the customer's analytics nothing — which starved
+        // the series on exactly the apps that are healthy. "Nothing is broken,
+        // AND the journey that makes you money converted worse" is the sentence
+        // this project exists for, and "nothing is broken" is the smoke run.
+        //
+        // Before the notify step below, because a movement is itself a reason
+        // to break a change-only watch's silence (CHE-241) and the alert is
+        // assembled from points that must already exist.
+        await step.do("measure-journeys-smoke", async () => {
+          try {
+            const summary = await measureRunJourneys(env, runId, { appUrl: env.bindings.APP_URL });
+            const note = measurementNote(summary);
+            if (note) await appendEvent(env, runId, "replay", { icon: "info", text: note });
+          } catch (err) {
+            console.warn(`[measure] smoke: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        });
+
         // Same notification contract as a full run: a notifyOnChangeOnly watch
         // stays quiet, because the verdict we just carried forward is by
-        // definition the baseline's.
+        // definition the baseline's — unless a metric moved (CHE-241).
         if (run.notifyEmail) {
           await step.do("replay-notify", () =>
             notifyAndRecord(env, this.env, runId, run, smoke.verdict),
