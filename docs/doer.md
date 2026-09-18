@@ -6,10 +6,30 @@ CheckMyApp has filed tickets against itself since August, and the same hand kept
 closing them — the builder grading its own work, which rule §8 forbids toward
 customers and should never have been acceptable here. This is the other half.
 
+## Who does what
+
+- **Mender** writes the code (owner, 2026-09-18). A cheap model in a bash loop
+  whose only output is a patch, judged by its own gate — apply, setup,
+  typecheck, lint, the `verify:*` registry, and for a bug a test that fails
+  without the patch and passes with it — in a checkout the model never saw
+  (`JobLander-app/mender`; the gate is `mender.yml` in this repository). It runs
+  inside the doer tick, in Actions, and is handed the ticket as a file built
+  from our own database (`scripts/doer/board-queue.ts`), never a tracker
+  credential. Until 2026-09-18 the implementer was Codex, asked by a comment;
+  Codex answers only a ChatGPT-linked identity and could not push here
+  (CHE-155), and six claims in a row came back "the implementer never came".
+- **Codex** reviews. Reviews arrive as a formal review with inline comments
+  when it has findings, and as a "Completed" row in its summary comment when it
+  has none; the shepherd reads both (`scripts/doer/review.mjs`) and asks with
+  the owner's token when nothing else will produce a verdict.
+- **The machine** merges when nothing objects (`scripts/doer/machine.mjs`).
+- **A later run** decides whether the problem is gone.
+
 ## What it may and may not do
 
-The dispatcher claims one ticket, opens a branch and a PR, and asks an
-implementer to work. It may mark a ticket **shipped** once merged.
+The dispatcher claims one ticket, opens a branch, has Mender attempt it on that
+branch, and opens the PR with the patch and its price. It may mark a ticket
+**shipped** once merged.
 
 It may never mark one **fixed**. That word belongs to a later CheckMyApp run
 walking the deployed product from outside (`src/agent/reconcile.ts`), which marks
@@ -78,8 +98,16 @@ rule.
 
 - a `doer:stop` label anywhere;
 - an open doer PR that nobody has ruled on — nothing new may be built while
-  nothing old has been judged;
-- an empty queue, which is a state worth naming rather than silence.
+  nothing old has been judged. If the shepherd has handed findings back on it
+  (a round marker newer than the head), the tick's first duty is that round:
+  Mender runs again on the PR's branch with the findings appended to the
+  ticket, and pushes or reports;
+- an empty queue, which is a state worth naming rather than silence;
+- a ticket whose attempts keep coming back red steps aside after two
+  (CHE-211). A red attempt is recorded as a closed draft PR on the ticket's
+  branch carrying Mender's report, which is also where the price of every
+  attempt lives — the ledger on the runner is ephemeral and is kept as a
+  workflow artifact.
 
 ## The merge gate
 

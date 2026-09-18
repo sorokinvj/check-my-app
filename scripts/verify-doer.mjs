@@ -14,18 +14,21 @@ import {
   MAX_WITHDRAWN_CLAIMS,
 } from "./doer/eligibility.mjs";
 import {
-  decideShadow,
-  shadowCommand,
-  newShadowPrs,
+  decideMender,
+  attemptArgs,
+  ticketFor,
+  outcomeOf,
+  findingsText,
   ledgerRowsSince,
   unpricedAttempt,
-  isShadowBranch,
-  noPrExplanation,
   findMenderHome,
-  SHADOW_BRANCH_PREFIX,
-} from "./doer/shadow.mjs";
+  isWithdrawnAttempt,
+  WITHDRAWN_TITLE_PREFIX,
+} from "./doer/mender.mjs";
+import { ROUND_MARKER, ROUND_ANSWER_MARKER, roundState } from "./doer/machine.mjs";
+import { codexSummaryState, reviewRequestNeeded, askedSinceHead } from "./doer/review.mjs";
 import { mayUnpark, unparkOurRuns, DOER_PR_AUTHOR, PARKED_STATUS } from "./doer/unpark.mjs";
-import { admit, partition } from "./doer/queue.mjs";
+import { admit, partition, DEFECT_CLASS_BY_LABEL, ADMITTED_DEFECTS } from "./doer/queue.mjs";
 
 let bad = 0;
 const check = (name, ok, detail = "") => {
@@ -85,11 +88,12 @@ const item = (ticket, createdAt, label = "t") => ({ ticket, createdAt, label, ki
   check("merging is the default, not an opt-in", d.act === true && d.mayMerge === true, `mayMerge=${d.mayMerge}`);
 }
 
-// ── a ticket nobody implements steps aside (CHE-211) ─────────────────────────
+// ── a ticket nobody can implement steps aside (CHE-211) ──────────────────────
 //
 // The treadmill this prevents was live for twelve hours: CHE-96 claimed, the
 // claim withdrawn unanswered, the same ticket claimed again, and the second
-// admitted ticket never reached because it is younger.
+// admitted ticket never reached because it is younger. With Mender the same
+// count is red attempts: a ticket the gate keeps refusing steps aside.
 {
   const d = decideTick({
     queue: [item("CHE-96", "2026-08-27"), item("CHE-146", "2026-09-03")],
@@ -98,7 +102,7 @@ const item = (ticket, createdAt, label = "t") => ({ ticket, createdAt, label, ki
     withdrawnByTicket: { "CHE-96": MAX_WITHDRAWN_CLAIMS },
   });
   check(
-    "a ticket with unanswered claims lets the next one through",
+    "a ticket with withdrawn attempts lets the next one through",
     d.act === true && d.item.ticket === "CHE-146",
     `picked ${d.item?.ticket}`,
   );
@@ -123,7 +127,7 @@ const item = (ticket, createdAt, label = "t") => ({ ticket, createdAt, label, ki
 }
 {
   // Everything exhausted is not "queue empty": the queue is full and nobody is
-  // implementing. Those are different states and must read differently.
+  // delivering. Those are different states and must read differently.
   const d = decideTick({
     queue: [item("CHE-96", "2026-08-27"), item("CHE-146", "2026-09-03")],
     openDoerPrs: [],
@@ -209,108 +213,119 @@ const approved = [{ state: "APPROVED", headSha: "aaa" }];
 
 // ── branch naming ────────────────────────────────────────────────────────────
 {
-  const b = branchFor(12, "Checker cannot complete third-party OAuth sign-in");
-  check("branch is prefixed and slugged", b.startsWith("doer/12-") && !/[^a-z0-9/-]/.test(b), b);
+  const b = branchFor("che-146", "Checker cannot complete third-party OAuth sign-in");
+  check("branch is prefixed and slugged", b.startsWith("doer/che-146-") && !/[^a-z0-9/-]/.test(b), b);
+  check("a draft doer PR is not a merge candidate", isMergeCandidate({ headRefName: "doer/7-x", isDraft: true }) === false);
+  check("an ordinary doer PR is", isMergeCandidate({ headRefName: "doer/7-x", isDraft: false }) === true);
+  check("somebody else's branch is not the doer's", isDoerBranch("mender/7-x") === false);
 }
 
-// ── the shadow run (CHE-128) ─────────────────────────────────────────────────
+// ── the implementer (owner, 2026-09-18: Mender, not Codex) ───────────────────
 //
-// The whole design rests on two rails that already existed, so they are asserted
-// here rather than trusted: a mender/* PR is not the doer's, and a draft is
-// never a merge candidate. If either stops holding, a second implementer's
-// unreviewed patch becomes something the gate could merge.
+// The rails here are the ones a tick that spends money rests on: it must not
+// run without Mender, it must hand over a ticket the implementer can read, and
+// it must turn every outcome into exactly one action.
 {
-  check("a mender branch is not the doer's", isDoerBranch(`${SHADOW_BRANCH_PREFIX}7-x`) === false);
-  check("a doer branch still is", isDoerBranch("doer/7-x") === true);
-  check(
-    "the merge gate ignores a shadow PR",
-    isMergeCandidate({ headRefName: `${SHADOW_BRANCH_PREFIX}7-x`, isDraft: true }) === false,
-  );
-  check(
-    "the merge gate ignores a shadow PR even if it is not a draft",
-    isMergeCandidate({ headRefName: `${SHADOW_BRANCH_PREFIX}7-x`, isDraft: false }) === false,
-  );
-  check(
-    "a draft doer PR is not a merge candidate either",
-    isMergeCandidate({ headRefName: "doer/7-x", isDraft: true }) === false,
-  );
-  check(
-    "an ordinary doer PR is",
-    isMergeCandidate({ headRefName: "doer/7-x", isDraft: false }) === true,
-  );
-  check("a shadow branch is recognised as one", isShadowBranch("mender/7-x") === true);
-}
-{
-  // Absent mender, the tick must say so by name and carry on. A silent skip
-  // is how a measurement quietly stops being taken.
-  const d = decideShadow({ home: "", hasCli: false, hasUv: false });
-  check("no mender checkout is a named skip", d.run === false && d.reason.includes("MENDER_HOME"), d.reason);
-
-  const noUv = decideShadow({ home: "/x", hasCli: true, hasUv: false });
-  check("no uv is a named skip", noUv.run === false && noUv.reason.includes("uv"), noUv.reason);
-
-  const off = decideShadow({ home: "/x", hasCli: true, hasUv: true, disabled: true });
-  check("DOER_SHADOW=0 turns it off", off.run === false, off.reason);
-
-  const on = decideShadow({ home: "/x", hasCli: true, hasUv: true });
+  // Absent Mender, the tick must say so by name and stop. A silent skip is how
+  // a loop ticks green for twelve days building nothing.
+  const d = decideMender({ home: "", hasCli: false, hasUv: false });
+  check("no Mender checkout is a named stop", d.run === false && d.reason.includes("MENDER_HOME"), d.reason);
+  const noUv = decideMender({ home: "/x", hasCli: true, hasUv: false });
+  check("no uv is a named stop", noUv.run === false && noUv.reason.includes("uv"), noUv.reason);
+  const on = decideMender({ home: "/x", hasCli: true, hasUv: true });
   check("everything present runs it", on.run === true, on.reason);
 }
 {
   // An operator who names a path and silently gets a different checkout is the
-  // "configuration" defect class of CLAUDE.md §8 — our own wrong input, read
-  // later as somebody else's result. An explicit setting wins or it skips.
-  check(
-    "MENDER_HOME wins, and never falls back to a sibling",
-    findMenderHome({ MENDER_HOME: "/nope" }, () => true) === "/nope",
-  );
-  check(
-    "with nothing set and no sibling, there is no home",
-    findMenderHome({}, () => false) === "",
-  );
-  check(
-    "with nothing set, the sibling checkout is used when it is really there",
-    findMenderHome({}, () => true).endsWith("/mender"),
-    findMenderHome({}, () => true),
-  );
+  // "configuration" defect class of CLAUDE.md §8. An explicit setting wins or
+  // there is no home.
+  check("MENDER_HOME wins, and never falls back to a sibling",
+    findMenderHome({ MENDER_HOME: "/nope" }, () => true) === "/nope");
+  check("with nothing set and no sibling, there is no home", findMenderHome({}, () => false) === "");
+  check("with nothing set, the sibling checkout is used when it is really there",
+    findMenderHome({}, () => true).endsWith("/mender"), findMenderHome({}, () => true));
 }
 {
-  const args = shadowCommand({
-    repo: "sorokinvj/check-my-app", issueNumber: 7, tier: "t1", budget: 1, runnerTimeout: 1800,
+  const gap = {
+    ticket: "CHE-146", label: "Checker cannot drive file upload/download flows", kind: "gap", occurrences: 2,
+    reason: "automation inside our own runner; a fixture page with a file input decides it",
+    evidence: {
+      why: "Upload-centric products have their core action unverified.",
+      steps: [{ runId: "r1", appSlug: "example.com", createdAt: "2026-09-10T00:00:00Z", journey: "Upload a CV",
+        label: "Attach the file", attempted: "Clicked the file input", observed: "Nothing happened\n at all" }],
+    },
+  };
+  const t = ticketFor({ item: gap, repo: "o/r" });
+  check("the ticket carries the tracker key, not a fake issue number", t.key === "CHE-146" && t.number === undefined, JSON.stringify({ key: t.key }));
+  check("the title is the filer's", t.title === "[Checker gap] Checker cannot drive file upload/download flows", t.title);
+  check("the class is stated, so the witness-test rung binds", t.labels.includes("bug"));
+  check("the body has the symptom, the evidence and how to know it is gone",
+    t.body.includes("## The symptom") && t.body.includes("## Evidence") && t.body.includes("## How to know it is gone"));
+  check("the evidence names the run and the step", t.body.includes("run r1 on example.com") && t.body.includes('step "Attach the file"'));
+  check("step text is flattened to one line", !t.body.includes("Nothing happened\n at all") && t.body.includes("Nothing happened at all"));
+  check("the ticket names no file and prescribes no fix (rule §9)", !/\.tsx?\b|src\//.test(t.body.replace(/scripts\/verify-\*\.ts/g, "")), t.body.slice(0, 80));
+
+  const round = ticketFor({ item: gap, repo: "o/r", round: { round: 2, findings: "1. a.ts:3\n   codex: rename it" } });
+  check("a fix round appends the findings under their own heading",
+    round.body.includes("## Review findings to address (round 2)") && round.body.includes("codex: rename it"));
+
+  const defect = ticketFor({
+    item: { ticket: "CHE-222", label: "Checker reported a product defect from the absence of evidence", kind: "defect",
+      occurrences: 1, reason: "silence read as breakage", evidence: { signatures: [{ externalIssueId: "JOB-929", appSlug: "joblander.app", settledAt: "2026-09-05T00:00:00Z" }] } },
+    repo: "o/r",
   });
-  check(
-    "the shadow command names the issue, the tier and a cap",
-    args.includes("https://github.com/sorokinvj/check-my-app/issues/7") &&
-      args.includes("--tier") && args.includes("t1") && args[args.indexOf("--budget") + 1] === "1.00",
-    args.join(" "),
-  );
-  check(
-    "the class is mender's to infer unless forced",
-    !args.includes("--class"),
-    args.join(" "),
-  );
-  check(
-    "a live shadow run is never a rehearsal by accident",
-    !args.includes("--dry-run"),
-    args.join(" "),
-  );
-  const rehearsal = shadowCommand({
-    repo: "r/r", issueNumber: 7, tier: "t1", budget: 1, runnerTimeout: 60, rehearse: true,
-  });
-  check("a rehearsal spends nothing and publishes nothing", rehearsal.includes("--dry-run"));
+  check("a defect ticket cites the rejected claims", defect.body.includes("JOB-929 on joblander.app") && defect.title.startsWith("[Checker defect]"));
+
+  const bare = ticketFor({ item: { ...gap, evidence: {} }, repo: "o/r" });
+  check("no evidence rows is said out loud, not padded", bare.body.includes("No step rows carry this class yet"));
 }
 {
-  // Mender names its own branch. We find the PR by what appeared, not by
-  // recomputing somebody else's slug rule.
-  const before = [{ number: 14, headRefName: "mender/7-old" }, { number: 20, headRefName: "doer/6-x" }];
-  const after = [...before, { number: 21, headRefName: "mender/6-new" }, { number: 22, headRefName: "doer/6-y" }];
-  const fresh = newShadowPrs(before, after);
-  check("only the new shadow PR is picked up", fresh.length === 1 && fresh[0].number === 21, JSON.stringify(fresh));
+  const args = attemptArgs({ ticketFile: "/t.json", base: "doer/che-146-x", tier: "t1", budget: 1.5, runnerTimeout: 1800, maxSteps: 40 });
+  check("the attempt hands over the ticket file and publishes nothing itself",
+    args.includes("--ticket-file") && args.includes("--no-publish") && !args.some((a) => a.startsWith("https://")), args.join(" "));
+  check("the attempt builds on the doer branch, not on main", args[args.indexOf("--base") + 1] === "doer/che-146-x");
+  check("the cap is stated to the cent", args[args.indexOf("--budget") + 1] === "1.50");
+  check("a live attempt is never a rehearsal by accident", !args.includes("--dry-run"));
+  check("a rehearsal spends nothing", attemptArgs({ ticketFile: "/t", base: "b", tier: "t1", budget: 1, runnerTimeout: 1, maxSteps: 1, rehearse: true }).includes("--dry-run"));
+}
+{
+  // Only a real attempt with a red gate counts toward stepping aside. On the
+  // day Mender took over, every admitted ticket carried two Codex-era claims
+  // closed "the implementer never came"; counting those would have exhausted
+  // the queue before the first attempt (seen live in the dry run, 2026-09-18).
+  check("a red attempt, recorded and closed, counts",
+    isWithdrawnAttempt({ title: `${WITHDRAWN_TITLE_PREFIX} — x`, mergedAt: null }) === true);
+  check("a claim nobody attempted does not count",
+    isWithdrawnAttempt({ title: "[doer] Checker cannot drive file upload/download flows", mergedAt: null }) === false);
+  check("a merged attempt is work, not a withdrawal",
+    isWithdrawnAttempt({ title: `${WITHDRAWN_TITLE_PREFIX} — x`, mergedAt: "2026-09-18T00:00:00Z" }) === false);
+}
+{
+  const green = { verdict: "green", failure_stage: "", cost_usd: "0.0312", steps: "24", model: "m", provider: "openrouter" };
+  check("a green gate with a patch is committed", outcomeOf(green, true).action === "commit");
+  check("a green gate with no patch is a defect, not a result", outcomeOf(green, false).action === "defect");
+  const red = { ...green, verdict: "red", failure_stage: "typecheck" };
+  const o = outcomeOf(red, true);
+  check("a red gate withdraws, and says where it died", o.action === "withdraw" && o.summary.includes("typecheck"), o.summary);
+  check("a truncated patch is never committed", outcomeOf({ ...green, verdict: "truncated" }, true).action === "withdraw");
+  check("no row at all is a defect of ours", outcomeOf(null, true).action === "defect");
+  check("an unpriced attempt is called out", outcomeOf({ ...green, cost_usd: "0.0" }, true).summary.includes("UNPRICED"));
+}
+{
+  const text = findingsText(
+    [{ path: "src/a.ts", line: 30, comments: [{ author: "codex", body: "<sub>![P1 Badge](https://x/p1)</sub>\n\nAdd the check." }] },
+     { path: "src/b.ts", line: null, comments: [{ author: "codex", body: "Rename." }] }],
+    ["check"],
+  );
+  check("findings carry the failing checks first", text.startsWith("Failing checks on the current head: check"));
+  check("each thread is numbered and located", text.includes("1. src/a.ts:30") && text.includes("2. src/b.ts"));
+  check("badges and markup are stripped, the words stay", !text.includes("Badge") && !text.includes("<sub>") && text.includes("Add the check."));
 }
 {
   // CRLF, because that is what Python's csv.writer produces and what the real
   // ledger contains. Written with "\n" this fixture passed while the parser read
   // every ts as undefined, and the tick announced an unpriced attempt on a run
-  // mender had priced correctly.
+  // Mender had priced correctly.
   const csv = [
     "task_id,attempt_no,tier,model,provider,input_tokens,cached_input_tokens,output_tokens,cost_usd,sandbox_seconds,steps,verdict,failure_stage,diff_files,diff_lines,wall_seconds,ts",
     "a,1,t1,m,openrouter,1,0,1,0.04,10,3,red,no_patch,0,0,11,2026-09-04T04:00:00+00:00",
@@ -321,28 +336,51 @@ const approved = [{ state: "APPROVED", headSha: "aaa" }];
     since.length === 1 && since[0].task_id === "b", JSON.stringify(since.map((r) => r.task_id)));
   check("an earlier row is not mistaken for ours", ledgerRowsSince(csv, Date.parse("2026-09-04T07:00:00Z")).length === 0);
   check("the last column survives the line terminator", since[0]?.ts === "2026-09-04T06:00:00+00:00", since[0]?.ts);
+  check("a real call recorded at $0.00 is unpriced", unpricedAttempt({ provider: "openrouter", cost_usd: "0.0" }) === true);
+  check("a stub row is free, not unpriced", unpricedAttempt({ provider: "stub", cost_usd: "0.0" }) === false);
 }
+
+// ── fix rounds between two rhythms ───────────────────────────────────────────
+//
+// The shepherd asks every twenty minutes; the implementer answers every two
+// hours. Without "pending", the shepherd posts three rounds in an hour and
+// blocks the pull request before the implementer has looked once.
 {
-  // An attempt with no cost recorded is the row that makes the week's total a
-  // lie — mender lost $0.155 to exactly this on 2026-09-04.
-  check("a real call recorded at $0.00 is unpriced",
-    unpricedAttempt({ provider: "openrouter", cost_usd: "0.0" }) === true);
-  check("a stub row is free, not unpriced",
-    unpricedAttempt({ provider: "stub", cost_usd: "0.0" }) === false);
-  check("a priced attempt is fine",
-    unpricedAttempt({ provider: "openrouter", cost_usd: "0.043937" }) === false);
+  const req = (at) => ({ body: `${ROUND_MARKER}\nfindings`, createdAt: at });
+  const ans = (at) => ({ body: `${ROUND_ANSWER_MARKER}\nred`, createdAt: at });
+  const head = "2026-09-18T10:00:00Z";
+  check("no rounds yet", roundState([], head).roundsUsed === 0 && roundState([], head).pending === null);
+  const s1 = roundState([req("2026-09-18T11:00:00Z")], head);
+  check("a request newer than the head is pending", s1.roundsUsed === 1 && s1.pending !== null);
+  const s2 = roundState([req("2026-09-18T09:00:00Z")], head);
+  check("a request older than the head was answered by the push", s2.roundsUsed === 1 && s2.pending === null);
+  const s3 = roundState([req("2026-09-18T11:00:00Z"), ans("2026-09-18T12:00:00Z")], head);
+  check("a red answer without a push also closes the request", s3.pending === null);
+  const s4 = roundState([req("2026-09-18T11:00:00Z"), ans("2026-09-18T12:00:00Z"), req("2026-09-18T13:00:00Z")], head);
+  check("a new request after the answer is pending again, and rounds count every request", s4.pending !== null && s4.roundsUsed === 2);
 }
+
+// ── asking the reviewer ──────────────────────────────────────────────────────
 {
-  // The three reasons a shadow PR is missing are different news, and collapsing
-  // them into one sentence is how a defect gets filed under "as expected".
-  check("a red gate publishing nothing is the measurement",
-    noPrExplanation({ row: { verdict: "red", failure_stage: "no_patch" } }).includes("no_patch"));
-  check("a green gate publishing nothing is a defect",
-    noPrExplanation({ row: { verdict: "green", failure_stage: "" } }).includes("defect"));
-  check("no row at all says so",
-    noPrExplanation({ row: null }).includes("no attempt"));
-  check("a rehearsal is working as intended",
-    noPrExplanation({ row: { verdict: "green" }, rehearse: true }).includes("rehearsal"));
+  const summary = (state, sha) =>
+    `<!-- codex-pull-request-review-summary -->\n| 📝 **Code Review** | ${state} <relative-time>x</relative-time> | \`${sha}\` | Manual request |`;
+  check("a completed summary row for this head is a verdict", codexSummaryState(summary("✅ **Completed**", "ffd1f1c"), "ffd1f1c0000") === "completed");
+  check("a running row is running", codexSummaryState(summary("🔄 **Running**", "ffd1f1c"), "ffd1f1c0000") === "running");
+  check("a row about another commit says nothing about this head", codexSummaryState(summary("✅ **Completed**", "1234567"), "ffd1f1c0000") === null);
+  check("an ordinary comment is not a summary", codexSummaryState("looks fine to me `ffd1f1c` Completed", "ffd1f1c0000") === null);
+
+  const base = { verdictForHead: false, summaryState: null, askedSinceHead: false, headAgeMinutes: 30 };
+  check("no verdict, nobody asked, head old enough → ask", reviewRequestNeeded(base).ask === true);
+  check("a verdict already given → do not ask", reviewRequestNeeded({ ...base, verdictForHead: true }).ask === false);
+  check("a review running → do not ask", reviewRequestNeeded({ ...base, summaryState: "running" }).ask === false);
+  check("already asked about this head → do not ask twice", reviewRequestNeeded({ ...base, askedSinceHead: true }).ask === false);
+  check("a fresh head gets the automatic review a chance first", reviewRequestNeeded({ ...base, headAgeMinutes: 2 }).ask === false);
+
+  const head = "2026-09-18T10:00:00Z";
+  check("a request newer than the head counts as asked",
+    askedSinceHead([{ body: "@codex review in o/r", createdAt: "2026-09-18T10:30:00Z" }], head) === true);
+  check("a request older than the head was about another diff",
+    askedSinceHead([{ body: "@codex review in o/r", createdAt: "2026-09-18T09:30:00Z" }], head) === false);
 }
 
 // ── releasing a parked run (CHE-153) ─────────────────────────────────────────
@@ -389,7 +427,17 @@ const approved = [{ state: "APPROVED", headSha: "aaa" }];
       prs: [{ headRef: "feature/whatever", headRepo: REPO, author: DOER_PR_AUTHOR }],
       repo: REPO,
     });
-    check("a branch outside doer/* and mender/* stays parked", d.unpark === false, d.reason);
+    check("a branch outside doer/* stays parked", d.unpark === false, d.reason);
+  }
+  {
+    // The shadow implementer's prefix used to be released too (CHE-128). It is
+    // nobody's branch now, and a branch nobody owns stays parked.
+    const d = mayUnpark({
+      run: { ...parked, headBranch: "mender/7-x" },
+      prs: [{ headRef: "mender/7-x", headRepo: REPO, author: DOER_PR_AUTHOR }],
+      repo: REPO,
+    });
+    check("a mender/* branch is no longer ours to release", d.unpark === false, d.reason);
   }
   {
     // Write access here is enough to push a `doer/*` branch, so the prefix alone
@@ -404,14 +452,6 @@ const approved = [{ state: "APPROVED", headSha: "aaa" }];
   {
     const d = mayUnpark({ run: parked, prs: [], repo: REPO });
     check("a parked run with no open pull request stays parked", d.unpark === false, d.reason);
-  }
-  {
-    const d = mayUnpark({
-      run: { ...parked, headBranch: "mender/7-x" },
-      prs: [{ headRef: "mender/7-x", headRepo: REPO, author: DOER_PR_AUTHOR }],
-      repo: REPO,
-    });
-    check("the shadow leg's own branch is released too", d.unpark === true, d.reason);
   }
   {
     const d = mayUnpark({
@@ -545,6 +585,12 @@ const approved = [{ state: "APPROVED", headSha: "aaa" }];
     v.ok === false && v.reason.includes("classifying it is the filer's job"),
     v.reason,
   );
+}
+{
+  // Every admitted defect label must map to a class, or the reader hands the
+  // implementer a defect ticket with no evidence behind it.
+  const missing = [...ADMITTED_DEFECTS.keys()].filter((l) => !DEFECT_CLASS_BY_LABEL.has(l));
+  check("every admitted defect label names its class", missing.length === 0, missing.join(", "));
 }
 {
   // The shape the reader hands over: capability already recognised, no title.

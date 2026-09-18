@@ -101,6 +101,20 @@ export const REFUSED_DEFECTS = new Map([
 ]);
 
 /**
+ * The defect class (`IssueLink.defectClass`, `SettledSignature.defectClass`)
+ * behind each admitted defect label — the key the reader needs to pull the
+ * rejected claims a ticket was filed from as evidence for the implementer.
+ * The labels are the filer's (capability-gaps.ts, DEFECTS); one class is one
+ * ticket forever, so a label may never change spelling.
+ */
+export const DEFECT_CLASS_BY_LABEL = new Map([
+  ["Checker reported a product defect it was never able to observe", "capability"],
+  ["Checker reported a product defect caused by our own configuration", "configuration"],
+  ["Checker reported a product defect from the absence of evidence", "interpretation"],
+  ["Checker re-filed something it had already been told was not a bug", "bookkeeping"],
+]);
+
+/**
  * May the doer take this ticket?
  *
  * Never returns a bare false: a refusal without a reason is indistinguishable
