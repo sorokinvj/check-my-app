@@ -17,9 +17,11 @@ import {
   noMeasurementLine,
   ourLines,
   pagesLine,
+  unfinishedLine,
   type JourneyPages,
   type NoMeasurement,
   type OurJudgement,
+  type UnfinishedReason,
 } from "@/lib/journey-numbers";
 
 export interface JourneyNumbersProps {
@@ -28,11 +30,20 @@ export interface JourneyNumbersProps {
   pages: (JourneyPages & { windowDays: number }) | null;
   /** Did the walk reach the end of this journey? Gates every completion claim. */
   walkFinished: boolean;
+  /** Why it did not, when it did not — one of these is ours to fix, one theirs. */
+  unfinished: UnfinishedReason | null;
   absent: NoMeasurement | null;
   sample?: number;
 }
 
-export function JourneyNumbersBlock({ ours, pages, walkFinished, absent, sample }: JourneyNumbersProps) {
+export function JourneyNumbersBlock({
+  ours,
+  pages,
+  walkFinished,
+  unfinished,
+  absent,
+  sample,
+}: JourneyNumbersProps) {
   const oursRows = ourLines(ours);
   const theirsRow = pages ? pagesLine(pages, pages.windowDays) : null;
 
@@ -69,6 +80,16 @@ export function JourneyNumbersBlock({ ours, pages, walkFinished, absent, sample 
           we stopped (CHE-283). Removed entirely in CHE-279 for want of that
           condition; restored with it. */}
       {comparison && <p className="text-xs text-fg-muted">{comparison}</p>}
+
+      {/* Why there is no completion rate here, when the pages were counted but
+          the journey was not finished (CHE-283). Shown only when there is no
+          comparison to show instead — a reader who has the number does not need
+          the reason it might have been missing. The database has known this all
+          along (25 steps recorded `missing_access` in recent runs) and it
+          reached no customer-facing surface until now. */}
+      {!comparison && pages && !walkFinished && unfinished && (
+        <p className="text-xs text-fg-faint">{unfinishedLine(unfinished)}</p>
+      )}
     </div>
   );
 }

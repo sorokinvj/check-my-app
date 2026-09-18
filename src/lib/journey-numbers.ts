@@ -260,6 +260,48 @@ export function ourLines(j: OurJudgement): NumberLine[] {
  * finished this", which would be a claim about the customer's product that
  * nothing supports.
  */
+/**
+ * Why our walk did not reach the end of a journey.
+ *
+ * Mirrors `Step.unverifiedReason`, and the distinction is the whole point: one
+ * of these is the owner's to fix and one is ours, and confusing them is how a
+ * customer ends up doing our work (rule 1) or waiting forever for a number we
+ * were never going to produce (rule 2).
+ */
+export type UnfinishedReason = "missing_access" | "our_capability";
+
+/**
+ * What to say when the pages were counted but the journey was never completed.
+ *
+ * This sentence did not exist until CHE-283, and its absence was the defect:
+ * 25 steps in recent production runs are recorded `missing_access`, the
+ * database knows exactly which journeys we could not finish and why, and none
+ * of it reached a single customer-facing surface. The owner saw page counts and
+ * no completion rate, with nothing to explain the difference and nothing to act
+ * on.
+ *
+ * `missing_access` is the one thing CLAUDE.md rule 2 permits asking for — "that
+ * is access, not verification work" — so it names what would change and stops.
+ * `our_capability` is OUR defect, already filed on our own board by
+ * capability-gaps.ts, and the customer is told the consequence without being
+ * handed the problem.
+ */
+export function unfinishedLine(reason: UnfinishedReason): string {
+  switch (reason) {
+    case "missing_access":
+      return (
+        "We could not finish this journey ourselves — it needs a sign-in we do not have. " +
+        "Add test credentials for this app and the next check will measure how many of your " +
+        "people get through it."
+      );
+    case "our_capability":
+      // Deliberately no ask and no apology: the gap is ours, it is already a
+      // ticket on our board, and the customer's only interest is that the
+      // number is not there yet.
+      return "We could not get to the end of this journey this time, so there is no completion rate for it yet.";
+  }
+}
+
 export function noMeasurementLine(reason: NoMeasurement, sample?: number): string {
   switch (reason) {
     case "not_connected":
