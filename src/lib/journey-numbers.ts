@@ -18,6 +18,11 @@
 // — never "verify this yourself". src/lib/verdict-language.ts is the mechanism;
 // scripts/verify-journey-numbers.ts holds these strings to it directly.
 
+// The measurement's own floor, imported rather than restated: two constants
+// for "enough people to state a percentage" is how a product comes to withhold
+// a rate in one place and print it in another (CHE-292).
+import { MIN_SAMPLE } from "./posthog/measure";
+
 export type NumberSource = "ours" | "measured";
 
 export interface OurJudgement {
@@ -79,15 +84,25 @@ export interface TheirCompletion {
  * The completion rate for a journey whose walk finished, or null.
  *
  * Null when there are fewer than two of the journey's own pages (one page is
- * arrival, not conversion) or when nobody reached the first — a rate out of
- * zero is not a small rate, it is no rate.
+ * arrival, not conversion), when nobody reached the first — a rate out of zero
+ * is not a small rate, it is no rate — or when too few people did (CHE-292).
+ *
+ * The floor is the measurement's own, deliberately the same constant rather
+ * than a second opinion about what "enough" means. CHE-287 settled the rule the
+ * two sides of it follow: a COUNT is true at any size ("3 people reached this
+ * page"), so the counts still render; a RATE is a statement about a population,
+ * and one of three is not a population. The measurement already withholds its
+ * percentage below this line and keeps the counts — recomputing the percentage
+ * here from exactly those counts walked around its own floor, and turned three
+ * sessions on checkmyapp.dev into "67% did not reach /verdict/:id" about a flow
+ * nothing was wrong with.
  */
 export function completionOf(p: JourneyPages, windowDays: number): TheirCompletion | null {
   const own = p.own;
   if (own.length < 2) return null;
   const first = own[0];
   const last = own[own.length - 1];
-  if (first.count <= 0) return null;
+  if (first.count < MIN_SAMPLE) return null;
   return {
     conversion: Math.round((last.count / first.count) * 100),
     sample: first.count,

@@ -34,6 +34,7 @@ import {
   type JourneyPages,
 } from "@/lib/journey-numbers";
 import { hasHomework, hasNarration } from "@/lib/verdict-language";
+import { MIN_SAMPLE } from "@/lib/posthog/measure";
 
 let failures = 0;
 function check(name: string, ok: boolean, detail = "") {
@@ -45,8 +46,8 @@ function check(name: string, ok: boolean, detail = "") {
 const SIGNUP: JourneyPages = journeyPages(
   [
     { stage: "/", count: 1690 },
-    { stage: "/signup", count: 13 },
-    { stage: "/login", count: 5 },
+    { stage: "/signup", count: 130 },
+    { stage: "/login", count: 50 },
   ],
   "/",
 );
@@ -57,8 +58,8 @@ console.log("\n— a completion rate is of the journey's own pages, not the app'
   const c = completionOf(SIGNUP, 14);
   check("a completion exists for a two-page journey", c !== null);
   check("it counts from the journey's own first page, not the entry page",
-    c?.sample === 13, String(c?.sample));
-  check("…so the rate is 5 of 13, not 5 of 1,690",
+    c?.sample === 130, String(c?.sample));
+  check("…so the rate is 50 of 130, not 50 of 1,690",
     c?.conversion === 38, String(c?.conversion));
   check("it names both ends", c?.from === "/signup" && c?.to === "/login", `${c?.from} → ${c?.to}`);
 }
@@ -73,6 +74,39 @@ console.log("\n— a completion rate is of the journey's own pages, not the app'
     "/",
   );
   check("a rate out of zero is no rate", completionOf(nobody, 14) === null);
+}
+
+console.log("\n— CHE-292: a percentage needs a population, and three sessions are not one —\n");
+
+{
+  // `Browse today's public checks` on checkmyapp.dev, exactly as stored on
+  // 2026-09-18: a finished walk, our estimate 90, and a counted path of three
+  // people. The measurement had already withheld its own percentage here; this
+  // recomputed one from the same counts and would have said "67% did not reach
+  // /verdict/:id" about a flow nothing was wrong with.
+  const three = journeyPages(
+    [{ stage: "/", count: 80 }, { stage: "/checks/today", count: 3 }, { stage: "/verdict/:id", count: 1 }],
+    "/",
+  );
+  const c = completionOf(three, 14);
+  check("three people produce no completion rate", c === null, JSON.stringify(c));
+  // And with no completion there is no comparison: `comparisonLine` cannot be
+  // reached without one, which is this file's premise above.
+  check("…while the counts themselves are untouched — a count is true at any size",
+    three.own.length === 2 && three.own[0].count === 3 && three.own[1].count === 1,
+    JSON.stringify(three.own));
+
+  // The boundary, from both sides, so the floor cannot drift by one silently.
+  const at = (n: number) =>
+    completionOf(
+      journeyPages([{ stage: "/", count: 9_000 }, { stage: "/a", count: n }, { stage: "/b", count: 1 }], "/"),
+      14,
+    );
+  // MIN_SAMPLE here is imported from the MEASUREMENT, not from the language
+  // module — so this pair of checks fails the moment the two hold different
+  // opinions about how many people are enough to state a percentage.
+  check(`one below the floor (${MIN_SAMPLE - 1}) says nothing`, at(MIN_SAMPLE - 1) === null);
+  check(`at the floor (${MIN_SAMPLE}) it speaks`, at(MIN_SAMPLE) !== null);
 }
 
 console.log("\n— the comparison cannot be reached without a completion —\n");
