@@ -48,6 +48,41 @@ export const POSTHOG_SCOPES = [
 ] as const;
 
 /**
+ * The scope without which a funnel cannot be measured at all.
+ *
+ * Kept separate from the rest because the consequences differ. Without
+ * `organization:read` the dashboard cannot name who is connected, which is
+ * cosmetic; without `query:read` every measurement returns nothing, for ever,
+ * and the owner is told a number is coming that never will (CHE-286).
+ */
+export const SCOPE_REQUIRED_TO_MEASURE = "query:read";
+
+/**
+ * Which of the permissions we need were not granted.
+ *
+ * `PostHogIntegration.scope` records exactly what the consent screen returned,
+ * and until CHE-286 nothing read that column — the fifth instance in one day of
+ * a fact the database holds and no code consults. A grant narrowed below what a
+ * funnel query needs is permanent: every measurement is refused, no point is
+ * written, and the page says "it will appear after the next check", which is
+ * false.
+ *
+ * An empty or absent scope string means the provider told us nothing, not that
+ * nothing was granted — so it is treated as complete rather than as a narrowing
+ * we cannot prove. Inventing a warning from silence would be its own defect.
+ */
+export function missingScopes(granted: string | null | undefined): string[] {
+  if (!granted || !granted.trim()) return [];
+  const held = new Set(granted.trim().split(/\s+/));
+  return POSTHOG_SCOPES.filter((s) => !held.has(s));
+}
+
+/** Can this connection still answer a funnel query at all? */
+export function canMeasure(granted: string | null | undefined): boolean {
+  return !missingScopes(granted).includes(SCOPE_REQUIRED_TO_MEASURE);
+}
+
+/**
  * Our Client ID Metadata Document, as a value.
  *
  * This is the security boundary of the whole flow: PostHog fetches it mid-flow

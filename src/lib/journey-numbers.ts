@@ -159,7 +159,16 @@ export type NoMeasurement =
   /** Connected and measurable, but nothing has counted it yet. */
   | "not_measured_yet"
   /** Connected, measured, and there were too few people to mean anything. */
-  | "below_floor";
+  | "below_floor"
+  /**
+   * Connected, but the grant is narrower than a funnel query needs (CHE-286).
+   *
+   * Its own reason because it is the only one of these that is PERMANENT and
+   * fixable by the owner. Folded into "not measured yet" — which is where it
+   * used to land — it became a promise that a number was coming, when in fact
+   * every query would be refused for ever.
+   */
+  | "access_narrowed";
 
 export interface NumberLine {
   label: string;
@@ -316,6 +325,14 @@ export function noMeasurementLine(reason: NoMeasurement, sample?: number): strin
       return sample !== undefined
         ? `Not enough traffic to measure yet — ${sample.toLocaleString("en-US")} ${sample === 1 ? "person" : "people"} in the last two weeks.`
         : "Not enough traffic to measure yet.";
+    case "access_narrowed":
+      // The only one of these the owner can act on, and the only one that is
+      // permanent. It says what is missing and what changes when it is granted,
+      // and it never says "yet" — waiting is precisely what will not help.
+      return (
+        "Your analytics connection was granted less than a funnel query needs, so this cannot be " +
+        "measured. Reconnect PostHog and allow it to run queries, and the next check will count it."
+      );
   }
 }
 

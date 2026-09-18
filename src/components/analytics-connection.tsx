@@ -27,11 +27,22 @@ export interface AnalyticsConnectionProps {
      * its props.
      */
     stranded: boolean;
+    /**
+     * Permissions a funnel query needs that this grant does not include
+     * (CHE-286). Empty when the grant is complete, or when the provider told
+     * us nothing — silence is not evidence of a narrowing.
+     */
+    missingScopes?: string[];
   } | null;
 }
 
 export function AnalyticsConnection({ connection }: AnalyticsConnectionProps) {
   const stranded = connection?.stranded ?? false;
+  // CHE-286: a grant narrower than a funnel query needs is a working-looking
+  // connection that can never answer. An unqualified ✓ over it is the same
+  // defect as CHE-269's "Connected" over a dead token — the screen agreeing
+  // with you while nothing works.
+  const narrowed = (connection?.missingScopes?.length ?? 0) > 0;
 
   return (
     <section className="card mt-8 p-5">
@@ -45,8 +56,8 @@ export function AnalyticsConnection({ connection }: AnalyticsConnectionProps) {
                   connected" on an account that also watches joblander.app —
                   the org and the app genuinely share a name (owner, 2026-09-16). */}
               <p className="text-sm text-fg">
-                <span className={stranded ? "text-status-confusing" : "text-status-ok"}>
-                  {stranded ? "!" : "✓"}
+                <span className={stranded || narrowed ? "text-status-confusing" : "text-status-ok"}>
+                  {stranded || narrowed ? "!" : "✓"}
                 </span>{" "}
                 <span className="font-medium">PostHog</span>
                 <span className="text-fg-muted"> · organisation </span>
@@ -58,7 +69,9 @@ export function AnalyticsConnection({ connection }: AnalyticsConnectionProps) {
               <p className="text-xs text-fg-faint">
                 {stranded
                   ? "This connection has expired — reconnect to keep reading your funnels."
-                  : "Read-only, shared by every app below. Each app reads its own project."}
+                  : narrowed
+                    ? `This connection cannot read your funnels — it was granted less than we need (${connection.missingScopes?.join(" · ")}). Reconnect to fix it.`
+                    : "Read-only, shared by every app below. Each app reads its own project."}
               </p>
             </>
           ) : (

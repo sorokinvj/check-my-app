@@ -14,6 +14,7 @@ import { AnalyticsConnection } from "@/components/analytics-connection";
 import { AppPostHogProject } from "@/components/app-posthog-project";
 import { teamProjects } from "@/lib/posthog/choices";
 import { isStranded } from "@/lib/posthog/token";
+import { missingScopes } from "@/lib/posthog/oauth";
 import { watchTrialState, PLAN_LIMITS } from "@/lib/plans";
 import type { UserPlan } from "@/lib/enums";
 import { teamOwned } from "@/lib/tenant-db";
@@ -33,13 +34,22 @@ async function analyticsConnection(
 ) {
   const row = await db.postHogIntegration.findFirst({
     where: { ...teamOwned(teamId) },
-    select: { organizationName: true, region: true, expiresAt: true, refreshTokenEnc: true },
+    select: {
+      organizationName: true,
+      region: true,
+      expiresAt: true,
+      refreshTokenEnc: true,
+      // CHE-286: what was actually granted, so a connection narrower than a
+      // funnel query needs stops wearing an unqualified ✓.
+      scope: true,
+    },
   });
   if (!row) return null;
   return {
     organizationName: row.organizationName,
     region: row.region,
     stranded: isStranded(row, new Date()),
+    missingScopes: missingScopes(row.scope),
   };
 }
 

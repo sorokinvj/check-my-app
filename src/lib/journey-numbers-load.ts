@@ -16,6 +16,7 @@ import { parseJson } from "./json";
 import { journeyPages } from "./journey-numbers";
 import { movementOf, type MetricPoint, type Movement } from "./metric-movement";
 import { pathEndsOf } from "./posthog/measure";
+import { canMeasure } from "./posthog/oauth";
 import type {
   JourneyPages,
   NoMeasurement,
@@ -132,7 +133,11 @@ export async function numbersForJourneys(
           // The address the walk starts from, so the entry page can be told
           // apart from the journey's own pages (CHE-287).
           targetUrl: true,
-          team: { select: { posthog: { select: { id: true } } } },
+          // CHE-286: what the consent screen actually granted. Stored since the
+          // integration shipped and read by nothing until now, so a grant too
+          // narrow to run a query was reported as a number that would arrive
+          // after the next check — for ever.
+          team: { select: { posthog: { select: { id: true, scope: true } } } },
         },
       },
       metricPoints: {
@@ -205,9 +210,16 @@ export async function numbersForJourneys(
     // are different facts: nothing connected, nothing to measure along, or
     // counted and too few. An empty cell would read as a zero for all three.
     const connected = Boolean(c.app?.team?.posthog && c.app?.posthogProjectId);
+    // CHE-286: connected, but not with enough permission to run a query. Ranked
+    // above the others because it is the only permanent one and the only one
+    // the owner can fix — telling them to wait would be false, and telling them
+    // there is no traffic would be a claim about their users.
+    const narrowed = connected && !canMeasure(c.app?.team?.posthog?.scope);
     const absent: NoMeasurement = !connected
       ? "not_connected"
-      : point && point.conversion === null
+      : narrowed
+        ? "access_narrowed"
+        : point && point.conversion === null
         ? // We counted and there were too few people. A real answer.
           // Keyed on the missing percentage rather than on the row existing: a
           // row whose percentage we hold but whose path we cannot name is a
