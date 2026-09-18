@@ -65,18 +65,19 @@ jobs:
           node-version: 22
           cache: npm
 
-      # The rails are decisions, and a decision that cannot be tested is one
-      # nobody should trust unattended. If they do not hold, no tick happens.
-      # Deliberately before the install: the rails are plain node and need no
-      # dependencies, so a broken lockfile cannot stop them from being checked.
-      - name: Verify the rails before using them
-        run: node scripts/verify-doer.mjs
-
       # The queue is read with the product's own hashing (scripts/doer/board-queue.ts),
       # which needs the dependencies. Added in CHE-118, when the queue stopped
-      # being a label on a GitHub issue.
+      # being a label on a GitHub issue. Since #156 the rails themselves are
+      # an xstate machine (scripts/doer/machine.mjs), so the install has to
+      # come first: on 2026-09-18 the first tick after that merge died on
+      # "Cannot find package 'xstate'" before it could verify anything.
       - name: Install
         run: npm ci
+
+      # The rails are decisions, and a decision that cannot be tested is one
+      # nobody should trust unattended. If they do not hold, no tick happens.
+      - name: Verify the rails before using them
+        run: node scripts/verify-doer.mjs
 
       # The implementer. A read-only deploy key, so this workflow can read
       # Mender's code and nothing else of that repository; its checkout sits
