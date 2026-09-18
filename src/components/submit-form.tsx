@@ -215,6 +215,11 @@ export function SubmitForm({ initialUrl = "" }: { initialUrl?: string }) {
     }
     setSubmitting(true);
     setError(null);
+    if (!url.trim()) {
+      setError({ message: "Please enter a URL" });
+      setSubmitting(false);
+      return;
+    }
     try {
       const res = await fetch("/api/checks", {
         method: "POST",
