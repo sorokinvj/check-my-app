@@ -23,6 +23,7 @@ import {
   type OurJudgement,
   type UnfinishedReason,
 } from "@/lib/journey-numbers";
+import { movementSentence, type Movement } from "@/lib/metric-movement";
 
 export interface JourneyNumbersProps {
   ours: OurJudgement;
@@ -32,6 +33,10 @@ export interface JourneyNumbersProps {
   walkFinished: boolean;
   /** Why it did not, when it did not — one of these is ours to fix, one theirs. */
   unfinished: UnfinishedReason | null;
+  /** A rise worth saying once, quietly, on the page (CHE-284). */
+  rose: { movement: Movement; from: string; to: string } | null;
+  /** The journey's name, for the movement sentence that names it. */
+  title?: string;
   absent: NoMeasurement | null;
   sample?: number;
 }
@@ -41,6 +46,8 @@ export function JourneyNumbersBlock({
   pages,
   walkFinished,
   unfinished,
+  rose,
+  title,
   absent,
   sample,
 }: JourneyNumbersProps) {
@@ -89,6 +96,18 @@ export function JourneyNumbersBlock({
           reached no customer-facing surface until now. */}
       {!comparison && pages && !walkFinished && unfinished && (
         <p className="text-xs text-fg-faint">{unfinishedLine(unfinished)}</p>
+      )}
+
+      {/* Good news, said once and without a siren (CHE-284). The sentence has
+          existed since CHE-241 and reached nobody: metricAlertsForRun keeps only
+          falls, correctly — a rise must never break a quiet watch — so the
+          "rose" branch was composed on every improving journey and thrown away.
+          The page is where it belongs: the owner is already looking, and
+          nothing is interrupted. */}
+      {rose && title && (
+        <p className="text-xs text-status-ok">
+          {movementSentence(title, rose.movement, { from: rose.from, to: rose.to })}
+        </p>
       )}
     </div>
   );

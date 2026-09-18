@@ -14,6 +14,8 @@
 import type { PrismaClient } from "@/generated/prisma/client";
 import { parseJson } from "./json";
 import { journeyPages } from "./journey-numbers";
+import { movementOf, type MetricPoint, type Movement } from "./metric-movement";
+import { pathEndsOf } from "./posthog/measure";
 import type {
   JourneyPages,
   NoMeasurement,
@@ -21,6 +23,12 @@ import type {
   UnfinishedReason,
   WalkedStage,
 } from "./journey-numbers";
+
+/**
+ * How much history a movement needs. The same number the alert path reads, so
+ * the page and the mail can never disagree about whether something moved.
+ */
+const POINTS_TO_READ = 12;
 
 export interface JourneyNumbers {
   ours: OurJudgement;
@@ -42,6 +50,18 @@ export interface JourneyNumbers {
    * reason was neither ours to fix nor the owner's to grant.
    */
   unfinished: UnfinishedReason | null;
+  /**
+   * A rise worth one quiet sentence on the page (CHE-284).
+   *
+   * Only ever a rise. A fall belongs in the mail the Watch already sends, where
+   * `metricAlertsForRun` puts it; putting it here as well would say the same
+   * alarming thing twice. A rise is the opposite case: good news that never
+   * justified an email and, until now, appeared nowhere at all.
+   *
+   * Null unless the journey has enough history for a baseline and the movement
+   * is material and significant — the same bar a fall has to clear.
+   */
+  rose: { movement: Movement; from: string; to: string } | null;
   /** Why there is nothing measured. Null when `pages` is present. */
   absent: NoMeasurement | null;
   /** Sample seen, when we counted and it was too small to report. */
@@ -117,13 +137,18 @@ export async function numbersForJourneys(
       },
       metricPoints: {
         orderBy: { measuredAt: "desc" },
-        take: 1,
+        // CHE-284: enough history for a movement, not only the latest value.
+        // A journey that got better says so nowhere today — `movementSentence`
+        // composes the sentence and `metricAlertsForRun` then drops every
+        // movement that is not a fall, because a rise must not raise a siren.
+        // It should still be readable where the owner is already looking.
+        take: POINTS_TO_READ,
         // `steps` carries the stages as they were when the point was written,
         // which is the only honest source for the two ends of the counted path
         // (CHE-279): the journey's funnel may have been re-derived since, and
         // labelling an old count with today's stages would describe a path
         // nobody was counted along.
-        select: { conversion: true, sampleSize: true, windowDays: true, steps: true },
+        select: { conversion: true, sampleSize: true, windowDays: true, steps: true, measuredAt: true },
       },
     },
   });
@@ -142,6 +167,18 @@ export async function numbersForJourneys(
     // the count was taken, and a funnel re-derived since would describe a path
     // nobody was counted along. A point we cannot read the stages of says
     // nothing, rather than a number we cannot label.
+    // CHE-284: did this journey get better? Computed from the same points the
+    // alert path uses, so the bar is identical — a rise has to be material and
+    // significant, exactly like a fall. The ends come from the point's own
+    // stored stages, never from today's funnel, so the sentence names the path
+    // the counts were actually taken along (CHE-279).
+    const movement = movementOf(c.metricPoints as MetricPoint[]);
+    const movedPath = pathEndsOf(point?.steps ?? null);
+    const rose =
+      movement.kind === "rose" && movedPath
+        ? { movement, from: movedPath.from, to: movedPath.to }
+        : null;
+
     const stages = parseJson<WalkedStage[]>(point?.steps ?? null);
     const usable =
       Array.isArray(stages) &&
@@ -157,6 +194,7 @@ export async function numbersForJourneys(
           pages: { ...split, windowDays: point.windowDays },
           walkFinished: finished.get(j.id) ?? false,
           unfinished: unfinished.get(j.id) ?? null,
+          rose,
           absent: null,
         };
         continue;
@@ -189,6 +227,7 @@ export async function numbersForJourneys(
       pages: null,
       walkFinished: finished.get(j.id) ?? false,
       unfinished: unfinished.get(j.id) ?? null,
+      rose,
       absent,
       sample: point?.sampleSize,
     };
