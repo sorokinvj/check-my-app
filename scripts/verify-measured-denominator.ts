@@ -211,30 +211,44 @@ console.log("\n— the alert sentence describes a path too, and it is the one th
   check("a real stored path reads its two ends", ok?.from === "/" && ok?.to === "/login", JSON.stringify(ok));
 }
 
-console.log("\n— nothing compares our estimate to their measurement —\n");
+console.log("\n— a comparison is reachable only from a finished walk —\n");
 
 {
-  // Structural, not textual. The two numbers have different denominators, so
-  // subtracting them produces a number about nothing. Reading the source is the
-  // only check that survives someone re-adding it under a new name.
+  // This section used to assert that NO comparison existed anywhere. CHE-279
+  // removed it because the two numbers had different denominators: our estimate
+  // counts people who set out to do the journey, the measurement counted
+  // everyone who reached the app's front door.
+  //
+  // CHE-283 restored it under the condition that makes it true, and changing
+  // this guard was part of that ticket's own acceptance criteria — "updated
+  // deliberately as part of that change, not worked around". So what is
+  // asserted now is not absence but REACHABILITY: a comparison must be
+  // impossible to obtain without first proving the walk finished.
   const numbers = source("src/lib/journey-numbers.ts");
   const block = source("src/components/journey-numbers-block.tsx");
 
   check(
-    "journey-numbers exports no comparison helper",
-    !/export\s+function\s+comparisonLine/.test(numbers),
+    "the comparison takes a completion, never a bare measurement",
+    /export function comparisonLine\(ours: OurJudgement, theirs: TheirCompletion\)/.test(numbers),
+    "its only entry point must be the type that encodes the entitlement",
   );
   check(
-    "no function there takes both judgement and measurement",
-    !/\(\s*ours\s*:\s*OurJudgement\s*,\s*theirs\s*:\s*TheirMeasurement/.test(numbers),
-    "a signature holding both is a comparison waiting to be written",
+    "a completion cannot be built from pages alone without the caller deciding",
+    /export function completionOf\(/.test(numbers),
   );
   check(
-    "the disagreement threshold is gone",
-    !/SHARP_DISAGREEMENT|HEALTHY_CONVERSION/.test(numbers),
-    "a threshold exists only to be crossed by a comparison",
+    "the block gates the comparison on the walk having finished",
+    /walkFinished \? completionOf/.test(block),
+    "no other path may reach comparisonLine",
   );
-  check("the block renders no comparison", !/comparisonLine/.test(block));
+  check(
+    "…and reaches comparisonLine only through that completion",
+    /comparisonLine\(ours, completion\)/.test(block) && /completion \? comparisonLine/.test(block),
+  );
+  check(
+    "the pages line itself still claims no completion",
+    !/finish/i.test(numbers.slice(numbers.indexOf("export function pagesLine"), numbers.indexOf("export function journeyPages"))),
+  );
 }
 
 console.log("\n— rule 1 still holds on everything above —\n");

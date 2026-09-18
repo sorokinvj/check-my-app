@@ -52,7 +52,93 @@ export interface JourneyPages {
   entry: WalkedStage | null;
 }
 
-// There is deliberately no type here for "the journey's conversion rate".
+/**
+ * A completion rate we are entitled to state, because the walk finished.
+ *
+ * The entitlement is the whole content of this type (CHE-283). A funnel derived
+ * from a walk that never performed the journey's finishing action cannot contain
+ * the completion page — no stage-picking rule recovers a page nobody reached —
+ * and 8 of 16 journeys in production are in exactly that state, deliberately:
+ * without test credentials we check read-only rather than create records in
+ * someone's product.
+ *
+ * So this exists only where the walk's last step was not skipped, and `to` is
+ * then genuinely where the journey ends rather than where we stopped.
+ */
+export interface TheirCompletion {
+  /** 0-100, of the people who reached the journey's own first page. */
+  conversion: number;
+  /** People on that first page — the honesty of the number above. */
+  sample: number;
+  from: string;
+  to: string;
+  windowDays: number;
+}
+
+/**
+ * The completion rate for a journey whose walk finished, or null.
+ *
+ * Null when there are fewer than two of the journey's own pages (one page is
+ * arrival, not conversion) or when nobody reached the first — a rate out of
+ * zero is not a small rate, it is no rate.
+ */
+export function completionOf(p: JourneyPages, windowDays: number): TheirCompletion | null {
+  const own = p.own;
+  if (own.length < 2) return null;
+  const first = own[0];
+  const last = own[own.length - 1];
+  if (first.count <= 0) return null;
+  return {
+    conversion: Math.round((last.count / first.count) * 100),
+    sample: first.count,
+    from: first.stage,
+    to: last.stage,
+    windowDays,
+  };
+}
+
+/**
+ * The sentence that puts our judgement and their count together.
+ *
+ * Removed in CHE-279 and restored here under the condition that makes it valid:
+ * it is reachable only from a `TheirCompletion`, which exists only when the walk
+ * finished the journey. The version that was removed compared our estimate —
+ * "of the people who set out to do this, how many finish" — against a count
+ * whose denominator was everyone who arrived at the app, and on joblander.app
+ * that produced "100% do not finish it" about a signup form our own walk had
+ * just found clean.
+ *
+ * Null when there is nothing worth saying, which is most of the time: a page
+ * that comments on every journey teaches people to skip the comments.
+ */
+export function comparisonLine(ours: OurJudgement, theirs: TheirCompletion): string | null {
+  if (ours.conversion === null) return null;
+  const gap = theirs.conversion - ours.conversion;
+
+  if (Math.abs(gap) < SHARP_DISAGREEMENT) {
+    return theirs.conversion >= HEALTHY_CONVERSION
+      ? null
+      : `We expected this to be hard going, and your own numbers agree: ${theirs.conversion}% of the ` +
+          `${theirs.sample.toLocaleString("en-US")} people who reached ${theirs.from} got to ${theirs.to}.`;
+  }
+  if (gap < 0) {
+    return (
+      `We expected most people to get through this. Of the ${theirs.sample.toLocaleString("en-US")} who ` +
+      `reached ${theirs.from}, ${100 - theirs.conversion}% did not reach ${theirs.to}.`
+    );
+  }
+  return (
+    `This looked harder than it turns out to be — ${theirs.conversion}% of the ` +
+    `${theirs.sample.toLocaleString("en-US")} people who reached ${theirs.from} got to ${theirs.to}.`
+  );
+}
+
+/** Percentage points between our estimate and their count before it is news. */
+export const SHARP_DISAGREEMENT = 20;
+/** At or above this, a journey is doing fine and needs no commentary. */
+export const HEALTHY_CONVERSION = 50;
+
+// There is deliberately no type here for a conversion rate we did not earn.
 //
 // There was one, and a rate rendered from it. It is gone because we cannot say
 // what the rate is OF: the funnel's first stage is where our walk entered the
