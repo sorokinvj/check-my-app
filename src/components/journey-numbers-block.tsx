@@ -12,24 +12,25 @@
 // string no check sees.
 
 import {
-  measuredLine,
   noMeasurementLine,
   ourLines,
+  pagesLine,
+  type JourneyPages,
   type NoMeasurement,
   type OurJudgement,
-  type TheirMeasurement,
 } from "@/lib/journey-numbers";
 
 export interface JourneyNumbersProps {
   ours: OurJudgement;
-  theirs: TheirMeasurement | null;
+  /** The journey's own pages and how many people were on them (CHE-287). */
+  pages: (JourneyPages & { windowDays: number }) | null;
   absent: NoMeasurement | null;
   sample?: number;
 }
 
-export function JourneyNumbersBlock({ ours, theirs, absent, sample }: JourneyNumbersProps) {
+export function JourneyNumbersBlock({ ours, pages, absent, sample }: JourneyNumbersProps) {
   const oursRows = ourLines(ours);
-  const theirsRow = theirs ? measuredLine(theirs) : null;
+  const theirsRow = pages ? pagesLine(pages, pages.windowDays) : null;
 
   // Nothing judged and nothing measured: no block at all. An empty frame with
   // dashes in it reads as "we looked and found nothing", which is a claim.

@@ -27,26 +27,42 @@ export interface OurJudgement {
   conversion: number | null;
 }
 
-export interface TheirMeasurement {
-  /** 0-100, or null when we counted and the sample was too small. */
-  conversion: number | null;
-  /** People who reached the first stage. Always known when a point exists. */
-  sample: number;
-  windowDays: number;
-  /**
-   * The two ends of the path that was counted, as pages of the customer's own
-   * product.
-   *
-   * They are part of the value, not decoration (CHE-279). The funnel we measure
-   * along comes from a walk, and a walk enters the app at its front door and
-   * stops wherever it stopped — neither end is reliably the journey's own start
-   * or finish. Naming both makes the number true whatever the funnel turned out
-   * to span; leaving them out is what let "50 of 1,690" be read as "3% of people
-   * finish logging in", about a login that works.
-   */
-  from: string;
-  to: string;
+/** One page we walked, and how many of their people reached it. */
+export interface WalkedStage {
+  stage: string;
+  count: number;
 }
+
+/**
+ * The pages of this journey that are the journey's own, and the one that is not.
+ *
+ * Our walk enters every journey through the app's front door, so that page is
+ * stage one of almost every funnel and its count is the app's whole audience
+ * (CHE-287). On joblander.app the entry drop is `/` 1,690 → `/signup` 13, which
+ * says only that most visitors did not come to sign up. Reporting it as part of
+ * the journey drowns the journey; dropping it leaves the pages the journey is
+ * actually made of.
+ *
+ * `entry` is kept rather than discarded because "13 people reached your signup
+ * form, out of 1,690 who came to the site" is a different and sometimes better
+ * sentence than either half — but it is context, never the subject.
+ */
+export interface JourneyPages {
+  own: WalkedStage[];
+  entry: WalkedStage | null;
+}
+
+// There is deliberately no type here for "the journey's conversion rate".
+//
+// There was one, and a rate rendered from it. It is gone because we cannot say
+// what the rate is OF: the funnel's first stage is where our walk entered the
+// app and its last is wherever the walk stopped, so neither end is the
+// journey's own (CHE-279, CHE-283). Naming both ends made the sentence true,
+// but it never made it useful — "0% of the 1,690 people who reached / went on
+// to /login" is a fact about site traffic wearing a journey's name.
+//
+// What replaced it is `JourneyPages` above: the pages, and how many people were
+// on each. A count has no denominator to get wrong (CHE-287).
 
 /** Why there is no measured number. Each is a different sentence, on purpose. */
 export type NoMeasurement =
@@ -65,6 +81,66 @@ export interface NumberLine {
   /** Named on every line. A number without its source is the whole defect. */
   source: string;
   sourceKind: NumberSource;
+}
+
+/**
+ * Split the stages we counted into the journey's own pages and the entry page.
+ *
+ * The entry page is recognised by the app's own address, not by position: a
+ * journey that genuinely starts somewhere else keeps all its stages, and a
+ * journey whose every stage is the entry page keeps none — which is an honest
+ * "we have nothing to say about this one" rather than a number.
+ */
+export function journeyPages(
+  stages: readonly WalkedStage[],
+  entryPath: string,
+): JourneyPages {
+  const entryAt = stages.findIndex((s) => s.stage === entryPath);
+  if (entryAt !== 0) return { own: [...stages], entry: null };
+  return { own: stages.slice(1), entry: stages[0] };
+}
+
+/**
+ * What their analytics counted, said as pages rather than as a rate.
+ *
+ * A count needs no denominator and cannot be misread: "13 people reached
+ * /signup" is true whatever this journey turns out to be. A rate between two
+ * named pages is safe for the same reason — both ends are on the page, so the
+ * reader is not left to supply "…of the journey" (CHE-279).
+ *
+ * What this deliberately never says is how many people *finished the journey*.
+ * We do not know where the journey starts or ends (CHE-283); we know which
+ * pages we walked and how many people were on them.
+ */
+export function pagesLine(p: JourneyPages, windowDays: number): NumberLine | null {
+  const own = p.own;
+  if (own.length === 0) return null;
+
+  const window = `last ${windowDays} days`;
+  const people = (n: number) => `${n.toLocaleString("en-US")} ${n === 1 ? "person" : "people"}`;
+
+  if (own.length === 1) {
+    return {
+      label: "Reached",
+      value: `${people(own[0].count)} reached ${own[0].stage}, ${window}`,
+      source: "your analytics",
+      sourceKind: "measured",
+    };
+  }
+
+  // Two or more of the journey's own pages: say where they went, in order, so
+  // the step people leave on is visible rather than inferred from one rate.
+  const first = own[0];
+  const rest = own
+    .slice(1)
+    .map((s) => `${s.count.toLocaleString("en-US")} to ${s.stage}`)
+    .join(", then ");
+  return {
+    label: "Reached",
+    value: `${people(first.count)} reached ${first.stage}, then ${rest} — ${window}`,
+    source: "your analytics",
+    sourceKind: "measured",
+  };
 }
 
 /** What we judged, in the customer's terms. Never called a measurement. */
@@ -90,27 +166,6 @@ export function ourLines(j: OurJudgement): NumberLine[] {
 }
 
 /**
- * What their analytics counted. Never called an estimate, and never called a
- * finish.
- *
- * It says "of the people who reached A, this many went on to B" and stops
- * there, because that is the whole of what was counted. The earlier version
- * said "Actually finished — 3% of 1,690 people", which is the same arithmetic
- * carrying a claim the arithmetic does not support: the 1,690 were everyone who
- * arrived at the app, not everyone who set out to do this (CHE-279).
- */
-export function measuredLine(m: TheirMeasurement): NumberLine | null {
-  if (m.conversion === null) return null;
-  return {
-    label: "Along this path",
-    value:
-      `${m.conversion}% of the ${m.sample.toLocaleString("en-US")} people who reached ` +
-      `${m.from} went on to ${m.to}, last ${m.windowDays} days`,
-    source: "your analytics",
-    sourceKind: "measured",
-  };
-}
-
 /**
  * The sentence for a journey with no measured number.
  *

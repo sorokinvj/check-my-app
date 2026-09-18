@@ -12,16 +12,37 @@
 // disappear from the page.
 
 import type { PrismaClient } from "@/generated/prisma/client";
-import { pathEndsOf } from "./posthog/measure";
-import type { NoMeasurement, OurJudgement, TheirMeasurement } from "./journey-numbers";
+import { parseJson } from "./json";
+import { journeyPages } from "./journey-numbers";
+import type { JourneyPages, NoMeasurement, OurJudgement, WalkedStage } from "./journey-numbers";
 
 export interface JourneyNumbers {
   ours: OurJudgement;
-  theirs: TheirMeasurement | null;
-  /** Why there is no measured number. Null when `theirs` is present. */
+  /** The pages of this journey and how many people were on them. */
+  pages: (JourneyPages & { windowDays: number }) | null;
+  /** Why there is nothing measured. Null when `pages` is present. */
   absent: NoMeasurement | null;
   /** Sample seen, when we counted and it was too small to report. */
   sample?: number;
+}
+
+/**
+ * The path our walk enters this app through, in the shape the stored stages use.
+ *
+ * Only the pathname, trailing slash trimmed, "/" preserved — the same normal
+ * form `pagesWalked` produces. A mismatch here is harmless in one direction
+ * (the entry page stays in the list and the reader sees one extra, true line)
+ * and never invents a number in the other.
+ */
+function entryPathOf(targetUrl: string | null): string {
+  if (!targetUrl) return "/";
+  try {
+    const p = new URL(targetUrl).pathname;
+    const trimmed = p.length > 1 ? p.replace(/\/+$/, "") : p;
+    return trimmed || "/";
+  } catch {
+    return "/";
+  }
 }
 
 export async function numbersForJourneys(
@@ -38,7 +59,15 @@ export async function numbersForJourneys(
       price: true,
       conversion: true,
       funnelStages: true,
-      app: { select: { posthogProjectId: true, team: { select: { posthog: { select: { id: true } } } } } },
+      app: {
+        select: {
+          posthogProjectId: true,
+          // The address the walk starts from, so the entry page can be told
+          // apart from the journey's own pages (CHE-287).
+          targetUrl: true,
+          team: { select: { posthog: { select: { id: true } } } },
+        },
+      },
       metricPoints: {
         orderBy: { measuredAt: "desc" },
         take: 1,
@@ -61,25 +90,24 @@ export async function numbersForJourneys(
     const ours: OurJudgement = { price: c.price, conversion: c.conversion };
     const point = c.metricPoints[0];
 
-    // A percentage may only be shown with both ends of the path it counted
-    // named beside it (CHE-279). A point whose stages we cannot read is a
-    // number we cannot label, and an unlabelled rate is exactly the defect:
-    // it gets read as "how many finish this journey". Fall through to the
-    // absence sentences instead, which are true.
-    const path = pathEndsOf(point?.steps ?? null);
-    if (point?.conversion !== null && point !== undefined && path) {
-      out[j.id] = {
-        ours,
-        theirs: {
-          conversion: point.conversion,
-          sample: point.sampleSize,
-          windowDays: point.windowDays,
-          from: path.from,
-          to: path.to,
-        },
-        absent: null,
-      };
-      continue;
+    // What we show is the stages themselves, not a rate across them (CHE-287).
+    // `steps` is the only honest source: it holds the stages as they were when
+    // the count was taken, and a funnel re-derived since would describe a path
+    // nobody was counted along. A point we cannot read the stages of says
+    // nothing, rather than a number we cannot label.
+    const stages = parseJson<WalkedStage[]>(point?.steps ?? null);
+    const usable =
+      Array.isArray(stages) &&
+      stages.length > 0 &&
+      stages.every((s) => typeof s?.stage === "string" && typeof s?.count === "number");
+    if (point && usable) {
+      const split = journeyPages(stages, entryPathOf(c.app?.targetUrl ?? null));
+      // Every stage was the entry page: nothing of this journey's own was
+      // counted, which is an absence rather than a number.
+      if (split.own.length > 0) {
+        out[j.id] = { ours, pages: { ...split, windowDays: point.windowDays }, absent: null };
+        continue;
+      }
     }
 
     // No usable number. WHICH absence it is decides the sentence, and the three
@@ -103,7 +131,7 @@ export async function numbersForJourneys(
             // sentence — calling this "not enough traffic" would state a fact
             // about the customer's users that we have not established.
             "not_measured_yet";
-    out[j.id] = { ours, theirs: null, absent, sample: point?.sampleSize };
+    out[j.id] = { ours, pages: null, absent, sample: point?.sampleSize };
   }
   return out;
 }

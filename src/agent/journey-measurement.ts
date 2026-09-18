@@ -121,7 +121,14 @@ export async function measureRunJourneys(
             sampleSize: result.measurement.sample,
             steps: JSON.stringify(result.measurement.steps),
           }
-        : { windowDays: result.windowDays, conversion: null, sampleSize: result.sample, steps: null };
+        : {
+            windowDays: result.windowDays,
+            conversion: null,
+            sampleSize: result.sample,
+            // Counts are kept below the floor too: they need no denominator and
+            // no minimum to be true, and they are what the page reports (CHE-287).
+            steps: JSON.stringify(result.steps),
+          };
 
       await env.db.journeyMetricPoint.create({
         data: { appJourneyId: aj.id, runId, measuredAt: opts.now ?? new Date(), source: "posthog", ...point },
