@@ -21,6 +21,29 @@ function rejectionCode(code: string | undefined): string {
   return code && REJECTION_CODES.has(code) ? code : "other";
 }
 
+// What a refused input looked like, without the input itself. Two strangers
+// in a month pressed the button and were refused with `invalid_url`
+// (2026-09-10, 2026-09-11); the event carried nothing to tell whether they
+// had typed nothing, a name without a dot, or a store link we could not
+// parse. The hostname is the same thing `appSlug` already carries.
+function describeInput(raw: string, extensionMode: boolean) {
+  const text = raw.trim();
+  let inputHost = "";
+  try {
+    inputHost = new URL(/^https?:\/\//i.test(text) ? text : `https://${text}`).hostname;
+  } catch {
+    inputHost = "";
+  }
+  return {
+    inputLength: text.length,
+    inputHasScheme: /^https?:\/\//i.test(text),
+    inputHasDot: text.includes("."),
+    inputHasSpace: /\s/.test(text),
+    inputHost,
+    extensionMode,
+  };
+}
+
 // Domain-keyed result cache hit (CHE-39) — latest completed run for this domain.
 type LookupHit = {
   appSlug: string;
@@ -179,7 +202,7 @@ export function SubmitForm({ initialUrl = "" }: { initialUrl?: string }) {
     // apps. The button is live from the first paint; a bad URL gets the
     // inline message instead.
     if (!valid) {
-      track("check_rejected", { code: "invalid_url" });
+      track("check_rejected", { code: "invalid_url", ...describeInput(url, isExtension) });
       setAttempted(true);
       return;
     }
