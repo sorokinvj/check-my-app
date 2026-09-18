@@ -25,7 +25,7 @@ import {
   type JourneyCandidate,
 } from "@/lib/journey-key";
 import type { AgentEnv } from "./env";
-import { decideMetric, type JourneyMetric, type RawMetric } from "./journey-metrics";
+import { decideMetric, priceCeiling, type JourneyMetric, type RawMetric } from "./journey-metrics";
 import { funnelDrifted, type DerivedFunnel } from "@/lib/funnel";
 
 /** The statuses that mean the journey is in good shape (partial.ts agrees). */
@@ -365,6 +365,52 @@ export async function journeyMetric(
   // A kept decision means "the stored value stands" — there is nothing new to
   // write, and writing the old value again would stamp it with today's run.
   return decision.kept ? null : decision.value;
+}
+
+/**
+ * Clear stored prices the journey's own walks cannot support (CHE-291).
+ *
+ * CHE-282 stopped an implausible price being ACCEPTED. It could not repair one
+ * already stored, because the check lives in `journeyMetric`, which runs only
+ * for a journey the run walks — and a journey discovery has stopped proposing
+ * is never walked again. On checkmyapp.dev that left `Guest checks an app by
+ * URL` priced at 100 actions, unreachable: run #223 walked three journeys and
+ * none of them was it, while its verdict page went on saying "100 actions to
+ * finish" about a three-click flow.
+ *
+ * The same shape as CHE-289 — remediation keyed to what a run happened to walk
+ * rather than to what the app has. So this runs over the catalog, once per run,
+ * beside the coverage sweep that already visits every live journey.
+ *
+ * Only clears. It never invents a replacement: an unpriced journey says "we
+ * have not priced this yet", which is true, and the next walk will price it.
+ */
+export async function clearUnsupportablePrices(env: AgentEnv, appId: string): Promise<string[]> {
+  const priced = await env.db.appJourney.findMany({
+    where: { appId, retiredAt: null, price: { not: null } },
+    select: { id: true, title: true, price: true },
+  });
+
+  const cleared: string[] = [];
+  for (const row of priced) {
+    const steps = await typicalSteps(env, row.id);
+    // Never walked: there is nothing to be answerable to, and the blunt bound
+    // has already had its say when the value was accepted.
+    if (steps === null) continue;
+    const ceiling = priceCeiling(steps);
+    if ((row.price ?? 0) <= ceiling) continue;
+
+    await env.db.appJourney.update({
+      where: { id: row.id },
+      data: { price: null, conversion: null, prevPrice: null, prevConversion: null },
+    });
+    cleared.push(row.title);
+    console.warn(
+      `[journey] cleared ${row.price} actions on "${row.title}" — its walks record about ` +
+        `${steps.toFixed(1)} steps, so at most ${ceiling}`,
+    );
+  }
+  return cleared;
 }
 
 /**

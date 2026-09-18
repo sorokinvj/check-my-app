@@ -45,7 +45,13 @@ import { discoverApp, type KnownMap, type ProposedJourney, type RunInput } from 
 import { loadKnownMap } from "./known-map";
 import { loadAppKnowledge, type AppKnowledge } from "./knowledge";
 import { walkOneJourney, type WalkRun } from "./execution";
-import { catalogIsDeduplicated, journeysForPlanning, noteDiscoveryCoverage, recordJourneyCost } from "./journey-catalog";
+import {
+  catalogIsDeduplicated,
+  clearUnsupportablePrices,
+  journeysForPlanning,
+  noteDiscoveryCoverage,
+  recordJourneyCost,
+} from "./journey-catalog";
 import { orderByFocus } from "./limits";
 import { parseActions, replayJourney, type ReplayResult } from "./journey-replay";
 import { claimedHands, drivenControls, gateFindings } from "./findings-gate";
@@ -626,6 +632,24 @@ export class CheckRunWorkflow extends WorkflowEntrypoint<AgentBindings, CheckRun
             }
           } catch (err) {
             console.warn(`[journey] retirement pass skipped: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        });
+      }
+
+      // CHE-291: a stored price its own walks cannot support is cleared, whether
+      // or not this run walks that journey. Deliberately NOT inside the
+      // retirement pass above, which only runs on a full run with discovery: a
+      // wrong number on a journey nobody proposes any more is exactly the case
+      // that needs repairing, and it would never qualify.
+      if (run.appId) {
+        await step.do("clear-unsupportable-prices", async () => {
+          try {
+            const cleared = await clearUnsupportablePrices(env, run.appId as string);
+            if (cleared.length) {
+              console.warn(`[journey] cleared prices on: ${cleared.join(" · ")}`);
+            }
+          } catch (err) {
+            console.warn(`[journey] price sweep skipped: ${err instanceof Error ? err.message : String(err)}`);
           }
         });
       }
