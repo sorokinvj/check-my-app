@@ -134,6 +134,39 @@ export function pagesWalked(actions: readonly RecordedOutcome[]): string[] {
 }
 
 /**
+ * A path from somewhere else, said in the vocabulary the stored stages use.
+ *
+ * The page survey records literal paths — `/dashboard/cmtmsvbyx0001rz1tkzevj5dc`
+ * — while a stage that names the same page reads `/dashboard/:id`, because a
+ * stage must survive the next run. Comparing the two as strings answers "no"
+ * for every page whose address carries an id, which is most of the pages behind
+ * a login. So the outside path is reduced the same way a walked one is, and the
+ * two vocabularies meet (CHE-285).
+ */
+export function asStage(pathOrUrl: string): string {
+  return collapseVolatile(trimmed(normalizePath(pathOrUrl)));
+}
+
+/**
+ * Does this funnel name a page that changed?
+ *
+ * The question a metric alert needs answered: the number moved, and is the page
+ * it was counted on still the page it was. Keyed on the journey's OWN stages,
+ * which is what the app has, rather than on whatever this run happened to walk
+ * — a journey the run skipped still runs on the pages it runs on.
+ *
+ * `changedPaths` arrives raw, as the survey recorded it.
+ */
+export function namesAChangedPage(
+  stages: readonly string[],
+  changedPaths: readonly string[],
+): boolean {
+  if (stages.length === 0 || changedPaths.length === 0) return false;
+  const changed = new Set(changedPaths.map(asStage));
+  return stages.some((s) => changed.has(asStage(s)));
+}
+
+/**
  * The funnel a walk implies, or the reason there is not one.
  *
  * `stages` is returned even on refusal, because the reason is only legible

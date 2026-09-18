@@ -65,10 +65,42 @@ interface Spec {
   prevStatus?: string | null;
   findings?: string[];
   steps?: string | null;
+  /** The pages this journey's funnel names, as the catalog holds them. */
+  stages?: string[] | null;
 }
 
-function build(specs: Spec[]) {
+/** What the run's own snapshot says about the app's pages (CHE-285). */
+interface Survey {
+  /** Present unless the run took no survey at all. */
+  snapshotId?: string | null;
+  /** NULL = nothing comparable to compare against. */
+  changed?: boolean | null;
+  changedPaths?: string[];
+  addedPaths?: string[];
+  /** Make the snapshot read blow up, to prove what it costs. */
+  broken?: boolean;
+}
+
+function build(specs: Spec[], survey: Survey = {}) {
   const db = {
+    run: {
+      findUnique: async () => ({
+        snapshotId: survey.snapshotId === undefined ? "snap_1" : survey.snapshotId,
+      }),
+    },
+    appSnapshot: {
+      findUnique: async () => {
+        if (survey.broken) throw new Error("D1 unavailable");
+        return {
+          changed: survey.changed === undefined ? true : survey.changed,
+          diff: JSON.stringify({
+            changedPaths: survey.changedPaths ?? [],
+            addedPaths: survey.addedPaths ?? [],
+            removedPaths: [],
+          }),
+        };
+      },
+    },
     journey: {
       findMany: async () =>
         specs.map((s, i) => ({
@@ -81,6 +113,7 @@ function build(specs: Spec[]) {
             prevPrice: s.prevPrice ?? null,
             plan: JSON.stringify(s.prevPlan ?? []),
             status: s.prevStatus ?? "ok",
+            funnelStages: s.stages === undefined ? null : s.stages && JSON.stringify(s.stages),
             metricPoints: points(...s.convs).map((p) => ({
               ...p,
               steps: s.steps === undefined ? STEPS : s.steps,
@@ -173,6 +206,91 @@ async function main() {
     check("no stored path, no alert", noPath.length === 0, String(noPath.length));
   }
 
+  console.log("\n— CHE-285: the page it runs on is not the page it was —\n");
+  {
+    const changed = await metricAlertsForRun(
+      build([{ title: "Checkout", convs: FELL, stages: ["/cart", "/checkout"] }], {
+        changedPaths: ["/checkout"],
+      }),
+      "run_1",
+    );
+    const s = changed[0]?.sentence ?? "";
+    console.log(`      ${s}\n`);
+    check("a stage the survey saw change is said out loud",
+      s.includes("the page it runs on is not the page it was"), s);
+    check("…and the movement is still the news it sits beside", /points? down/.test(s), s);
+
+    const appeared = await metricAlertsForRun(
+      build([{ title: "Checkout", convs: FELL, stages: ["/cart", "/checkout"] }], {
+        addedPaths: ["/checkout"],
+      }),
+      "run_1",
+    );
+    check("a page that was not there last time counts too",
+      (appeared[0]?.sentence ?? "").includes("not the page it was"), appeared[0]?.sentence ?? "");
+
+    // An id-bearing address is most of what sits behind a login. The survey
+    // records it literally; the stage that names it cannot. If these two do not
+    // meet, the sentence is unsayable for exactly the pages it matters on.
+    const viaId = await metricAlertsForRun(
+      build([{ title: "Checkout", convs: FELL, stages: ["/", "/order/:id"] }], {
+        changedPaths: ["/order/cmtmsvbyx0001rz1tkzevj5dc"],
+      }),
+      "run_1",
+    );
+    check("a stage and a literal address for the same page meet",
+      (viaId[0]?.sentence ?? "").includes("not the page it was"), viaId[0]?.sentence ?? "");
+
+    console.log("");
+    const elsewhere = await metricAlertsForRun(
+      build([{ title: "Checkout", convs: FELL, stages: ["/cart", "/checkout"] }], {
+        changedPaths: ["/blog/hello", "/pricing"],
+      }),
+      "run_1",
+    );
+    check("a page somewhere else in the app is not this journey's page",
+      !(elsewhere[0]?.sentence ?? "").includes("not the page it was"), elsewhere[0]?.sentence ?? "");
+
+    const noFunnel = await metricAlertsForRun(
+      build([{ title: "Checkout", convs: FELL, stages: null }], { changedPaths: ["/checkout"] }),
+      "run_1",
+    );
+    check("a journey that names no pages claims nothing about them",
+      !(noFunnel[0]?.sentence ?? "").includes("not the page it was"), noFunnel[0]?.sentence ?? "");
+
+    const notComparable = await metricAlertsForRun(
+      build([{ title: "Checkout", convs: FELL, stages: ["/cart", "/checkout"] }], {
+        changed: null,
+        changedPaths: ["/checkout"],
+      }),
+      "run_1",
+    );
+    check("nothing comparable to compare against says nothing, not everything",
+      !(notComparable[0]?.sentence ?? "").includes("not the page it was"),
+      notComparable[0]?.sentence ?? "");
+
+    const noSurvey = await metricAlertsForRun(
+      build([{ title: "Checkout", convs: FELL, stages: ["/cart", "/checkout"] }], {
+        snapshotId: null,
+        changedPaths: ["/checkout"],
+      }),
+      "run_1",
+    );
+    check("a run that took no survey claims nothing about pages",
+      !(noSurvey[0]?.sentence ?? "").includes("not the page it was"), noSurvey[0]?.sentence ?? "");
+
+    const brokenDiff = await metricAlertsForRun(
+      build([{ title: "Checkout", convs: FELL, stages: ["/cart", "/checkout"] }], {
+        broken: true,
+        changedPaths: ["/checkout"],
+      }),
+      "run_1",
+    );
+    check("a diff we could not read costs the line, never the alert",
+      brokenDiff.length === 1 && !(brokenDiff[0]?.sentence ?? "").includes("not the page it was"),
+      brokenDiff[0]?.sentence ?? "(no alert)");
+  }
+
   console.log("\n— rule 9: the message names the symptom, never a cause or a fix —\n");
   {
     // Every shape of change at once, so the joined sentence is the longest and
@@ -189,8 +307,9 @@ async function main() {
           status: "confusing",
           prevStatus: "ok",
           findings: ["The confirm button reports success and books nothing"],
+          stages: ["/", "/demo"],
         },
-      ]),
+      ], { changedPaths: ["/demo"] }),
       "run_1",
     );
     const s = alerts[0]?.sentence ?? "";
