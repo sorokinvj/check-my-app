@@ -224,6 +224,11 @@ export function SubmitForm({ initialUrl = "", extensionCheck = false }: { initia
     }
     setSubmitting(true);
     setError(null);
+    if (!url.trim()) {
+      setError({ message: "Please enter a URL" });
+      setSubmitting(false);
+      return;
+    }
     try {
       const res = await fetch("/api/checks", {
         method: "POST",
