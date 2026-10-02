@@ -45,7 +45,7 @@ function Latest({ app }: { app: Row }) {
       <span className={`inline-flex h-6 items-center whitespace-nowrap rounded-full border px-2.5 text-xs font-medium ${meta.pillClassName}`}>
         {meta.label}
       </span>
-      <Link href={`/verdict/${app.latest.publicId}`} className="font-mono text-[13px] text-accent hover:underline">
+      <Link href={appPath.check(app.appId, app.latest.runNumber)} className="font-mono text-[13px] text-accent hover:underline">
         #{app.latest.runNumber}
       </Link>
       {app.latest.completedAt && (
@@ -215,7 +215,10 @@ export default async function AllAppsPage({
           <p className="mt-1.5 text-sm text-fg-muted">
             {all.length === 0
               ? "No apps yet."
-              : `${usd(health.totalSpendUsd)} in the last ${health.windowDays} days. Each bar is one check, the latest on the right.`}
+              : // The apps' own checks — the sum of the column below, and the
+                // sidebar's number over the same window. What the team paid
+                // for outside its apps is on Billing.
+                `${usd(health.apps.reduce((sum, a) => sum + a.spendUsd, 0))} in the last ${health.windowDays} days. Each bar is one check, the latest on the right.`}
           </p>
         </div>
         <div className="flex items-center gap-2.5">
