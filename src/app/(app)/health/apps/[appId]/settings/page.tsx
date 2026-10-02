@@ -7,7 +7,7 @@ import { requireUser } from "@/lib/auth";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
-import { setIntegrationEndpoints, updateAppSettings } from "../actions";
+import { setIntegrationEndpoints, updateAppSettings } from "@/app/dashboard/actions";
 import { DeleteAppSection } from "@/components/delete-app";
 import { appPriceRange, usd } from "@/lib/plans";
 import type { UserPlan } from "@/lib/enums";
@@ -19,6 +19,7 @@ import { AnalyticsProject } from "@/components/analytics-project";
 import { projectChoicesFor } from "@/lib/posthog/choices";
 import { listTestAccounts } from "@/lib/app-settings";
 import { MAX_EXTRA_ACCOUNTS } from "@/lib/test-accounts";
+import { appPath } from "@/lib/app-shell";
 
 // Per-app settings (CHE-64, redesigned CHE-81). Three meaning-first sections —
 // the page will keep growing, so hierarchy comes from sections, not from a pile
@@ -57,13 +58,13 @@ export default async function AppSettingsPage({
     return (
       <main className="mx-auto w-full max-w-2xl px-4 py-16">
         <section className="card p-6">
-          <h1 className="text-xl font-semibold">{elsewhere.appSlug} belongs to {elsewhere.team?.name}</h1>
+          <h1 className="break-words text-xl font-semibold">{elsewhere.appSlug} belongs to {elsewhere.team?.name}</h1>
           <p className="mt-2 text-sm text-fg-muted">
             You are on that team, but you are currently acting as {team.name}. Switching changes which
             team&apos;s plan pays for anything you start.
           </p>
-          <form action={switchTeamAction.bind(null, elsewhere.teamId, `/dashboard/${appId}`)}>
-            <button type="submit" className="btn-primary mt-6">Switch to {elsewhere.team?.name}</button>
+          <form action={switchTeamAction.bind(null, elsewhere.teamId, appPath.settings(appId))}>
+            <Button type="submit" className="mt-6">Switch to {elsewhere.team?.name}</Button>
           </form>
         </section>
       </main>
@@ -127,8 +128,8 @@ export default async function AppSettingsPage({
   return (
     <main className="mx-auto w-full max-w-3xl px-4 py-12">
       <div className="mb-10">
-        <Link href="/dashboard" className="text-xs text-fg-faint hover:underline">
-          ← Dashboard
+        <Link href={appPath.page(app.id)} className="text-xs text-fg-faint hover:underline">
+          ← {app.appSlug}
         </Link>
         <p className="section-label mt-3">{isExtension ? "extension settings" : "app settings"}</p>
         <h1 className="text-3xl font-semibold tracking-tight">{isExtension ? extensionDisplayName(app.targetUrl, app.runs[0]?.extensionEvidence) : app.appSlug}</h1>
@@ -322,7 +323,7 @@ export default async function AppSettingsPage({
               </span>
             </label>
           ))}
-          <button type="submit" className="btn-secondary text-sm">Save who hears about it</button>
+          <Button type="submit" variant="outline">Save who hears about it</Button>
         </form>
       </section>
 
@@ -372,7 +373,7 @@ export default async function AppSettingsPage({
             </div>
             <a
               href={`/api/integrations/linear/start?appId=${app.id}`}
-              className="shrink-0 rounded-lg border border-ink-600 px-3 py-1.5 font-mono text-xs text-fg-muted transition-colors hover:border-ink-500 hover:text-fg"
+              className="shrink-0 rounded-lg border border-ink-600 px-3 py-1.5 font-mono text-xs text-fg-muted transition-colors hover:border-fg-faint hover:text-fg"
             >
               {tracker ? "Reconnect →" : "Connect →"}
             </a>

@@ -328,7 +328,7 @@ export default async function VerdictPage({
               {balanceRefused && (
                 <>
                   {" "}
-                  <Link href="/dashboard#balance" className="text-accent hover:underline">
+                  <Link href="/settings/billing" className="text-accent hover:underline">
                     Top up
                   </Link>{" "}
                   ·{" "}
@@ -362,14 +362,15 @@ export default async function VerdictPage({
               )}
               {run.bottomLine && (
                 <p
-                  className={`mt-2.5 rounded-r-md border-l-2 border-current/50 bg-ink-800/40 py-2 pl-3 pr-3 text-sm ${verdictMeta?.textClassName ?? "text-fg-muted"}`}
+                  className={`mt-2.5 rounded-r-md border-l-2 bg-ink-800/40 py-2 pl-3 pr-3 text-sm ${verdictMeta?.textClassName ?? "text-fg-muted"}`}
+                  style={{ borderColor: "color-mix(in srgb, currentColor 50%, transparent)" }}
                 >
                   <span className="font-medium">Bottom line:</span>{" "}
                   <span className="text-fg-muted">{run.bottomLine}</span>
                 </p>
               )}
               {run.targetKind === "extension" && run.verdict === "unverified" && viewerApp && (
-                <Link href={`/dashboard/${viewerApp.id}`} className="mt-3 inline-flex text-sm text-accent hover:underline">
+                <Link href={`/health/apps/${viewerApp.id}/settings`} className="mt-3 inline-flex text-sm text-accent hover:underline">
                   Extension settings →
                 </Link>
               )}
