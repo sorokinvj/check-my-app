@@ -819,6 +819,13 @@ async function main() {
     ]) {
       check(`words: the walker's failure phrase still is verification_code — ${text}`, classifyGap({ text }) === "verification_code", classifyGap({ text }));
     }
+    check(
+      "words: a step labelled 'Enter the SMS code' that failed on another control is not verification_code",
+      classifyGap({ text: "Enter the SMS code to finish signing in. Clicked the Resend button; the checker could not operate the button." }) !== "verification_code",
+      classifyGap({ text: "Enter the SMS code to finish signing in. Clicked the Resend button; the checker could not operate the button." }),
+    );
+    check("words: 'Enter the SMS code' as the intended action alone is not the class", classifyGap({ text: "Enter the SMS code" }) !== "verification_code");
+    check("words: 'unable to type the SMS code' is verification_code", classifyGap({ text: "The checker was unable to type the SMS code." }) === "verification_code");
     check("words: 'footprint' is still not an OTP", classifyGap({ text: "The footprint chart did not load." }) === "unclassified");
 
     // The judgement predicate: both-ways phrasing only.

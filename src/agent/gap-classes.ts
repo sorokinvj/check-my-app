@@ -162,8 +162,11 @@ const CODE = String.raw`(?:codes?|passcodes?|otps?|one-?time (?:codes?|passwords
 const MODS = String.raw`(?:[a-z-]+\s+){0,3}?`;
 const VERIFICATION_CODE_FAILURE = new RegExp(
   [
-    // "enter the code", "typed the SMS code"
-    String.raw`\b(?:enter|type|input|submit|supply|provide|relay)(?:ed|ing|s)?\s+(?:in\s+)?(?:the|a|an|that|this|your)?\s*${MODS}${CODE}\b`,
+    // "could not enter the code", "unable to type the SMS code". Only the
+    // failed entry: the bare "Enter the SMS code" is a step's label, the
+    // intended action, and a step that failed on some other control still
+    // carries that label in its text.
+    String.raw`\b(?:could ?n[o']t|cannot|can't|unable to|not able to|failed to|no way to)\s+(?:\w+\s+){0,2}?(?:enter|type|input|submit|supply|provide|relay)\s+(?:in\s+)?(?:the|a|an|that|this|your)?\s*${MODS}${CODE}\b`,
     // "code sent", "the OTP was texted"
     String.raw`\b${CODE}\s+(?:was |were |is |had been |has been )?(?:sent|emailed|texted|delivered)\b`,
     // "could not receive the SMS code", "unable to read the emailed code"
